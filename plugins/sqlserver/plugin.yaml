@@ -1,0 +1,20 @@
+apiVersion: jaiba.io/v1
+kind: ConnectionPlugin
+metadata:
+  id: jaiba.sqlserver
+  displayName: Microsoft SQL Server
+  version: 0.2.0
+runtime:
+  implementation: built-in
+  feature: sqlserver-driver
+capabilities:
+  - test
+  - diagnostics
+  - schema-explorer
+  - query-builder
+diagnostics:
+  - ping
+  - login
+  - tempdb
+  - always-on
+  - locks

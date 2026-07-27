@@ -1,0 +1,23 @@
+apiVersion: jaiba.io/v1
+kind: ConnectionPlugin
+metadata:
+  id: jaiba.oracle
+  displayName: Oracle Database
+  version: 0.2.0
+runtime:
+  implementation: built-in
+  feature: oracle-driver
+capabilities:
+  - test
+  - diagnostics
+  - schema-explorer
+  - query-builder
+diagnostics:
+  - ping
+  - login
+  - listener
+  - tablespaces
+  - archive-log
+  - standby
+  - locks
+  - redo

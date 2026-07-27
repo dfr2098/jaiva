@@ -1,0 +1,53 @@
+id: mysql-write-example
+
+database_connections:
+  destination:
+    type: mysql
+    url_env: MYSQL_DATABASE_URL
+    max_connections: 5
+
+engine:
+  repository:
+    enabled: true
+    database_path: .jaiva/repository.db
+    content_path: .jaiva/content
+    abandoned_after_seconds: 0
+    completed_retention_hours: 24
+
+processors:
+  - id: records
+    type: generate_records
+    config:
+      records:
+        - id: 1
+          name: Ada
+        - id: 2
+          name: Linus
+
+  - id: destination
+    type: put_database
+    config:
+      connection: destination
+      table: dma_test.jaiva_write_example
+      mode: upsert
+      batch_size: 1000
+      columns:
+        id: id
+        name: name
+      conflict_columns:
+        - id
+    retry:
+      maximum_attempts: 3
+      initial_delay_ms: 250
+      maximum_delay_ms: 5000
+
+  - id: errors
+    type: log_records
+
+connections:
+  - from: records
+    relationship: success
+    to: destination
+  - from: destination
+    relationship: failure
+    to: errors

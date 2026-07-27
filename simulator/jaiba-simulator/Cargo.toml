@@ -1,0 +1,14 @@
+[package]
+name = "jaiba-simulator"
+description = "Contratos de ejecución Real, Mock y Replay para Jaiba"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+jaiba-core = { path = "../../crates/jaiba-core" }
+jaiba-plugin-sdk = { path = "../../crates/jaiba-plugin-sdk" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

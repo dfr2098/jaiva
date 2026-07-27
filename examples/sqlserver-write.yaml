@@ -1,0 +1,32 @@
+id: sqlserver-write-example
+database_connections:
+  destination:
+    type: sqlserver
+    url_env: SQLSERVER_DATABASE_URL
+    max_connections: 1
+engine:
+  repository:
+    enabled: false
+processors:
+  - id: records
+    type: generate_records
+    config:
+      records:
+        - { id: 1, name: Ada }
+        - { id: 2, name: Linus }
+  - id: destination
+    type: put_database
+    config:
+      connection: destination
+      table: dbo.jaiva_write_example
+      mode: upsert
+      batch_size: 1000
+      columns:
+        id: id
+        name: name
+      conflict_columns: [id]
+  - id: errors
+    type: log_records
+connections:
+  - { from: records, relationship: success, to: destination }
+  - { from: destination, relationship: failure, to: errors }

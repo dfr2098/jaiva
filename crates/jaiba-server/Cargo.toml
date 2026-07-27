@@ -1,0 +1,27 @@
+[package]
+name = "jaiba-server"
+description = "Plano de control REST y WebSocket de Jaiba"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+oracle-driver = ["jaiba-runtime/oracle-driver"]
+sqlserver-driver = ["jaiba-runtime/sqlserver-driver"]
+kafka-driver = ["jaiba-runtime/kafka-driver"]
+
+[dependencies]
+jaiba-connection-manager = { path = "../jaiba-connection-manager" }
+jaiba-core = { path = "../jaiba-core" }
+jaiba-plugin-sdk = { path = "../jaiba-plugin-sdk" }
+jaiba-runtime = { path = "../jaiba-runtime" }
+async-trait.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true

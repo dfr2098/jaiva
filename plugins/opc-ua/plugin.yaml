@@ -1,0 +1,12 @@
+apiVersion: jaiba.io/v1
+kind: ConnectionPlugin
+metadata:
+  id: jaiba.opc-ua
+  displayName: OPC-UA
+  version: 0.1.0
+runtime:
+  implementation: planned
+capabilities:
+  - test
+  - browse
+  - subscribe

@@ -1,0 +1,13 @@
+apiVersion: jaiba.io/v1
+kind: ConnectionPlugin
+metadata:
+  id: jaiba.mysql
+  displayName: MySQL / MariaDB
+  version: 0.2.0
+runtime:
+  implementation: built-in
+capabilities:
+  - test
+  - diagnostics
+  - schema-explorer
+  - query-builder

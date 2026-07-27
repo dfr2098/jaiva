@@ -1,0 +1,38 @@
+id: example-flow
+
+engine:
+  repository:
+    enabled: true
+    database_path: .jaiva/repository.db
+    content_path: .jaiva/content
+    abandoned_after_seconds: 0
+    completed_retention_hours: 24
+
+processors:
+  - id: source
+    type: generate_records
+    config:
+      records:
+        - customer_id: 1
+          customer_name: Ada
+        - customer_id: 2
+          customer_name: Linus
+
+  - id: transform
+    type: rename_fields
+    config:
+      fields:
+        customer_id: id
+        customer_name: name
+
+  - id: destination
+    type: log_records
+
+connections:
+  - from: source
+    relationship: success
+    to: transform
+
+  - from: transform
+    relationship: success
+    to: destination

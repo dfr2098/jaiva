@@ -1,0 +1,38 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / frontend
+**/node_modules/
+**/dist/
+**/*.tsbuildinfo
+**/.vite/
+
+# Runtime data
+/.jaiva/
+/output/
+**/*.db
+**/*.db-*
+**/*.sqlite
+**/*.sqlite3
+**/*.log
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+
+# Local editor / agent state
+/.agents/
+/.codex/
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db

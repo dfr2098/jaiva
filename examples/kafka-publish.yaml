@@ -1,0 +1,57 @@
+id: kafka-publish-example
+
+kafka_connections:
+  dma:
+    brokers_env: KAFKA_BROKERS
+    client_id: jaiva-publisher
+    security_protocol: PLAINTEXT
+    message_timeout_ms: 30000
+
+engine:
+  repository:
+    enabled: true
+    database_path: .jaiva/kafka-repository.db
+    content_path: .jaiva/kafka-content
+    completed_retention_hours: 24
+    provenance_retention_hours: 2160
+
+processors:
+  - id: records
+    type: generate_records
+    config:
+      records:
+        - batch_id: jaiva-kafka-smoke-1
+          source: jaiva
+          status: completed
+        - batch_id: jaiva-kafka-smoke-2
+          source: jaiva
+          status: completed
+
+  - id: publish
+    type: publish_kafka
+    config:
+      connection: dma
+      topic: dma.journal.batch.v1
+      key_field: batch_id
+      queue_timeout_ms: 5000
+    retry:
+      maximum_attempts: 3
+      initial_delay_ms: 500
+      maximum_delay_ms: 5000
+
+  - id: inspect
+    type: log_records
+
+  - id: errors
+    type: log_records
+
+connections:
+  - from: records
+    relationship: success
+    to: publish
+  - from: publish
+    relationship: success
+    to: inspect
+  - from: publish
+    relationship: failure
+    to: errors

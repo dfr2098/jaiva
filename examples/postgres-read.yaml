@@ -1,0 +1,53 @@
+id: postgres-read-example
+
+parameters:
+  source_table: public.dma_aisle
+
+database_connections:
+  dma:
+    type: postgres
+    url_env: DATABASE_URL
+    max_connections: 5
+
+engine:
+  queue_capacity: 100
+  max_concurrency: 4
+  memory:
+    maximum_percent: 70
+  repository:
+    enabled: true
+    database_path: .jaiva/repository.db
+    content_path: .jaiva/content
+    abandoned_after_seconds: 0
+    completed_retention_hours: 24
+
+processors:
+  - id: read_postgres
+    type: query_postgres
+    config:
+      connection: dma
+      batch_size: 2
+      query: |
+        SELECT to_jsonb(row_data) AS data
+        FROM (
+          SELECT *
+          FROM ${source_table}
+          ORDER BY code
+          LIMIT 5
+        ) AS row_data
+    retry:
+      maximum_attempts: 3
+      initial_delay_ms: 250
+      maximum_delay_ms: 5000
+
+  - id: show_records
+    type: log_records
+    scheduling:
+      concurrent_tasks: 2
+
+connections:
+  - from: read_postgres
+    relationship: success
+    to: show_records
+    queue:
+      capacity: 20

@@ -1,0 +1,30 @@
+[package]
+name = "jaiba-cli"
+description = "Consola de Jaiba y comando compatible jaiva-flow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "jaiva-flow"
+
+[features]
+default = []
+oracle-driver = ["jaiba-runtime/oracle-driver", "jaiba-server/oracle-driver"]
+sqlserver-driver = ["jaiba-runtime/sqlserver-driver", "jaiba-server/sqlserver-driver"]
+kafka-driver = ["jaiba-runtime/kafka-driver", "jaiba-server/kafka-driver"]
+
+[dependencies]
+jaiba-core = { path = "../jaiba-core" }
+jaiba-runtime = { path = "../jaiba-runtime" }
+jaiba-server = { path = "../jaiba-server" }
+serde_json.workspace = true
+serde_yaml.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[[bin]]
+name = "jaiba"
+path = "src/bin/jaiba.rs"
+
+[[bin]]
+name = "jaiva-flow"
+path = "src/bin/jaiva-flow.rs"

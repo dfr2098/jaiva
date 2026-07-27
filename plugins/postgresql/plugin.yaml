@@ -1,0 +1,20 @@
+apiVersion: jaiba.io/v1
+kind: ConnectionPlugin
+metadata:
+  id: jaiba.postgresql
+  displayName: PostgreSQL
+  version: 0.2.0
+runtime:
+  implementation: built-in
+capabilities:
+  - test
+  - diagnostics
+  - schema-explorer
+  - query-builder
+diagnostics:
+  - ping
+  - login
+  - wal
+  - replication
+  - locks
+  - vacuum

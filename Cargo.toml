@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/jaiba-core",
+    "crates/jaiba-runtime",
+    "crates/jaiba-server",
+    "crates/jaiba-cli",
+    "crates/jaiba-plugin-sdk",
+    "crates/jaiba-connection-manager",
+    "simulator/jaiba-simulator",
+]
+default-members = ["crates/jaiba-cli"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/jaiba-project/jaiba"
+
+[workspace.dependencies]
+aes-gcm = "0.10"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws"] }
+csv = "1"
+futures-util = "0.3"
+oracle = "0.6.3"
+rdkafka = { version = "0.39", features = ["cmake-build", "curl-static", "tokio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "mysql", "sqlite", "json"] }
+thiserror = "2"
+tiberius = { version = "0.12.3", default-features = false, features = ["rustls", "tds73"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }

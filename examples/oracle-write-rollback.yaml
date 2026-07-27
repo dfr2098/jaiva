@@ -1,0 +1,43 @@
+id: oracle-write-rollback-example
+
+database_connections:
+  destination:
+    type: oracle
+    url_env: ORACLE_DATABASE_URL
+    max_connections: 1
+
+engine:
+  repository:
+    enabled: false
+
+processors:
+  - id: records
+    type: generate_records
+    config:
+      records:
+        - id: 10
+          name: Valid before rollback
+        - id: not-an-integer
+          name: Invalid value
+
+  - id: destination
+    type: put_database
+    config:
+      connection: destination
+      table: DMA_TEST.JAIVA_WRITE_EXAMPLE
+      mode: insert
+      batch_size: 1
+      columns:
+        id: ID
+        name: NAME
+
+  - id: errors
+    type: log_records
+
+connections:
+  - from: records
+    relationship: success
+    to: destination
+  - from: destination
+    relationship: failure
+    to: errors

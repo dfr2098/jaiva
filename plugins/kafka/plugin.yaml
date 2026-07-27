@@ -1,0 +1,13 @@
+apiVersion: jaiba.io/v1
+kind: ConnectionPlugin
+metadata:
+  id: jaiba.kafka
+  displayName: Apache Kafka
+  version: 0.2.0
+runtime:
+  implementation: built-in
+  feature: kafka-driver
+capabilities:
+  - test
+  - diagnostics
+  - publish

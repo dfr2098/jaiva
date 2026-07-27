@@ -1,0 +1,12 @@
+apiVersion: jaiba.io/v1
+kind: ConnectionPlugin
+metadata:
+  id: jaiba.rest
+  displayName: REST API
+  version: 0.1.0
+runtime:
+  implementation: planned
+capabilities:
+  - test
+  - request
+  - schema-discovery

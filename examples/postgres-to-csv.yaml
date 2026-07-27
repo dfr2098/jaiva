@@ -1,0 +1,68 @@
+id: postgres-to-csv
+
+parameters:
+  source_table: public.dma_aisle
+  output_file: output/aisles.csv
+
+database_connections:
+  dma:
+    type: postgres
+    url_env: DATABASE_URL
+    max_connections: 5
+
+engine:
+  queue_capacity: 100
+  max_concurrency: 4
+  memory:
+    maximum_percent: 70
+  repository:
+    enabled: true
+    database_path: .jaiva/repository.db
+    content_path: .jaiva/content
+    abandoned_after_seconds: 0
+    completed_retention_hours: 24
+
+processors:
+  - id: read
+    type: query_postgres
+    config:
+      connection: dma
+      batch_size: 1000
+      query: |
+        SELECT to_jsonb(row_data) AS data
+        FROM (
+          SELECT *
+          FROM ${source_table}
+          ORDER BY code
+        ) AS row_data
+
+  - id: encode
+    type: encode_csv
+    config:
+      headers: true
+      delimiter: ","
+
+  - id: write
+    type: write_file
+    config:
+      path: ${output_file}
+
+  - id: errors
+    type: log_records
+
+connections:
+  - from: read
+    relationship: success
+    to: encode
+  - from: read
+    relationship: failure
+    to: errors
+  - from: encode
+    relationship: success
+    to: write
+  - from: encode
+    relationship: failure
+    to: errors
+  - from: write
+    relationship: failure
+    to: errors

@@ -1,0 +1,14 @@
+name: visualisa_jaiva
+
+services:
+  visualisa-jaiva:
+    build:
+      context: .
+    container_name: visualisa_jaiva
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      VISUALISA_PORT: "9080"
+      JAIBA_API_UPSTREAM: "http://127.0.0.1:9090"
+      JAIVA_API_UPSTREAM: "http://127.0.0.1:9090"
+      NGINX_ENVSUBST_FILTER: "VISUALISA_PORT|JAIBA_API_UPSTREAM|JAIVA_API_UPSTREAM"

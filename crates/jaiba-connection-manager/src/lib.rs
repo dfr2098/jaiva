@@ -7,7 +7,7 @@
 use std::{
     collections::HashMap,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -21,6 +21,12 @@ use thiserror::Error;
 use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 
+mod secure;
+
+pub use secure::{
+    EncryptedFileSecretStore, FileAuditSink, FileProfileRepository, SecureStoreError, master_key_id,
+};
+
 #[derive(Debug, Error)]
 pub enum ConnectionManagerError {
     #[error("connection profile '{0}' was not found")]
@@ -31,6 +37,10 @@ pub enum ConnectionManagerError {
     MissingPlugin(ConnectionType),
     #[error("secret '{0}' is unavailable")]
     SecretUnavailable(String),
+    #[error("metadata exploration timed out after {0} ms")]
+    MetadataTimeout(u64),
+    #[error("persistence error: {0}")]
+    Persistence(String),
     #[error(transparent)]
     Plugin(#[from] PluginError),
 }
@@ -87,9 +97,18 @@ pub struct ConnectionExport {
     pub profiles: Vec<ConnectionProfile>,
 }
 
+/// Almacén de secretos. `resolve` obtiene credenciales por referencia; `store`
+/// y `remove` permiten que el servidor persista o elimine credenciales sin
+/// exponerlas nunca en los perfiles.
 #[async_trait]
 pub trait SecretStore: Send + Sync {
     async fn resolve(&self, reference: &str) -> Result<ConnectionSecret, ConnectionManagerError>;
+    async fn store(
+        &self,
+        reference: &str,
+        secret: ConnectionSecret,
+    ) -> Result<(), ConnectionManagerError>;
+    async fn remove(&self, reference: &str) -> Result<(), ConnectionManagerError>;
 }
 
 /// Development-only secret provider. It never serializes its in-memory map.
@@ -114,6 +133,52 @@ impl SecretStore for InMemorySecretStore {
             .cloned()
             .ok_or_else(|| ConnectionManagerError::SecretUnavailable(reference.to_owned()))
     }
+
+    async fn store(
+        &self,
+        reference: &str,
+        secret: ConnectionSecret,
+    ) -> Result<(), ConnectionManagerError> {
+        self.secrets.write().await.insert(reference.to_owned(), secret);
+        Ok(())
+    }
+
+    async fn remove(&self, reference: &str) -> Result<(), ConnectionManagerError> {
+        self.secrets.write().await.remove(reference);
+        Ok(())
+    }
+}
+
+/// Repositorio para persistir perfiles de conexión (sin credenciales).
+#[async_trait]
+pub trait ProfileRepository: Send + Sync {
+    async fn load(&self) -> Result<Vec<ConnectionProfile>, ConnectionManagerError>;
+    async fn save(&self, profiles: &[ConnectionProfile]) -> Result<(), ConnectionManagerError>;
+}
+
+/// Acción auditada sobre un perfil de conexión.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditAction {
+    Created,
+    Updated,
+    Deleted,
+    KeyRotated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEntry {
+    pub timestamp: i64,
+    pub action: AuditAction,
+    pub profile_id: String,
+    pub profile_name: Option<String>,
+    pub actor: Option<String>,
+}
+
+/// Destino de auditoría para operaciones administrativas.
+#[async_trait]
+pub trait AuditSink: Send + Sync {
+    async fn record(&self, entry: AuditEntry);
 }
 
 pub struct ConnectionManager {
@@ -122,10 +187,24 @@ pub struct ConnectionManager {
     plugins: RwLock<HashMap<ConnectionType, Arc<dyn ConnectionPlugin>>>,
     secrets: Arc<dyn SecretStore>,
     events: broadcast::Sender<ConnectionEvent>,
+    metadata_cache: RwLock<HashMap<String, (Instant, Vec<DatabaseObject>)>>,
+    description_cache: RwLock<HashMap<String, (Instant, ObjectDescription)>>,
+    metadata_ttl: Duration,
+    metadata_timeout: Duration,
+    persistence: Option<Arc<dyn ProfileRepository>>,
+    audit: Option<Arc<dyn AuditSink>>,
 }
 
 impl ConnectionManager {
     pub fn new(secrets: Arc<dyn SecretStore>) -> Self {
+        Self::with_metadata_policy(secrets, Duration::from_secs(60), Duration::from_secs(8))
+    }
+
+    pub fn with_metadata_policy(
+        secrets: Arc<dyn SecretStore>,
+        metadata_ttl: Duration,
+        metadata_timeout: Duration,
+    ) -> Self {
         let (events, _) = broadcast::channel(256);
         Self {
             profiles: RwLock::new(HashMap::new()),
@@ -133,6 +212,74 @@ impl ConnectionManager {
             plugins: RwLock::new(HashMap::new()),
             secrets,
             events,
+            metadata_cache: RwLock::new(HashMap::new()),
+            description_cache: RwLock::new(HashMap::new()),
+            metadata_ttl,
+            metadata_timeout,
+            persistence: None,
+            audit: None,
+        }
+    }
+
+    /// Activa la persistencia de perfiles. Combínalo con `load_persisted` al
+    /// arrancar para restaurar los perfiles guardados.
+    pub fn with_persistence(mut self, repository: Arc<dyn ProfileRepository>) -> Self {
+        self.persistence = Some(repository);
+        self
+    }
+
+    /// Registra un destino de auditoría para altas, ediciones y bajas.
+    pub fn with_audit(mut self, audit: Arc<dyn AuditSink>) -> Self {
+        self.audit = Some(audit);
+        self
+    }
+
+    /// Restaura los perfiles persistidos (sin credenciales). Las credenciales
+    /// se resuelven bajo demanda desde el `SecretStore`.
+    pub async fn load_persisted(&self) -> Result<usize, ConnectionManagerError> {
+        let Some(repository) = self.persistence.as_ref() else {
+            return Ok(0);
+        };
+        let loaded = repository.load().await?;
+        let count = loaded.len();
+        let mut profiles = self.profiles.write().await;
+        let mut status = self.status.write().await;
+        for profile in loaded {
+            let id = profile.id.clone();
+            status
+                .entry(id.clone())
+                .or_insert_with(|| ConnectionStatus::unknown(id.clone()));
+            profiles.insert(id, profile);
+        }
+        Ok(count)
+    }
+
+    async fn persist(&self) -> Result<(), ConnectionManagerError> {
+        if let Some(repository) = self.persistence.as_ref() {
+            let profiles = self.list().await;
+            repository.save(&profiles).await?;
+        }
+        Ok(())
+    }
+
+    async fn audit(
+        &self,
+        action: AuditAction,
+        profile_id: &str,
+        profile_name: Option<&str>,
+    ) {
+        if let Some(sink) = self.audit.as_ref() {
+            sink.record(AuditEntry {
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+                action,
+                profile_id: profile_id.to_owned(),
+                profile_name: profile_name.map(str::to_owned),
+                actor: None,
+            })
+            .await;
         }
     }
 
@@ -203,6 +350,7 @@ impl ConnectionManager {
             return Err(ConnectionManagerError::DuplicateName(profile.name));
         }
         let id = profile.id.clone();
+        let name = profile.name.clone();
         profiles.insert(id.clone(), profile);
         drop(profiles);
         self.status
@@ -210,9 +358,21 @@ impl ConnectionManager {
             .await
             .entry(id.clone())
             .or_insert_with(|| ConnectionStatus::unknown(id.clone()));
-        let _ = self
-            .events
-            .send(ConnectionEvent::ProfileChanged { profile_id: id });
+        self.persist().await?;
+        self.audit(
+            if replacing {
+                AuditAction::Updated
+            } else {
+                AuditAction::Created
+            },
+            &id,
+            Some(&name),
+        )
+        .await;
+        let _ = self.events.send(ConnectionEvent::ProfileChanged {
+            profile_id: id.clone(),
+        });
+        self.invalidate_metadata(&id).await;
         Ok(())
     }
 
@@ -224,6 +384,9 @@ impl ConnectionManager {
             .remove(id)
             .ok_or_else(|| ConnectionManagerError::NotFound(id.to_owned()))?;
         self.status.write().await.remove(id);
+        self.invalidate_metadata(id).await;
+        self.persist().await?;
+        self.audit(AuditAction::Deleted, id, Some(&profile.name)).await;
         let _ = self.events.send(ConnectionEvent::ProfileDeleted {
             profile_id: id.to_owned(),
         });
@@ -329,10 +492,25 @@ impl ConnectionManager {
         id: &str,
         schema: Option<&str>,
     ) -> Result<Vec<DatabaseObject>, ConnectionManagerError> {
+        let cache_key = format!("{id}:{}", schema.unwrap_or("*"));
+        if let Some((created, objects)) = self.metadata_cache.read().await.get(&cache_key)
+            && created.elapsed() < self.metadata_ttl
+        {
+            return Ok(objects.clone());
+        }
         let (profile, plugin, secret) = self.resolve(id).await?;
-        Ok(plugin
-            .list_objects(&profile.endpoint, &secret, schema)
-            .await?)
+        let timeout_ms = self.metadata_timeout.as_millis() as u64;
+        let objects = tokio::time::timeout(
+            self.metadata_timeout,
+            plugin.list_objects(&profile.endpoint, &secret, schema),
+        )
+        .await
+        .map_err(|_| ConnectionManagerError::MetadataTimeout(timeout_ms))??;
+        self.metadata_cache
+            .write()
+            .await
+            .insert(cache_key, (Instant::now(), objects.clone()));
+        Ok(objects)
     }
 
     pub async fn describe_object(
@@ -340,10 +518,29 @@ impl ConnectionManager {
         id: &str,
         object: &DatabaseObject,
     ) -> Result<ObjectDescription, ConnectionManagerError> {
+        let cache_key = format!(
+            "{id}:{}:{}",
+            object.schema.as_deref().unwrap_or(""),
+            object.name
+        );
+        if let Some((created, description)) = self.description_cache.read().await.get(&cache_key)
+            && created.elapsed() < self.metadata_ttl
+        {
+            return Ok(description.clone());
+        }
         let (profile, plugin, secret) = self.resolve(id).await?;
-        Ok(plugin
-            .describe_object(&profile.endpoint, &secret, object)
-            .await?)
+        let timeout_ms = self.metadata_timeout.as_millis() as u64;
+        let description = tokio::time::timeout(
+            self.metadata_timeout,
+            plugin.describe_object(&profile.endpoint, &secret, object),
+        )
+        .await
+        .map_err(|_| ConnectionManagerError::MetadataTimeout(timeout_ms))??;
+        self.description_cache
+            .write()
+            .await
+            .insert(cache_key, (Instant::now(), description.clone()));
+        Ok(description)
     }
 
     pub async fn compile_query(
@@ -385,6 +582,18 @@ impl ConnectionManager {
             .get(connection_type)
             .cloned()
             .ok_or_else(|| ConnectionManagerError::MissingPlugin(connection_type.clone()))
+    }
+
+    async fn invalidate_metadata(&self, id: &str) {
+        let prefix = format!("{id}:");
+        self.metadata_cache
+            .write()
+            .await
+            .retain(|key, _| !key.starts_with(&prefix));
+        self.description_cache
+            .write()
+            .await
+            .retain(|key, _| !key.starts_with(&prefix));
     }
 
     async fn set_testing(&self, id: &str) {

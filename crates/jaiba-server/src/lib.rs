@@ -3,4 +3,4 @@
 mod connection_api;
 mod observability;
 
-pub use observability::ObservabilityServer;
+pub use observability::{ObservabilityServer, rotate_connection_master_key};

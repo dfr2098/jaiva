@@ -17,10 +17,10 @@ use crate::{
 };
 
 use super::{
-    CircuitBreakers, ConnectionManager, DataPacket, FlowControl, FlowLifecycle, FlowMetrics,
-    FlowSummary, LocalPacketRepository, MemoryLimiter, MemoryReservation, OutputSender,
+    CircuitBreakers, ConnectionManager, ConnectionResolver, DataPacket, FlowControl, FlowLifecycle,
+    FlowMetrics, FlowSummary, LocalPacketRepository, MemoryLimiter, MemoryReservation, OutputSender,
     PacketRepository, Processor, ProcessorContext, ProcessorEmission, ProcessorRegistry,
-    ProvenanceEvent, StateStore, WorkerPools,
+    ProvenanceEvent, StateStore, WorkerPools, referenced_db_aliases,
 };
 
 struct WorkItem {
@@ -45,6 +45,7 @@ pub struct FlowEngine {
     registry: ProcessorRegistry,
     metrics: FlowMetrics,
     control: FlowControl,
+    resolver: Option<Arc<dyn ConnectionResolver>>,
 }
 
 impl FlowEngine {
@@ -59,12 +60,22 @@ impl FlowEngine {
             registry: default_registry(),
             metrics: FlowMetrics::default(),
             control: FlowControl::default(),
+            resolver: None,
         })
     }
 
     /// Replaces the built-in processor registry.
     pub fn with_registry(mut self, registry: ProcessorRegistry) -> Self {
         self.registry = registry;
+        self
+    }
+
+    /// Inyecta un resolvedor para conexiones referenciadas por alias.
+    pub fn with_connection_resolver(
+        mut self,
+        resolver: Option<Arc<dyn ConnectionResolver>>,
+    ) -> Self {
+        self.resolver = resolver;
         self
     }
 
@@ -103,9 +114,12 @@ impl FlowEngine {
     }
 
     async fn run_inner(&self) -> Result<FlowSummary, FlowError> {
+        let aliases = referenced_db_aliases(&self.config);
         let connections = ConnectionManager::build(
             &self.config.database_connections,
             &self.config.kafka_connections,
+            &aliases,
+            self.resolver.as_ref(),
         )
         .await?;
         let circuits = CircuitBreakers::new(self.config.engine.circuit_breaker.clone())?;

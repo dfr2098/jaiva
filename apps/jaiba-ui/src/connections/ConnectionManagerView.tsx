@@ -7,6 +7,7 @@ import type {
   DatabaseConnection,
   DatabaseConnectionInput,
 } from "../types";
+import { SqlAutocomplete } from "./SqlAutocomplete";
 
 const EMPTY: DatabaseConnectionInput = {
   name: "",
@@ -296,6 +297,9 @@ export function ConnectionManagerView() {
                   {busy === current.id ? "Probando…" : "Probar conexión"}
                 </button>
               </div>
+              {["postgres", "mysql", "maria_db", "oracle", "sql_server"].includes(
+                current.connection_type,
+              ) ? <SqlAutocomplete connection={current} /> : null}
             </>
           ) : (
             <div className="connection-welcome">

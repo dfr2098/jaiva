@@ -11,6 +11,7 @@ use crate::connectors::SqlServerWriter;
 use crate::{
     config::{DatabaseConnectionConfig, KafkaConnectionConfig},
     connectors::{DatabaseKind, DatabaseWriter, MySqlWriter, PostgresWriter},
+    engine::resolver::ConnectionResolver,
     error::FlowError,
 };
 
@@ -27,6 +28,8 @@ impl ConnectionManager {
     pub async fn build(
         definitions: &HashMap<String, DatabaseConnectionConfig>,
         kafka_definitions: &HashMap<String, KafkaConnectionConfig>,
+        aliases: &[String],
+        resolver: Option<&Arc<dyn ConnectionResolver>>,
     ) -> Result<Self, FlowError> {
         let mut postgres = HashMap::new();
         let mut mysql = HashMap::new();
@@ -41,61 +44,41 @@ impl ConnectionManager {
                     definition.url_env
                 ))
             })?;
-            match definition.connection_type.as_str() {
-                "postgres" => {
-                    let pool = PgPoolOptions::new()
-                        .max_connections(definition.max_connections)
-                        .connect(&url)
-                        .await?;
-                    writers.insert(name.clone(), Arc::new(PostgresWriter::new(pool.clone())));
-                    postgres.insert(name.clone(), pool);
-                }
-                "mysql" | "mariadb" => {
-                    let pool = MySqlPoolOptions::new()
-                        .max_connections(definition.max_connections)
-                        .connect(&url)
-                        .await?;
-                    let kind = if definition.connection_type == "mysql" {
-                        DatabaseKind::MySql
-                    } else {
-                        DatabaseKind::MariaDb
-                    };
-                    writers.insert(
-                        name.clone(),
-                        Arc::new(MySqlWriter::new(pool.clone(), kind)?),
-                    );
-                    mysql.insert(name.clone(), pool);
-                }
-                "oracle" => {
-                    #[cfg(feature = "oracle-driver")]
-                    {
-                        writers.insert(name.clone(), Arc::new(OracleWriter::from_url(&url)?));
-                    }
-                    #[cfg(not(feature = "oracle-driver"))]
-                    {
-                        return Err(FlowError::Configuration(
-                            "Oracle connections require the 'oracle-driver' feature".to_owned(),
-                        ));
-                    }
-                }
-                "sqlserver" | "mssql" => {
-                    #[cfg(feature = "sqlserver-driver")]
-                    {
-                        writers.insert(name.clone(), Arc::new(SqlServerWriter::from_url(&url)?));
-                    }
-                    #[cfg(not(feature = "sqlserver-driver"))]
-                    {
-                        return Err(FlowError::Configuration(
-                            "SQL Server connections require the 'sqlserver-driver' feature"
-                                .to_owned(),
-                        ));
-                    }
-                }
-                unsupported => {
-                    return Err(FlowError::Configuration(format!(
-                        "unsupported database connection type '{unsupported}'"
-                    )));
-                }
+            insert_database(
+                name,
+                &definition.connection_type,
+                &url,
+                definition.max_connections,
+                None,
+                &mut postgres,
+                &mut mysql,
+                &mut writers,
+            )
+            .await?;
+        }
+
+        // Resolución por alias: el YAML solo lleva `connection: <alias>` y el
+        // Connection Manager provee host/puerto/base/usuario/contraseña/SSL/pool.
+        if !aliases.is_empty() {
+            let resolver = resolver.ok_or_else(|| {
+                FlowError::Configuration(format!(
+                    "el flujo referencia conexiones por alias ({}) pero no hay un Connection Manager configurado; define JAIBA_MASTER_KEY o declara las conexiones en 'database_connections'",
+                    aliases.join(", ")
+                ))
+            })?;
+            for alias in aliases {
+                let resolved = resolver.resolve(alias).await?;
+                insert_database(
+                    alias,
+                    &resolved.connection_type,
+                    &resolved.url,
+                    resolved.max_connections,
+                    Some(std::time::Duration::from_millis(resolved.timeout_ms)),
+                    &mut postgres,
+                    &mut mysql,
+                    &mut writers,
+                )
+                .await?;
             }
         }
 
@@ -172,6 +155,79 @@ impl ConnectionManager {
             FlowError::Configuration(format!("Kafka connection '{name}' does not exist"))
         })
     }
+}
+
+/// Construye un pool o writer para una conexión de base de datos y lo registra
+/// en los mapas correspondientes. Compartido por las conexiones declaradas con
+/// `url_env` y por las resueltas por alias desde el Connection Manager.
+#[allow(clippy::too_many_arguments)]
+async fn insert_database(
+    name: &str,
+    connection_type: &str,
+    url: &str,
+    max_connections: u32,
+    acquire_timeout: Option<std::time::Duration>,
+    postgres: &mut HashMap<String, PgPool>,
+    mysql: &mut HashMap<String, MySqlPool>,
+    writers: &mut HashMap<String, Arc<dyn DatabaseWriter>>,
+) -> Result<(), FlowError> {
+    match connection_type {
+        "postgres" => {
+            let mut options = PgPoolOptions::new().max_connections(max_connections);
+            if let Some(timeout) = acquire_timeout {
+                options = options.acquire_timeout(timeout);
+            }
+            let pool = options.connect(url).await?;
+            writers.insert(name.to_owned(), Arc::new(PostgresWriter::new(pool.clone())));
+            postgres.insert(name.to_owned(), pool);
+        }
+        "mysql" | "mariadb" => {
+            let mut options = MySqlPoolOptions::new().max_connections(max_connections);
+            if let Some(timeout) = acquire_timeout {
+                options = options.acquire_timeout(timeout);
+            }
+            let pool = options.connect(url).await?;
+            let kind = if connection_type == "mysql" {
+                DatabaseKind::MySql
+            } else {
+                DatabaseKind::MariaDb
+            };
+            writers.insert(name.to_owned(), Arc::new(MySqlWriter::new(pool.clone(), kind)?));
+            mysql.insert(name.to_owned(), pool);
+        }
+        "oracle" => {
+            #[cfg(feature = "oracle-driver")]
+            {
+                writers.insert(name.to_owned(), Arc::new(OracleWriter::from_url(url)?));
+            }
+            #[cfg(not(feature = "oracle-driver"))]
+            {
+                let _ = url;
+                return Err(FlowError::Configuration(
+                    "Oracle connections require the 'oracle-driver' feature".to_owned(),
+                ));
+            }
+        }
+        "sqlserver" | "mssql" => {
+            #[cfg(feature = "sqlserver-driver")]
+            {
+                writers.insert(name.to_owned(), Arc::new(SqlServerWriter::from_url(url)?));
+            }
+            #[cfg(not(feature = "sqlserver-driver"))]
+            {
+                let _ = url;
+                return Err(FlowError::Configuration(
+                    "SQL Server connections require the 'sqlserver-driver' feature".to_owned(),
+                ));
+            }
+        }
+        unsupported => {
+            return Err(FlowError::Configuration(format!(
+                "unsupported database connection type '{unsupported}'"
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl fmt::Debug for ConnectionManager {

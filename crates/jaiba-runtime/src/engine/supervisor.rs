@@ -6,7 +6,8 @@ use tokio::{sync::Mutex, task::JoinHandle};
 use crate::{config::FlowConfig, error::FlowError};
 
 use super::{
-    FlowControl, FlowControlSnapshot, FlowEngine, FlowLifecycle, FlowMetrics, FlowSummary,
+    ConnectionResolver, FlowControl, FlowControlSnapshot, FlowEngine, FlowLifecycle, FlowMetrics,
+    FlowSummary,
 };
 
 type FlowTask = JoinHandle<Result<FlowSummary, FlowError>>;
@@ -26,6 +27,7 @@ pub struct FlowSupervisor {
     metrics: FlowMetrics,
     control: FlowControl,
     task: Arc<Mutex<Option<FlowTask>>>,
+    resolver: Option<Arc<dyn ConnectionResolver>>,
 }
 
 impl FlowSupervisor {
@@ -37,7 +39,18 @@ impl FlowSupervisor {
             metrics,
             control: FlowControl::default(),
             task: Arc::new(Mutex::new(None)),
+            resolver: None,
         }
+    }
+
+    /// Inyecta un resolvedor de conexiones por alias que se usará en cada
+    /// arranque del flujo.
+    pub fn with_connection_resolver(
+        mut self,
+        resolver: Option<Arc<dyn ConnectionResolver>>,
+    ) -> Self {
+        self.resolver = resolver;
+        self
     }
 
     pub fn flow_id(&self) -> &str {
@@ -77,7 +90,8 @@ impl FlowSupervisor {
         }
         let engine = FlowEngine::new((*self.config).clone())?
             .with_metrics(self.metrics.clone())
-            .with_control(self.control.clone());
+            .with_control(self.control.clone())
+            .with_connection_resolver(self.resolver.clone());
         self.control.starting();
         self.metrics.set_flow_status(1);
         *task = Some(tokio::spawn(async move { engine.run().await }));

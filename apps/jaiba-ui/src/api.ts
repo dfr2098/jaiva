@@ -8,6 +8,8 @@ import type {
   FlowValidationResult,
   ProvenanceRecord,
   RuntimeEvent,
+  DatabaseObject,
+  ObjectDescription,
 } from "./types";
 
 declare global {
@@ -127,6 +129,16 @@ export const jaivaApi = {
     request<DatabaseConnection>(
       `/api/v1/connections/${encodeURIComponent(id)}/test`,
       { method: "POST" },
+    ),
+  connectionMetadata: (id: string, schema?: string) =>
+    request<DatabaseObject[]>(
+      `/api/v1/connections/${encodeURIComponent(id)}/metadata${
+        schema ? `?schema=${encodeURIComponent(schema)}` : ""
+      }`,
+    ),
+  describeConnectionObject: (id: string, schema: string, name: string) =>
+    request<ObjectDescription>(
+      `/api/v1/connections/${encodeURIComponent(id)}/metadata/${encodeURIComponent(schema)}/${encodeURIComponent(name)}`,
     ),
   runtimeSocket: (onEvent: (event: RuntimeEvent) => void) => {
     const socket = new WebSocket(websocketUrl("/ws/v1"));

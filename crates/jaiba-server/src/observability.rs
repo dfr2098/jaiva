@@ -21,19 +21,22 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tokio::{net::TcpListener, time::interval};
 
-use jaiba_connection_manager::{ConnectionManager, InMemorySecretStore};
+use jaiba_connection_manager::{
+    AuditSink, ConnectionManager, EncryptedFileSecretStore, FileAuditSink, FileProfileRepository,
+    InMemorySecretStore, ProfileRepository, SecretStore, master_key_id,
+};
 use jaiba_core::config::{AdminAuthentication, FlowConfig};
 use jaiba_runtime::{
     engine::{
-        FlowEngine, FlowMetrics, FlowSupervisor, LocalPacketRepository, PacketRepository,
-        SupervisedFlowSnapshot,
+        ConnectionResolver, FlowEngine, FlowMetrics, FlowSupervisor, LocalPacketRepository,
+        PacketRepository, ProfileConnectionResolver, SupervisedFlowSnapshot,
     },
     error::FlowError,
 };
 
 use crate::connection_api::{
-    create_connection, delete_connection, duplicate_connection, get_connection,
-    list_connection_types, list_connections, test_connection, update_connection,
+    create_connection, delete_connection, describe_metadata, duplicate_connection, get_connection,
+    list_connection_types, list_connections, list_metadata, test_connection, update_connection,
 };
 
 #[derive(Clone)]
@@ -44,7 +47,7 @@ pub(crate) struct AppState {
     admin: Arc<RwLock<AdminAccess>>,
     address: SocketAddr,
     pub(crate) connection_manager: Arc<ConnectionManager>,
-    pub(crate) connection_secrets: Arc<InMemorySecretStore>,
+    pub(crate) connection_secrets: Arc<dyn SecretStore>,
 }
 
 #[derive(Clone)]
@@ -91,6 +94,84 @@ struct ValidationResult {
     connections: usize,
 }
 
+type ConnectionStores = (
+    Arc<dyn SecretStore>,
+    Option<Arc<dyn ProfileRepository>>,
+    Option<Arc<dyn AuditSink>>,
+);
+
+/// Construye el almacén de secretos y la persistencia de conexiones según el
+/// entorno.
+///
+/// - `JAIBA_MASTER_KEY`: clave maestra para cifrar secretos (AES-256-GCM). Si
+///   está presente, los perfiles y secretos se persisten y auditan en disco.
+/// - `JAIBA_DATA_DIR`: carpeta de datos (por defecto `data`).
+///
+/// Sin clave maestra se usa un almacén en memoria (solo desarrollo).
+fn build_connection_stores() -> Result<ConnectionStores, FlowError> {
+    match env::var("JAIBA_MASTER_KEY") {
+        Ok(master_key) if !master_key.trim().is_empty() => {
+            let base = std::path::PathBuf::from(
+                env::var("JAIBA_DATA_DIR").unwrap_or_else(|_| "data".to_owned()),
+            );
+            let store = EncryptedFileSecretStore::open(base.join("secrets.enc"), &master_key)
+                .map_err(|error| {
+                    FlowError::Configuration(format!(
+                        "no se pudo abrir el almacén de secretos cifrado: {error}"
+                    ))
+                })?;
+            tracing::info!(
+                target: "jaiba.connections",
+                key_id = %master_key_id(&master_key),
+                data_dir = %base.display(),
+                "persistencia segura de conexiones activada"
+            );
+            let secrets: Arc<dyn SecretStore> = Arc::new(store);
+            let persistence: Arc<dyn ProfileRepository> =
+                Arc::new(FileProfileRepository::new(base.join("connections.json")));
+            let audit: Arc<dyn AuditSink> = Arc::new(FileAuditSink::new(base.join("audit.log")));
+            Ok((secrets, Some(persistence), Some(audit)))
+        }
+        _ => {
+            tracing::warn!(
+                target: "jaiba.connections",
+                "JAIBA_MASTER_KEY no configurada: usando almacén en memoria; los perfiles y secretos se perderán al reiniciar"
+            );
+            Ok((Arc::new(InMemorySecretStore::default()), None, None))
+        }
+    }
+}
+
+/// Rota la clave maestra usada para cifrar los secretos de conexión.
+///
+/// Lee la clave actual de `JAIBA_MASTER_KEY` (necesaria para descifrar) y
+/// vuelve a cifrar todos los secretos con `new_master_key`. Devuelve la huella
+/// (`key_id`) de la nueva clave. Tras rotar, actualiza `JAIBA_MASTER_KEY` con la
+/// nueva clave antes de reiniciar el servidor.
+pub async fn rotate_connection_master_key(new_master_key: &str) -> Result<String, FlowError> {
+    let current = env::var("JAIBA_MASTER_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            FlowError::Configuration(
+                "JAIBA_MASTER_KEY no está configurada; no hay clave que rotar".to_owned(),
+            )
+        })?;
+    if new_master_key.trim().is_empty() {
+        return Err(FlowError::Configuration(
+            "la nueva clave maestra no puede estar vacía".to_owned(),
+        ));
+    }
+    let base =
+        std::path::PathBuf::from(env::var("JAIBA_DATA_DIR").unwrap_or_else(|_| "data".to_owned()));
+    let store = EncryptedFileSecretStore::open(base.join("secrets.enc"), &current)
+        .map_err(|error| FlowError::Configuration(error.to_string()))?;
+    store
+        .rotate_key(new_master_key)
+        .await
+        .map_err(|error| FlowError::Configuration(error.to_string()))
+}
+
 impl ObservabilityServer {
     pub fn new(metrics: FlowMetrics) -> Self {
         Self {
@@ -105,9 +186,14 @@ impl ObservabilityServer {
     }
 
     pub async fn serve(self, address: SocketAddr) -> Result<(), FlowError> {
-        let connection_secrets = Arc::new(InMemorySecretStore::default());
-        let connection_manager =
-            crate::connection_api::connection_manager(connection_secrets.clone()).await;
+        let (connection_secrets, persistence, audit) = build_connection_stores()?;
+        let connection_manager = crate::connection_api::connection_manager(
+            connection_secrets.clone(),
+            persistence,
+            audit,
+        )
+        .await
+        .map_err(|error| FlowError::Configuration(error.to_string()))?;
         let (repository, admin_enabled, admin_authentication, admin_token, body_limit) =
             if let Some(supervisor) = self.supervisor.as_ref() {
                 let config = supervisor.config();
@@ -184,6 +270,11 @@ impl ObservabilityServer {
                 post(duplicate_connection),
             )
             .route("/api/v1/connections/{id}/test", post(test_connection))
+            .route("/api/v1/connections/{id}/metadata", get(list_metadata))
+            .route(
+                "/api/v1/connections/{id}/metadata/{schema}/{name}",
+                get(describe_metadata),
+            )
             .route(
                 "/api/v1/dead-letter/{queue_id}/replay",
                 post(replay_dead_letter),
@@ -345,7 +436,14 @@ async fn deploy_flow(
         return internal(error);
     }
 
-    let supervisor = FlowSupervisor::new(config.clone(), state.metrics.clone());
+    let resolver = match ProfileConnectionResolver::from_env().await {
+        Ok(resolver) => {
+            resolver.map(|resolver| Arc::new(resolver) as Arc<dyn ConnectionResolver>)
+        }
+        Err(error) => return configuration_error(error),
+    };
+    let supervisor = FlowSupervisor::new(config.clone(), state.metrics.clone())
+        .with_connection_resolver(resolver);
     if query.start
         && let Err(error) = supervisor.start().await
     {

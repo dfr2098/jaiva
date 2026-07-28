@@ -7,12 +7,14 @@ license.workspace = true
 
 [features]
 default = []
-oracle-driver = ["dep:oracle", "dep:url"]
-sqlserver-driver = ["dep:tiberius", "dep:tokio-util", "dep:url"]
+oracle-driver = ["dep:oracle"]
+sqlserver-driver = ["dep:tiberius", "dep:tokio-util"]
 kafka-driver = ["dep:rdkafka"]
 
 [dependencies]
 jaiba-core = { path = "../jaiba-core" }
+jaiba-connection-manager = { path = "../jaiba-connection-manager" }
+jaiba-plugin-sdk = { path = "../jaiba-plugin-sdk" }
 async-trait.workspace = true
 csv.workspace = true
 futures-util.workspace = true
@@ -26,9 +28,9 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true
+url.workspace = true
 uuid.workspace = true
 oracle = { workspace = true, optional = true }
-url = { workspace = true, optional = true }
 tiberius = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 rdkafka = { workspace = true, optional = true }

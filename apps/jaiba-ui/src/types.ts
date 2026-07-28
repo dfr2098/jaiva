@@ -160,3 +160,44 @@ export interface DatabaseConnectionInput {
   pool_max: number;
   timeout_ms: number;
 }
+
+export type DatabaseObjectKind =
+  | "schema"
+  | "table"
+  | "view"
+  | "procedure"
+  | "function"
+  | "sequence";
+
+export interface DatabaseObject {
+  schema: string | null;
+  name: string;
+  kind: DatabaseObjectKind;
+}
+
+export interface ColumnMetadata {
+  name: string;
+  data_type: string;
+  nullable: boolean;
+  ordinal: number;
+  default_value: string | null;
+}
+
+export interface KeyMetadata {
+  name: string;
+  kind: string;
+  columns: string[];
+}
+
+export interface IndexMetadata {
+  name: string;
+  columns: string[];
+  unique: boolean;
+}
+
+export interface ObjectDescription {
+  object: DatabaseObject;
+  columns: ColumnMetadata[];
+  keys: KeyMetadata[];
+  indexes: IndexMetadata[];
+}

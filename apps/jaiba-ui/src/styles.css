@@ -1551,6 +1551,91 @@ main.connections-main {
   color: var(--rust-light);
 }
 
+.sql-workbench {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.sql-workbench-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.sql-workbench-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.sql-workbench-head small,
+.sql-metadata-summary {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.sql-editor-wrap {
+  position: relative;
+}
+
+.sql-editor {
+  width: 100%;
+  min-height: 150px;
+  line-height: 1.55;
+}
+
+.sql-suggestions {
+  position: absolute;
+  z-index: 20;
+  top: 45px;
+  left: 12px;
+  width: min(440px, calc(100% - 24px));
+  max-height: 260px;
+  overflow: auto;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--abyss);
+  box-shadow: 0 16px 40px #0008;
+}
+
+.sql-suggestions button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--foam);
+  text-align: left;
+}
+
+.sql-suggestions button.active,
+.sql-suggestions button:hover {
+  background: color-mix(in srgb, var(--lagoon) 24%, transparent);
+}
+
+.sql-suggestions small {
+  color: var(--muted);
+}
+
+.sql-no-suggestions {
+  padding: 10px;
+  color: var(--muted);
+}
+
+.sql-metadata-summary {
+  margin-top: 7px;
+}
+
+.sql-metadata-summary .error {
+  color: var(--rust-light);
+}
+
 .builder-pairs {
   display: flex;
   flex-direction: column;

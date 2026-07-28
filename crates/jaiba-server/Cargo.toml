@@ -7,8 +7,8 @@ license.workspace = true
 
 [features]
 default = []
-oracle-driver = ["jaiba-runtime/oracle-driver"]
-sqlserver-driver = ["jaiba-runtime/sqlserver-driver"]
+oracle-driver = ["jaiba-runtime/oracle-driver", "dep:oracle"]
+sqlserver-driver = ["jaiba-runtime/sqlserver-driver", "dep:tiberius", "dep:tokio-util"]
 kafka-driver = ["jaiba-runtime/kafka-driver"]
 
 [dependencies]
@@ -25,3 +25,6 @@ sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+oracle = { workspace = true, optional = true }
+tiberius = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }

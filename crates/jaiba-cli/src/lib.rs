@@ -1,17 +1,31 @@
-use std::{env, fs, net::SocketAddr};
+use std::{env, fs, net::SocketAddr, sync::Arc};
 
 use jaiba_core::config::FlowConfig;
 use jaiba_runtime::{
-    engine::{FlowMetrics, FlowSupervisor, LocalPacketRepository, PacketRepository},
+    engine::{
+        ConnectionResolver, FlowMetrics, FlowSupervisor, LocalPacketRepository, PacketRepository,
+        ProfileConnectionResolver,
+    },
     error::FlowError,
     logging,
 };
 use jaiba_server::ObservabilityServer;
 use tracing::info;
 
+/// Construye un resolvedor de conexiones por alias desde el entorno
+/// (`JAIBA_MASTER_KEY` + `JAIBA_DATA_DIR`). Devuelve `None` en modo desarrollo.
+async fn connection_resolver() -> Result<Option<Arc<dyn ConnectionResolver>>, FlowError> {
+    Ok(ProfileConnectionResolver::from_env()
+        .await?
+        .map(|resolver| Arc::new(resolver) as Arc<dyn ConnectionResolver>))
+}
+
 /// Executes the Jaiba command line using the process arguments.
 pub async fn run() -> Result<(), FlowError> {
     let arguments: Vec<String> = env::args().skip(1).collect();
+    if arguments.first().map(String::as_str) == Some("connections") {
+        return connections_command(&arguments).await;
+    }
     let serving = arguments.first().map(String::as_str) == Some("serve");
     let dead_letter = arguments.first().map(String::as_str) == Some("dead-letter");
     let provenance = arguments.first().map(String::as_str) == Some("provenance");
@@ -54,7 +68,9 @@ pub async fn run() -> Result<(), FlowError> {
     } else {
         let config = config.expect("non-server execution always loads a flow");
         info!(flow_id = %config.id, config = %path.unwrap(), "starting flow");
-        let supervisor = FlowSupervisor::new(config, FlowMetrics::default());
+        let resolver = connection_resolver().await?;
+        let supervisor =
+            FlowSupervisor::new(config, FlowMetrics::default()).with_connection_resolver(resolver);
         supervisor.start().await?;
         let summary = tokio::select! {
             result = supervisor.wait_for_terminal() => result?,
@@ -66,6 +82,33 @@ pub async fn run() -> Result<(), FlowError> {
         };
         log_summary(summary);
         Ok(())
+    }
+}
+
+async fn connections_command(arguments: &[String]) -> Result<(), FlowError> {
+    match arguments.get(1).map(String::as_str) {
+        Some("rotate-key") => {
+            let new_key = arguments
+                .get(2)
+                .cloned()
+                .or_else(|| env::var("JAIBA_NEW_MASTER_KEY").ok())
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    FlowError::Configuration(
+                        "uso: jaiba connections rotate-key <NUEVA_CLAVE>  (o define JAIBA_NEW_MASTER_KEY)"
+                            .to_owned(),
+                    )
+                })?;
+            let new_id = jaiba_server::rotate_connection_master_key(&new_key).await?;
+            println!("Clave maestra rotada. Nueva huella (key_id): {new_id}");
+            println!(
+                "Actualiza JAIBA_MASTER_KEY con la nueva clave antes de reiniciar el servidor."
+            );
+            Ok(())
+        }
+        _ => Err(FlowError::Configuration(
+            "uso: jaiba connections rotate-key <NUEVA_CLAVE>".to_owned(),
+        )),
     }
 }
 
@@ -171,7 +214,8 @@ async fn serve(flow_path: Option<&str>, config: Option<FlowConfig>) -> Result<()
     let mut server = ObservabilityServer::new(metrics.clone());
     if let (Some(path), Some(config)) = (flow_path, config) {
         info!(flow_id = %config.id, config = %path, "starting flow");
-        let supervisor = FlowSupervisor::new(config, metrics);
+        let resolver = connection_resolver().await?;
+        let supervisor = FlowSupervisor::new(config, metrics).with_connection_resolver(resolver);
         supervisor.start().await?;
         server = server.with_supervisor(supervisor);
     }

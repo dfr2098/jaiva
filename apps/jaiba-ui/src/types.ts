@@ -94,15 +94,8 @@ export interface FlowValidationResult {
   connections: number;
 }
 
-export type ConnectionType =
-  | "postgres"
-  | "mysql"
-  | "maria_db"
-  | "oracle"
-  | "sql_server"
-  | "kafka"
-  | "opc_ua"
-  | "rest";
+/** Opaque adapter identifier supplied by the Connection Manager API. */
+export type ConnectionType = string;
 
 export type ConnectionAvailability =
   | "unknown"
@@ -113,12 +106,12 @@ export type ConnectionAvailability =
 
 export interface ConnectionDriver {
   id: ConnectionType;
+  plugin_id: string;
+  version: string;
   name: string;
   category: string;
   default_port: number;
-  enabled: boolean;
-  test_supported: boolean;
-  note: string;
+  capabilities: string[];
 }
 
 export interface ConnectionStatus {
@@ -130,6 +123,14 @@ export interface ConnectionStatus {
   pool_maximum: number | null;
   tested_at: number | null;
   message: string | null;
+}
+
+export interface DiagnosticCheck {
+  code: string;
+  label: string;
+  status: ConnectionAvailability;
+  latency_ms: number | null;
+  details: unknown;
 }
 
 export interface DatabaseConnection {
@@ -255,4 +256,6 @@ export interface QuerySpec {
 export interface CompiledQuery {
   statement: string;
   parameters: unknown[];
+  processor_type: string | null;
+  execution_statement: string | null;
 }

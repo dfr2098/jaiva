@@ -238,7 +238,8 @@ impl SecretStore for EncryptedFileSecretStore {
 fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<String, SecureStoreError> {
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| SecureStoreError::Crypto("key"))?;
     let mut nonce_bytes = [0u8; NONCE_LEN];
-    getrandom::getrandom(&mut nonce_bytes).map_err(|error| SecureStoreError::Random(error.to_string()))?;
+    getrandom::getrandom(&mut nonce_bytes)
+        .map_err(|error| SecureStoreError::Random(error.to_string()))?;
     let nonce = Nonce::from_slice(&nonce_bytes);
     let ciphertext = cipher
         .encrypt(nonce, plaintext)
@@ -254,7 +255,9 @@ fn decrypt(key: &[u8; 32], blob_base64: &str) -> Result<Vec<u8>, SecureStoreErro
         .decode(blob_base64)
         .map_err(|error| SecureStoreError::Corrupt(error.to_string()))?;
     if blob.len() <= NONCE_LEN {
-        return Err(SecureStoreError::Corrupt("bloque cifrado demasiado corto".to_owned()));
+        return Err(SecureStoreError::Corrupt(
+            "bloque cifrado demasiado corto".to_owned(),
+        ));
     }
     let (nonce_bytes, ciphertext) = blob.split_at(NONCE_LEN);
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| SecureStoreError::Crypto("key"))?;
@@ -400,7 +403,10 @@ mod tests {
         store.store("memory://a", secret()).await.unwrap();
 
         let raw = fs::read_to_string(&path).unwrap();
-        assert!(!raw.contains("s3cr3t"), "el fichero no debe contener el secreto en claro");
+        assert!(
+            !raw.contains("s3cr3t"),
+            "el fichero no debe contener el secreto en claro"
+        );
         assert!(!raw.contains("dma"));
 
         let reopened = EncryptedFileSecretStore::open(&path, "clave-maestra").unwrap();
@@ -429,7 +435,10 @@ mod tests {
 
         assert!(EncryptedFileSecretStore::open(&path, "clave-a").is_err());
         let reopened = EncryptedFileSecretStore::open(&path, "clave-b").unwrap();
-        assert_eq!(reopened.resolve("memory://a").await.unwrap().password, "s3cr3t");
+        assert_eq!(
+            reopened.resolve("memory://a").await.unwrap().password,
+            "s3cr3t"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 }

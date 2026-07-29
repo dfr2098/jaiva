@@ -12,6 +12,7 @@ import type {
   RuntimeEvent,
   DatabaseObject,
   ObjectDescription,
+  DiagnosticCheck,
 } from "./types";
 
 declare global {
@@ -131,6 +132,10 @@ export const jaivaApi = {
     request<DatabaseConnection>(
       `/api/v1/connections/${encodeURIComponent(id)}/test`,
       { method: "POST" },
+    ),
+  diagnoseConnection: (id: string) =>
+    request<DiagnosticCheck[]>(
+      `/api/v1/connections/${encodeURIComponent(id)}/diagnostics`,
     ),
   connectionMetadata: (id: string, schema?: string) =>
     request<DatabaseObject[]>(

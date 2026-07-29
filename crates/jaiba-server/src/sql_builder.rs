@@ -148,6 +148,8 @@ pub(crate) fn compile(spec: &QuerySpec, dialect: Dialect) -> Result<CompiledQuer
     Ok(CompiledQuery {
         statement,
         parameters,
+        processor_type: None,
+        execution_statement: None,
     })
 }
 

@@ -343,7 +343,7 @@ function FlowBuilderInner() {
   );
 
   // Consume un nodo Query dejado por el constructor visual del explorador:
-  // registra la conexión (si falta) y crea el nodo query_postgres ya configurado.
+  // registra la conexión (si falta) y crea el procesador indicado por el adaptador.
   useEffect(() => {
     const pending = takePendingQueryNode();
     if (!pending) return;
@@ -366,7 +366,7 @@ function FlowBuilderInner() {
     setNodes((current: ProcessorNode[]) => {
       const ids = new Set(current.map((node) => node.data.processorId));
       const node = createProcessorNode(
-        "query_postgres",
+        pending.processorType,
         { x: 120, y: 120 + current.length * 40 },
         ids,
       );

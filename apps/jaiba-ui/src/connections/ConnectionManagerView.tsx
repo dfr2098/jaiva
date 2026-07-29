@@ -6,8 +6,8 @@ import type {
   ConnectionType,
   DatabaseConnection,
   DatabaseConnectionInput,
+  DiagnosticCheck,
 } from "../types";
-import { SqlAutocomplete } from "./SqlAutocomplete";
 import { SqlQueryBuilder } from "./SqlQueryBuilder";
 
 const EMPTY: DatabaseConnectionInput = {
@@ -24,7 +24,7 @@ const EMPTY: DatabaseConnectionInput = {
   timeout_ms: 10_000,
 };
 
-const marks: Record<ConnectionType, string> = {
+const marks: Record<string, string> = {
   postgres: "PG",
   mysql: "MY",
   maria_db: "MA",
@@ -34,6 +34,11 @@ const marks: Record<ConnectionType, string> = {
   opc_ua: "OP",
   rest: "API",
 };
+
+function driverMark(id: ConnectionType): string {
+  const generated = id.replace(/[^a-z0-9]/gi, "").slice(0, 3).toUpperCase();
+  return marks[id] ?? (generated || "DB");
+}
 
 function statusLabel(status: DatabaseConnection["status"]["availability"]) {
   return {
@@ -69,6 +74,7 @@ export function ConnectionManagerView({
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("Los secretos permanecen en el servidor.");
   const [error, setError] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticCheck[]>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -94,6 +100,7 @@ export function ConnectionManagerView({
   }, [refresh]);
 
   const current = connections.find((item) => item.id === selected) ?? null;
+  const currentDriver = drivers.find((driver) => driver.id === current?.connection_type) ?? null;
   const filteredDrivers = useMemo(
     () =>
       drivers.filter((driver) =>
@@ -103,7 +110,6 @@ export function ConnectionManagerView({
   );
 
   const chooseDriver = (driver: ConnectionDriver) => {
-    if (!driver.enabled || !driver.test_supported) return;
     setEditing(null);
     setForm({
       ...EMPTY,
@@ -165,6 +171,20 @@ export function ConnectionManagerView({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "La prueba falló");
       await refresh();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const diagnose = async (connection: DatabaseConnection) => {
+    setBusy(`diagnostics:${connection.id}`);
+    setError(null);
+    try {
+      const checks = await jaivaApi.diagnoseConnection(connection.id);
+      setDiagnostics(checks);
+      setMessage(`${connection.name}: ${checks.length} diagnósticos ejecutados por el adaptador.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "El diagnóstico falló");
     } finally {
       setBusy(null);
     }
@@ -233,7 +253,7 @@ export function ConnectionManagerView({
                 onClick={() => setSelected(connection.id)}
               >
                 <span className={`db-mark db-${connection.connection_type}`}>
-                  {marks[connection.connection_type]}
+                  {driverMark(connection.connection_type)}
                 </span>
                 <span>
                   <strong>{connection.name}</strong>
@@ -251,7 +271,7 @@ export function ConnectionManagerView({
               <div className="connection-title">
                 <div>
                   <span className={`db-mark large db-${current.connection_type}`}>
-                    {marks[current.connection_type]}
+                    {driverMark(current.connection_type)}
                   </span>
                   <div>
                     <p className="eyebrow">{current.connection_type.replace("_", " ")}</p>
@@ -293,6 +313,16 @@ export function ConnectionManagerView({
 
               <div className="connection-test-row">
                 <p>{current.status.message ?? "La prueba abre un pool temporal y ejecuta SELECT version()."}</p>
+                {currentDriver?.capabilities.includes("diagnostics") ? (
+                  <button
+                    className="button subtle"
+                    disabled={busy === `diagnostics:${current.id}`}
+                    type="button"
+                    onClick={() => void diagnose(current)}
+                  >
+                    {busy === `diagnostics:${current.id}` ? "Diagnosticando…" : "Diagnóstico"}
+                  </button>
+                ) : null}
                 <button
                   className="button primary"
                   disabled={busy === current.id}
@@ -302,13 +332,21 @@ export function ConnectionManagerView({
                   {busy === current.id ? "Probando…" : "Probar conexión"}
                 </button>
               </div>
-              {["postgres", "mysql", "maria_db", "oracle", "sql_server"].includes(
-                current.connection_type,
-              ) ? (
-                <>
-                  <SqlAutocomplete connection={current} />
-                  <SqlQueryBuilder connection={current} onCreateQueryNode={onCreateQueryNode} />
-                </>
+              {diagnostics.length > 0 ? (
+                <div className="connection-info-grid">
+                  {diagnostics.map((check) => (
+                    <div key={check.code}>
+                      <span>{check.label}</span>
+                      <strong className={`health-${check.status}`}>
+                        {statusLabel(check.status)}
+                        {check.latency_ms !== null ? ` · ${check.latency_ms} ms` : ""}
+                      </strong>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {currentDriver?.capabilities.includes("query_builder") ? (
+                <SqlQueryBuilder connection={current} onCreateQueryNode={onCreateQueryNode} />
               ) : null}
             </>
           ) : (
@@ -345,14 +383,13 @@ export function ConnectionManagerView({
                 <button
                   key={driver.id}
                   className="driver-card"
-                  disabled={!driver.enabled || !driver.test_supported}
                   type="button"
                   onClick={() => chooseDriver(driver)}
                 >
-                  <span className={`db-mark large db-${driver.id}`}>{marks[driver.id]}</span>
+                  <span className={`db-mark large db-${driver.id}`}>{driverMark(driver.id)}</span>
                   <strong>{driver.name}</strong>
                   <small>{driver.category} · {driver.default_port}</small>
-                  <em>{driver.enabled && driver.test_supported ? "Disponible" : driver.note}</em>
+                  <em>{driver.capabilities.join(" · ")}</em>
                 </button>
               ))}
             </div>

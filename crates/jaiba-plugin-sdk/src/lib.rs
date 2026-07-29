@@ -27,19 +27,61 @@ pub enum PluginError {
     Unsupported(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConnectionType {
     Oracle,
     Postgres,
     SqlServer,
-    #[serde(rename = "mysql")]
     MySql,
     MariaDb,
     Kafka,
     OpcUa,
     Rest,
     Custom(String),
+}
+
+impl ConnectionType {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Oracle => "oracle",
+            Self::Postgres => "postgres",
+            Self::SqlServer => "sql_server",
+            Self::MySql => "mysql",
+            Self::MariaDb => "maria_db",
+            Self::Kafka => "kafka",
+            Self::OpcUa => "opc_ua",
+            Self::Rest => "rest",
+            Self::Custom(id) => id,
+        }
+    }
+}
+
+impl Serialize for ConnectionType {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.id())
+    }
+}
+
+impl<'de> Deserialize<'de> for ConnectionType {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let id = String::deserialize(deserializer)?;
+        if id.trim().is_empty() {
+            return Err(serde::de::Error::custom(
+                "connection adapter id cannot be empty",
+            ));
+        }
+        Ok(match id.as_str() {
+            "oracle" => Self::Oracle,
+            "postgres" => Self::Postgres,
+            "sql_server" => Self::SqlServer,
+            "mysql" => Self::MySql,
+            "maria_db" => Self::MariaDb,
+            "kafka" => Self::Kafka,
+            "opc_ua" => Self::OpcUa,
+            "rest" => Self::Rest,
+            _ => Self::Custom(id),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,6 +300,13 @@ pub struct QuerySpec {
 pub struct CompiledQuery {
     pub statement: String,
     pub parameters: Vec<Value>,
+    /// Optional runtime processor selected by the adapter. The UI treats it
+    /// as opaque data and never branches on the database engine.
+    #[serde(default)]
+    pub processor_type: Option<String>,
+    /// Statement adapted to the runtime processor's output contract.
+    #[serde(default)]
+    pub execution_statement: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -265,6 +314,8 @@ pub struct PluginDescriptor {
     pub id: String,
     pub version: String,
     pub display_name: String,
+    pub category: String,
+    pub default_port: u16,
     pub capabilities: Vec<String>,
 }
 
@@ -555,6 +606,13 @@ mod tests {
             serde_json::from_str::<ConnectionType>("\"mysql\"").unwrap(),
             ConnectionType::MySql
         );
+    }
+
+    #[test]
+    fn unknown_adapter_ids_round_trip_without_core_changes() {
+        let sqlite = serde_json::from_str::<ConnectionType>("\"sqlite\"").unwrap();
+        assert_eq!(sqlite, ConnectionType::Custom("sqlite".to_owned()));
+        assert_eq!(serde_json::to_string(&sqlite).unwrap(), "\"sqlite\"");
     }
 
     #[test]

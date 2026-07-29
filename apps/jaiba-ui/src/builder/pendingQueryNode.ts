@@ -7,6 +7,7 @@ const PENDING_QUERY_NODE_KEY = "jaiba.pending.query.node";
 export interface PendingQueryNode {
   connectionName: string;
   connectionType: string;
+  processorType: string;
   query: string;
   parameters: unknown[];
   table: string;

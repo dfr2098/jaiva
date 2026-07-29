@@ -64,11 +64,6 @@ function coerceScalar(raw: string): unknown {
   return raw;
 }
 
-/** El procesador query_postgres espera una sola columna JSONB por fila. */
-function wrapForPostgres(statement: string): string {
-  return `SELECT to_jsonb(t) AS record FROM (\n${statement}\n) AS t`;
-}
-
 export function SqlQueryBuilder({
   connection,
   onCreateQueryNode,
@@ -90,8 +85,6 @@ export function SqlQueryBuilder({
   const [error, setError] = useState<string | null>(null);
   const [loadingTables, setLoadingTables] = useState(false);
   const [created, setCreated] = useState<string | null>(null);
-
-  const isPostgres = connection.connection_type === "postgres";
 
   const loadTables = useCallback(async () => {
     setLoadingTables(true);
@@ -227,11 +220,12 @@ export function SqlQueryBuilder({
   };
 
   const createNode = () => {
-    if (!compiled || !isPostgres) return;
+    if (!compiled?.processor_type || !compiled.execution_statement) return;
     stashPendingQueryNode({
       connectionName: connection.name,
       connectionType: connection.connection_type,
-      query: wrapForPostgres(compiled.statement),
+      processorType: compiled.processor_type,
+      query: compiled.execution_statement,
       parameters: compiled.parameters,
       table: source ? `${source.schema}.${source.name}` : "consulta",
     });
@@ -578,15 +572,15 @@ export function SqlQueryBuilder({
         <button
           className="button primary"
           type="button"
-          disabled={!compiled || !isPostgres}
+          disabled={!compiled?.processor_type || !compiled.execution_statement}
           onClick={createNode}
-          title={isPostgres ? "Crea un nodo query_postgres en el lienzo" : "Solo PostgreSQL puede ejecutarse hoy en el motor"}
+          title={compiled?.processor_type ? "Crea un nodo Query en el lienzo" : "El adaptador no publica un procesador ejecutable"}
         >
           Crear nodo Query
         </button>
-        {!isPostgres ? (
+        {compiled && !compiled.processor_type ? (
           <small className="sqlb-muted">
-            El motor solo ejecuta consultas PostgreSQL por ahora; puedes copiar el SQL generado.
+            El adaptador permite compilar y copiar SQL, pero no publica un procesador ejecutable.
           </small>
         ) : null}
         {created ? <small className="sqlb-ok">{created}</small> : null}

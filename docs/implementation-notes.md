@@ -41,6 +41,11 @@ procesos aislados. WebAssembly queda como transporte futuro opcional.
 La UI nunca debe conectarse directamente a una base de datos. Toda operación
 con drivers o secretos pasa por el servidor y el Connection Manager.
 
+El catálogo de motores tampoco se mantiene en la UI ni en handlers REST. Se
+deriva de los adaptadores registrados y sus capacidades. Los identificadores
+son cadenas extensibles, por lo que un motor nuevo no requiere agregar una
+variante al núcleo.
+
 ## Consulta visual: recorrido completo
 
 1. `ConnectionManagerView.tsx` abre el explorador de una conexión.
@@ -52,12 +57,12 @@ con drivers o secretos pasa por el servidor y el Connection Manager.
 5. `connection_api.rs` selecciona el plugin correspondiente.
 6. `sql_builder.rs` valida y cita identificadores, genera placeholders y
    mantiene los valores separados en `parameters`.
-7. Para PostgreSQL, la UI envuelve las columnas seleccionadas como un único
-   objeto JSONB, porque `query_postgres` espera una columna JSON por fila.
+7. El adaptador puede devolver `processor_type` y `execution_statement`; para
+   PostgreSQL prepara el objeto JSONB que requiere `query_postgres`.
 8. `pendingQueryNode.ts` guarda temporalmente la consulta compilada en
    `localStorage`.
 9. `FlowBuilder.tsx` consume ese dato, registra la conexión si hace falta y
-   crea el nodo `query_postgres`.
+   crea el tipo de nodo indicado por el adaptador.
 10. Al ejecutar el flujo, `query_postgres.rs` liga los parámetros con SQLx y
     emite los resultados por lotes.
 

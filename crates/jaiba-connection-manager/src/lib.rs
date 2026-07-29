@@ -139,7 +139,10 @@ impl SecretStore for InMemorySecretStore {
         reference: &str,
         secret: ConnectionSecret,
     ) -> Result<(), ConnectionManagerError> {
-        self.secrets.write().await.insert(reference.to_owned(), secret);
+        self.secrets
+            .write()
+            .await
+            .insert(reference.to_owned(), secret);
         Ok(())
     }
 
@@ -262,12 +265,7 @@ impl ConnectionManager {
         Ok(())
     }
 
-    async fn audit(
-        &self,
-        action: AuditAction,
-        profile_id: &str,
-        profile_name: Option<&str>,
-    ) {
+    async fn audit(&self, action: AuditAction, profile_id: &str, profile_name: Option<&str>) {
         if let Some(sink) = self.audit.as_ref() {
             sink.record(AuditEntry {
                 timestamp: SystemTime::now()
@@ -292,6 +290,22 @@ impl ConnectionManager {
             .write()
             .await
             .insert(plugin.connection_type(), plugin);
+    }
+
+    /// Returns the installed adapters and their declared capabilities. The API
+    /// and UI consume this catalog instead of maintaining engine allowlists.
+    pub async fn adapters(&self) -> Vec<(ConnectionType, jaiba_plugin_sdk::PluginDescriptor)> {
+        let plugins = self.plugins.read().await;
+        let mut adapters = plugins
+            .iter()
+            .map(|(connection_type, plugin)| (connection_type.clone(), plugin.descriptor()))
+            .collect::<Vec<_>>();
+        adapters.sort_by(|left, right| left.1.display_name.cmp(&right.1.display_name));
+        adapters
+    }
+
+    pub async fn supports(&self, connection_type: &ConnectionType) -> bool {
+        self.plugins.read().await.contains_key(connection_type)
     }
 
     pub async fn list(&self) -> Vec<ConnectionProfile> {
@@ -386,7 +400,8 @@ impl ConnectionManager {
         self.status.write().await.remove(id);
         self.invalidate_metadata(id).await;
         self.persist().await?;
-        self.audit(AuditAction::Deleted, id, Some(&profile.name)).await;
+        self.audit(AuditAction::Deleted, id, Some(&profile.name))
+            .await;
         let _ = self.events.send(ConnectionEvent::ProfileDeleted {
             profile_id: id.to_owned(),
         });
@@ -620,6 +635,88 @@ impl ConnectionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jaiba_plugin_sdk::{DatabaseObjectKind, PluginDescriptor};
+    use serde_json::json;
+
+    struct SQLiteAdapter;
+
+    #[async_trait]
+    impl ConnectionPlugin for SQLiteAdapter {
+        fn descriptor(&self) -> PluginDescriptor {
+            PluginDescriptor {
+                id: "example.sqlite".to_owned(),
+                version: "1.0.0".to_owned(),
+                display_name: "SQLite".to_owned(),
+                category: "SQL".to_owned(),
+                default_port: 0,
+                capabilities: vec!["test".to_owned(), "diagnostics".to_owned()],
+            }
+        }
+
+        fn connection_type(&self) -> ConnectionType {
+            ConnectionType::Custom("sqlite".to_owned())
+        }
+
+        async fn test(
+            &self,
+            _endpoint: &ConnectionEndpoint,
+            _secret: &ConnectionSecret,
+        ) -> Result<ConnectionTestResult, PluginError> {
+            Ok(ConnectionTestResult {
+                availability: Availability::Available,
+                latency_ms: 1,
+                version: Some("3".to_owned()),
+                pool: None,
+                tested_at: 1,
+                message: None,
+            })
+        }
+
+        async fn diagnose(
+            &self,
+            _endpoint: &ConnectionEndpoint,
+            _secret: &ConnectionSecret,
+        ) -> Result<Vec<DiagnosticCheck>, PluginError> {
+            Ok(vec![DiagnosticCheck {
+                code: "open".to_owned(),
+                label: "Abrir archivo".to_owned(),
+                status: Availability::Available,
+                latency_ms: Some(1),
+                details: json!({}),
+            }])
+        }
+
+        async fn list_objects(
+            &self,
+            _endpoint: &ConnectionEndpoint,
+            _secret: &ConnectionSecret,
+            _schema: Option<&str>,
+        ) -> Result<Vec<DatabaseObject>, PluginError> {
+            Ok(vec![])
+        }
+
+        async fn describe_object(
+            &self,
+            _endpoint: &ConnectionEndpoint,
+            _secret: &ConnectionSecret,
+            object: &DatabaseObject,
+        ) -> Result<ObjectDescription, PluginError> {
+            Ok(ObjectDescription {
+                object: DatabaseObject {
+                    schema: object.schema.clone(),
+                    name: object.name.clone(),
+                    kind: DatabaseObjectKind::Table,
+                },
+                columns: vec![],
+                keys: vec![],
+                indexes: vec![],
+            })
+        }
+
+        fn compile_query(&self, _specification: &QuerySpec) -> Result<CompiledQuery, PluginError> {
+            Err(PluginError::Unsupported("query_builder".to_owned()))
+        }
+    }
 
     fn endpoint() -> ConnectionEndpoint {
         ConnectionEndpoint {
@@ -686,5 +783,32 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn a_new_adapter_is_discovered_and_diagnosed_without_core_changes() {
+        let secrets = Arc::new(InMemorySecretStore::default());
+        secrets
+            .insert(
+                "memory://sqlite",
+                ConnectionSecret {
+                    username: "unused".to_owned(),
+                    password: "unused".to_owned(),
+                    options: Default::default(),
+                },
+            )
+            .await;
+        let manager = ConnectionManager::new(secrets);
+        manager.register_plugin(Arc::new(SQLiteAdapter)).await;
+
+        let adapter_type = ConnectionType::Custom("sqlite".to_owned());
+        assert!(manager.supports(&adapter_type).await);
+        assert_eq!(manager.adapters().await[0].1.display_name, "SQLite");
+
+        let profile = manager
+            .create("SQLite local", adapter_type, endpoint(), "memory://sqlite")
+            .await
+            .unwrap();
+        assert_eq!(manager.diagnose(&profile.id).await.unwrap()[0].code, "open");
     }
 }

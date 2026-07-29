@@ -34,9 +34,9 @@ use jaiba_runtime::{
 };
 
 use crate::connection_api::{
-    compile_query, create_connection, delete_connection, describe_metadata, duplicate_connection,
-    get_connection, list_connection_types, list_connections, list_metadata, test_connection,
-    update_connection,
+    compile_query, create_connection, delete_connection, describe_metadata, diagnose_connection,
+    duplicate_connection, get_connection, list_connection_types, list_connections, list_metadata,
+    test_connection, update_connection,
 };
 use crate::flow_registry::{FlowRecord, FlowRegistry, RegistryError};
 
@@ -326,6 +326,10 @@ impl ObservabilityServer {
                 post(duplicate_connection),
             )
             .route("/api/v1/connections/{id}/test", post(test_connection))
+            .route(
+                "/api/v1/connections/{id}/diagnostics",
+                get(diagnose_connection),
+            )
             .route("/api/v1/connections/{id}/metadata", get(list_metadata))
             .route(
                 "/api/v1/connections/{id}/metadata/{schema}/{name}",

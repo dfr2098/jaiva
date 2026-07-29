@@ -44,13 +44,13 @@ use crate::observability::{AppState, authorize};
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ConnectionTypeView {
-    id: &'static str,
-    name: &'static str,
-    category: &'static str,
+    id: ConnectionType,
+    plugin_id: String,
+    version: String,
+    name: String,
+    category: String,
     default_port: u16,
-    enabled: bool,
-    test_supported: bool,
-    note: &'static str,
+    capabilities: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,102 +219,24 @@ pub(crate) async fn list_connection_types(
     if let Err(response) = authorize(&state, &headers) {
         return response;
     }
-    Json(vec![
-        type_view(
-            "postgres",
-            "PostgreSQL",
-            "SQL",
-            5432,
-            true,
-            true,
-            "Driver SQLx activo",
-        ),
-        type_view(
-            "mysql",
-            "MySQL",
-            "SQL",
-            3306,
-            true,
-            true,
-            "Driver SQLx activo",
-        ),
-        type_view(
-            "maria_db",
-            "MariaDB",
-            "SQL",
-            3306,
-            true,
-            true,
-            "Driver SQLx activo",
-        ),
-        type_view(
-            "oracle",
-            "Oracle",
-            "SQL",
-            1521,
-            cfg!(feature = "oracle-driver"),
-            cfg!(feature = "oracle-driver"),
-            "Activa la feature oracle-driver (requiere Oracle Client)",
-        ),
-        type_view(
-            "sql_server",
-            "SQL Server",
-            "SQL",
-            1433,
-            cfg!(feature = "sqlserver-driver"),
-            cfg!(feature = "sqlserver-driver"),
-            "Activa la feature sqlserver-driver",
-        ),
-        type_view(
-            "kafka",
-            "Apache Kafka",
-            "Mensajería",
-            9092,
-            cfg!(feature = "kafka-driver"),
-            false,
-            "Se administra como bus, no como base SQL",
-        ),
-        type_view(
-            "opc_ua",
-            "OPC-UA",
-            "Industrial",
-            4840,
-            false,
-            false,
-            "Plugin futuro",
-        ),
-        type_view(
-            "rest",
-            "REST API",
-            "API",
-            443,
-            false,
-            false,
-            "Plugin futuro",
-        ),
-    ])
+    Json(
+        state
+            .connection_manager
+            .adapters()
+            .await
+            .into_iter()
+            .map(|(id, descriptor)| ConnectionTypeView {
+                id,
+                plugin_id: descriptor.id,
+                version: descriptor.version,
+                name: descriptor.display_name,
+                category: descriptor.category,
+                default_port: descriptor.default_port,
+                capabilities: descriptor.capabilities,
+            })
+            .collect::<Vec<_>>(),
+    )
     .into_response()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn type_view(
-    id: &'static str,
-    name: &'static str,
-    category: &'static str,
-    default_port: u16,
-    enabled: bool,
-    test_supported: bool,
-    note: &'static str,
-) -> ConnectionTypeView {
-    ConnectionTypeView {
-        id,
-        name,
-        category,
-        default_port,
-        enabled,
-        test_supported,
-        note,
-    }
 }
 
 pub(crate) async fn list_connections(
@@ -362,6 +284,15 @@ pub(crate) async fn create_connection(
     }
     if let Err(response) = validate_input(&input, true) {
         return response;
+    }
+    if !state
+        .connection_manager
+        .supports(&input.connection_type)
+        .await
+    {
+        return manager_error(ConnectionManagerError::MissingPlugin(
+            input.connection_type.clone(),
+        ));
     }
     let secret_ref = format!("secret://connection/{}", Uuid::new_v4());
     if let Err(error) = state
@@ -411,6 +342,15 @@ pub(crate) async fn update_connection(
     }
     if let Err(response) = validate_input(&input, false) {
         return response;
+    }
+    if !state
+        .connection_manager
+        .supports(&input.connection_type)
+        .await
+    {
+        return manager_error(ConnectionManagerError::MissingPlugin(
+            input.connection_type.clone(),
+        ));
     }
     let mut profile = match state.connection_manager.get(&id).await {
         Ok(profile) => profile,
@@ -502,6 +442,20 @@ pub(crate) async fn test_connection(
     }
 }
 
+pub(crate) async fn diagnose_connection(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(response) = authorize(&state, &headers) {
+        return response;
+    }
+    match state.connection_manager.diagnose(&id).await {
+        Ok(checks) => Json(checks).into_response(),
+        Err(error) => manager_error(error),
+    }
+}
+
 async fn view(state: &AppState, profile: ConnectionProfile) -> Result<ConnectionView, Response> {
     let secret = state
         .connection_secrets
@@ -565,18 +519,6 @@ fn validate_input(input: &ConnectionInput, password_required: bool) -> Result<()
     if input.pool_min > input.pool_max || input.pool_max == 0 {
         return Err(bad_request("el pool mínimo no puede superar al máximo"));
     }
-    if !matches!(
-        input.connection_type,
-        ConnectionType::Postgres
-            | ConnectionType::MySql
-            | ConnectionType::MariaDb
-            | ConnectionType::Oracle
-            | ConnectionType::SqlServer
-    ) {
-        return Err(bad_request(
-            "el driver seleccionado todavía no admite perfiles comprobables",
-        ));
-    }
     Ok(())
 }
 
@@ -616,7 +558,7 @@ struct PostgresConnectionPlugin;
 #[async_trait]
 impl ConnectionPlugin for PostgresConnectionPlugin {
     fn descriptor(&self) -> PluginDescriptor {
-        descriptor("jaiba.postgres", "PostgreSQL")
+        descriptor("jaiba.postgres", "PostgreSQL", 5432, true, true)
     }
 
     fn connection_type(&self) -> ConnectionType {
@@ -869,7 +811,14 @@ impl ConnectionPlugin for PostgresConnectionPlugin {
     }
 
     fn compile_query(&self, specification: &QuerySpec) -> Result<CompiledQuery, PluginError> {
-        crate::sql_builder::compile(specification, crate::sql_builder::Dialect::Postgres)
+        let mut compiled =
+            crate::sql_builder::compile(specification, crate::sql_builder::Dialect::Postgres)?;
+        compiled.processor_type = Some("query_postgres".to_owned());
+        compiled.execution_statement = Some(format!(
+            "SELECT to_jsonb(t) AS record FROM (\n{}\n) AS t",
+            compiled.statement
+        ));
+        Ok(compiled)
     }
 }
 
@@ -880,7 +829,7 @@ struct MySqlConnectionPlugin {
 #[async_trait]
 impl ConnectionPlugin for MySqlConnectionPlugin {
     fn descriptor(&self) -> PluginDescriptor {
-        descriptor("jaiba.mysql", "MySQL / MariaDB")
+        descriptor("jaiba.mysql", "MySQL / MariaDB", 3306, true, false)
     }
 
     fn connection_type(&self) -> ConnectionType {
@@ -1148,7 +1097,7 @@ struct OracleConnectionPlugin;
 #[async_trait]
 impl ConnectionPlugin for OracleConnectionPlugin {
     fn descriptor(&self) -> PluginDescriptor {
-        descriptor("jaiba.oracle", "Oracle")
+        descriptor("jaiba.oracle", "Oracle", 1521, false, false)
     }
 
     fn connection_type(&self) -> ConnectionType {
@@ -1353,7 +1302,7 @@ type SqlServerClient = Client<Compat<TcpStream>>;
 #[async_trait]
 impl ConnectionPlugin for SqlServerConnectionPlugin {
     fn descriptor(&self) -> PluginDescriptor {
-        descriptor("jaiba.sqlserver", "SQL Server")
+        descriptor("jaiba.sqlserver", "SQL Server", 1433, false, false)
     }
 
     fn connection_type(&self) -> ConnectionType {
@@ -1675,12 +1624,31 @@ fn with_schemas(mut objects: Vec<DatabaseObject>, include: bool) -> Vec<Database
     result
 }
 
-fn descriptor(id: &str, name: &str) -> PluginDescriptor {
+fn descriptor(
+    id: &str,
+    name: &str,
+    default_port: u16,
+    query_builder: bool,
+    query_node: bool,
+) -> PluginDescriptor {
+    let mut capabilities = vec![
+        "test".to_owned(),
+        "diagnostics".to_owned(),
+        "schema_explorer".to_owned(),
+    ];
+    if query_builder {
+        capabilities.push("query_builder".to_owned());
+    }
+    if query_node {
+        capabilities.push("query_node".to_owned());
+    }
     PluginDescriptor {
         id: id.to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         display_name: name.to_owned(),
-        capabilities: vec!["test_connection".to_owned()],
+        category: "SQL".to_owned(),
+        default_port,
+        capabilities,
     }
 }
 

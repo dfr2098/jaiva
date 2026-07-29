@@ -16,20 +16,29 @@ desarrollo local. Los perfiles y secretos desaparecen al reiniciar el motor. En
 producción debe reemplazarse por Vault, Kubernetes Secrets o un almacén cifrado
 con una clave externa; no se debe persistir el mapa en memoria como JSON.
 
-## Drivers visibles
+## Adaptadores extensibles
 
-| Motor | Perfil | Prueba real |
-| --- | --- | --- |
-| PostgreSQL | Sí | Sí, SQLx |
-| MySQL | Sí | Sí, SQLx |
-| MariaDB | Sí | Sí, SQLx |
-| Oracle | Se muestra si se compila el feature | Pendiente en API administrativa |
-| SQL Server | Se muestra si se compila el feature | Pendiente en API administrativa |
-| Kafka | Se muestra si se compila el feature | Se administrará como bus |
-| OPC-UA / REST | Catálogo futuro | No |
+El núcleo no contiene una lista cerrada de motores. `ConnectionType` se
+serializa como un identificador de texto y conserva valores desconocidos como
+`sqlite`. Cada implementación de `ConnectionPlugin` publica nombre, versión,
+categoría, puerto predeterminado y capacidades.
 
-La interfaz deshabilita motores que todavía no pueden probarse para evitar
-crear configuraciones engañosas.
+`ConnectionManager::register_plugin` es el único punto de registro. El catálogo
+REST se genera desde los adaptadores instalados y la UI renderiza sus
+capacidades. Para agregar un motor solo se implementa y registra un adaptador;
+no se modifica el Connection Manager, sus handlers ni la interfaz.
+
+```mermaid
+flowchart LR
+    UI["UI<br/>sin drivers"] --> API["REST neutral"]
+    API --> CM["Connection Manager"]
+    CM --> REG["Registro de adaptadores"]
+    REG --> PG["PostgreSQL"]
+    REG --> MY["MySQL"]
+    REG --> ORA["Oracle"]
+    REG --> NEW["SQLite / nuevo motor"]
+    CM --> SEC["SecretStore"]
+```
 
 ## API
 
@@ -39,6 +48,7 @@ crear configuraciones engañosas.
 - `GET|PUT|DELETE /api/v1/connections/{id}`
 - `POST /api/v1/connections/{id}/duplicate`
 - `POST /api/v1/connections/{id}/test`
+- `GET /api/v1/connections/{id}/diagnostics`
 - `GET /api/v1/connections/{id}/metadata`
 - `GET /api/v1/connections/{id}/metadata/{schema}/{name}`
 - `POST /api/v1/connections/{id}/query/compile`
@@ -54,10 +64,10 @@ e índices. El constructor envía una especificación neutral `QuerySpec`; el
 servidor genera SQL seguro para el dialecto y devuelve la sentencia junto con
 sus parámetros separados.
 
-PostgreSQL permite enviar la consulta compilada al diseñador y crear
-automáticamente un nodo `query_postgres`. MySQL permite explorar y compilar,
-pero la creación de un nodo ejecutable queda deshabilitada hasta incorporar
-`query_mysql` al runtime.
+Cuando existe un procesador ejecutable, el adaptador devuelve
+`processor_type` y `execution_statement`. La UI los trata como datos opacos y
+no decide según el motor. Si el adaptador solo compila, la interfaz permite
+copiar el SQL sin ofrecer un nodo.
 
 El recorrido técnico completo está descrito en
 [la bitácora de implementación](implementation-notes.md).
@@ -83,11 +93,11 @@ sequenceDiagram
     API->>SQL: Compilar según dialecto
     SQL-->>UI: SQL + parámetros separados
 
-    alt conexión PostgreSQL
+    alt adaptador publica procesador
         U->>UI: Enviar al diseñador
         UI->>FB: Guarda traspaso temporal
-        FB->>FB: Crea nodo query_postgres
-    else conexión MySQL
+        FB->>FB: Crea el tipo indicado por la API
+    else adaptador solo compila
         UI-->>U: Permite copiar SQL; nodo aún no disponible
     end
 ```

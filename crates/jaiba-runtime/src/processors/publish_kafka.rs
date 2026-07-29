@@ -179,6 +179,16 @@ fn json_key(value: &Value) -> Result<String, FlowError> {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+
+    use rdkafka::{
+        ClientConfig, Message,
+        admin::{AdminClient, AdminOptions, NewTopic, TopicReplication},
+        client::DefaultClientContext,
+        consumer::{Consumer, StreamConsumer},
+        producer::FutureProducer,
+    };
+
     use super::*;
 
     #[test]
@@ -207,6 +217,126 @@ mod tests {
                 "topic": ""
             }))
             .is_err()
+        );
+    }
+
+    /// Prueba opt-in contra un broker real. Crea un tópico único, publica dos
+    /// mensajes con el mismo código del procesador y confirma su consumo.
+    #[tokio::test]
+    async fn kafka_real_publish_is_acknowledged_and_consumable() {
+        let Ok(brokers) = env::var("JAIBA_TEST_KAFKA_BROKERS") else {
+            eprintln!("skipping real Kafka test: JAIBA_TEST_KAFKA_BROKERS is not set");
+            return;
+        };
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let topic = format!("jaiba.phase-9-3.{suffix}");
+
+        let admin: AdminClient<DefaultClientContext> = ClientConfig::new()
+            .set("bootstrap.servers", &brokers)
+            .create()
+            .expect("create Kafka admin client");
+        let creation = admin
+            .create_topics(
+                &[NewTopic::new(&topic, 1, TopicReplication::Fixed(1))],
+                &AdminOptions::new()
+                    .operation_timeout(Some(Duration::from_secs(10)))
+                    .request_timeout(Some(Duration::from_secs(10))),
+            )
+            .await
+            .expect("create integration topic");
+        assert!(
+            creation.iter().all(|result| result.as_ref().is_ok()),
+            "Kafka topic creation failed: {creation:?}"
+        );
+
+        let consumer: StreamConsumer = ClientConfig::new()
+            .set("bootstrap.servers", &brokers)
+            .set("group.id", format!("jaiba-phase-9-3-{suffix}"))
+            .set("auto.offset.reset", "earliest")
+            .set("enable.auto.commit", "false")
+            .create()
+            .expect("create integration consumer");
+        consumer
+            .subscribe(&[&topic])
+            .expect("subscribe to integration topic");
+
+        let producer: FutureProducer = ClientConfig::new()
+            .set("bootstrap.servers", &brokers)
+            .set("client.id", "jaiba-phase-9-3")
+            .set("security.protocol", "PLAINTEXT")
+            .set("enable.idempotence", "true")
+            .set("acks", "all")
+            .set("message.timeout.ms", "10000")
+            .create()
+            .expect("create integration producer");
+        let processor = PublishKafka::from_config(&serde_json::json!({
+            "connection": "integration",
+            "topic": topic,
+            "key_field": "event_id",
+            "queue_timeout_ms": 5000
+        }))
+        .expect("create Kafka processor");
+        let packet = DataPacket::with_records(vec![
+            serde_json::json!({"event_id": "event-1", "status": "created"}),
+            serde_json::json!({"event_id": "event-2", "status": "completed"}),
+        ]);
+        let messages = processor.messages(&packet).expect("encode messages");
+        let (partition, offset) = processor
+            .publish(&producer, &messages)
+            .await
+            .expect("publish and receive broker acknowledgement");
+        assert_eq!(partition, 0);
+        assert!(offset >= 1);
+
+        let mut consumed = Vec::new();
+        let consume_deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while consumed.len() < 2 {
+            let remaining = consume_deadline
+                .checked_duration_since(tokio::time::Instant::now())
+                .expect("consumer did not receive both messages before the deadline");
+            match tokio::time::timeout(remaining, consumer.recv()).await {
+                Ok(Ok(message)) => consumed.push((
+                    message.key().map(Vec::from),
+                    message.payload().map(Vec::from),
+                )),
+                Ok(Err(error)) => {
+                    eprintln!("transient Kafka consumer error: {error}");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(_) => panic!("consumer did not receive both messages before the deadline"),
+            }
+        }
+        assert_eq!(consumed[0].0.as_deref(), Some(b"event-1".as_slice()));
+        assert_eq!(consumed[1].0.as_deref(), Some(b"event-2".as_slice()));
+        let first: Value = serde_json::from_slice(
+            consumed[0]
+                .1
+                .as_deref()
+                .expect("first message has a payload"),
+        )
+        .expect("first payload is JSON");
+        let second: Value = serde_json::from_slice(
+            consumed[1]
+                .1
+                .as_deref()
+                .expect("second message has a payload"),
+        )
+        .expect("second payload is JSON");
+        assert_eq!(first["status"], "created");
+        assert_eq!(second["status"], "completed");
+
+        let deletion = admin
+            .delete_topics(
+                &[&topic],
+                &AdminOptions::new()
+                    .operation_timeout(Some(Duration::from_secs(10)))
+                    .request_timeout(Some(Duration::from_secs(10))),
+            )
+            .await
+            .expect("delete integration topic");
+        assert!(
+            deletion.iter().all(|result| result.as_ref().is_ok()),
+            "Kafka topic deletion failed: {deletion:?}"
         );
     }
 }

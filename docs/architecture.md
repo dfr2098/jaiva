@@ -13,13 +13,14 @@ tablas ni reglas de DMA.
 
 ```mermaid
 flowchart LR
-    CONFIG["YAML / API futura"] --> ENGINE["FlowEngine"]
+    CONFIG["YAML validado<br/>jaiba-core"] --> SUPERVISOR["FlowSupervisor"]
+    SUPERVISOR --> ENGINE["FlowEngine"]
     ENGINE --> REGISTRY["ProcessorRegistry"]
     ENGINE --> SCHEDULER["Scheduler streaming"]
     SCHEDULER --> CHANNELS[["Canales limitados"]]
     CHANNELS --> PROCESSORS["Processors"]
 
-    PROCESSORS --> CONNECTIONS["ConnectionManager"]
+    PROCESSORS --> CONNECTIONS["Runtime ConnectionManager<br/>pools y circuit breakers"]
     CONNECTIONS --> PG[(PostgreSQL)]
     CONNECTIONS --> MYSQL[(MySQL)]
     CONNECTIONS --> ORACLE[(Oracle)]
@@ -34,8 +35,12 @@ flowchart LR
 
     ENGINE --> METRICS["FlowMetrics"]
     METRICS --> PROM["/metrics"]
-    METRICS --> WS["/ws"]
+    METRICS --> WS["/ws · /ws/v1"]
     PROM --> GRAFANA["Grafana"]
+
+    CONTROL["API de control<br/>start · pause · resume<br/>drain · stop"] --> SUPERVISOR
+    REPOSITORY --> PROVENANCE["Provenance"]
+    REPOSITORY --> DLQ["Dead-letter"]
 ```
 
 ## Flujo de un paquete

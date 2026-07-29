@@ -214,10 +214,11 @@ async fn serve(flow_path: Option<&str>, config: Option<FlowConfig>) -> Result<()
     let mut server = ObservabilityServer::new(metrics.clone());
     if let (Some(path), Some(config)) = (flow_path, config) {
         info!(flow_id = %config.id, config = %path, "starting flow");
+        let source = fs::read_to_string(path)?;
         let resolver = connection_resolver().await?;
         let supervisor = FlowSupervisor::new(config, metrics).with_connection_resolver(resolver);
         supervisor.start().await?;
-        server = server.with_supervisor(supervisor);
+        server = server.with_supervisor(supervisor, source);
     }
 
     server.serve(address).await

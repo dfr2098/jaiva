@@ -48,10 +48,18 @@ Jaiba
 
 ```mermaid
 flowchart TB
-    UI["jaiba-ui<br/>Designer + Operations"] -->|YAML y comandos| SERVER["jaiba-server<br/>REST + WebSocket"]
-    SERVER --> CM["jaiba-connection-manager"]
-    SERVER --> RUNTIME["jaiba-runtime"]
-    SERVER --> SIM["jaiba-simulator"]
+    UI["jaiba-ui<br/>Designer · Connections · Operations"]
+    SERVER["jaiba-server<br/>REST · WebSocket · FlowRegistry"]
+    CM["jaiba-connection-manager<br/>Perfiles · diagnóstico · metadatos"]
+    SQL["SQL Builder<br/>QuerySpec → SQL parametrizado"]
+    RUNTIME["jaiba-runtime<br/>Ejecución del DAG"]
+    SIM["jaiba-simulator<br/>Mock · Replay"]
+
+    UI -->|YAML, QuerySpec y comandos| SERVER
+    SERVER --> CM
+    CM --> SQL
+    SERVER --> RUNTIME
+    SERVER --> SIM
     RUNTIME --> CORE["jaiba-core<br/>FlowGraph DAG"]
     RUNTIME --> SDK["jaiba-plugin-sdk"]
     CM --> SDK
@@ -67,18 +75,32 @@ flowchart TB
 sequenceDiagram
     participant UI as jaiba-ui
     participant S as jaiba-server
+    participant F as FlowRegistry
     participant C as jaiba-core
     participant R as jaiba-runtime
     participant P as Plugin
 
     UI->>S: Publica manifiesto YAML
+    S->>F: Crea versión DRAFT
     S->>C: Deserializa FlowConfig
     C->>C: Construye y valida FlowGraph DAG
-    S->>R: Entrega FlowGraph + configuración resuelta
+    S->>F: Marca versión VALIDATED
+    UI->>S: Desplegar versión
+    S->>F: Solicita deploy serializado
+    F->>R: Prepara supervisor y conexiones
+    F->>R: Drena la versión anterior
+    F->>R: Activa la versión nueva
+    F->>F: DEPLOYED; anterior ARCHIVED
     R->>P: Crea procesadores
     R->>R: Ejecuta paquetes con backpressure
     R-->>S: Estado, métricas y provenance
     S-->>UI: WebSocket
+
+    opt rollback
+        UI->>S: Restaurar versión anterior
+        S->>F: Rollback serializado
+        F->>R: Drena actual y activa archivada
+    end
 ```
 
 ## Interfaz

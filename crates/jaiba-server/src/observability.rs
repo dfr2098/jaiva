@@ -2,7 +2,6 @@
 
 use std::{
     env,
-    future::Future,
     net::SocketAddr,
     sync::{Arc, RwLock},
     time::Duration,
@@ -35,15 +34,15 @@ use jaiba_runtime::{
 };
 
 use crate::connection_api::{
-    create_connection, delete_connection, describe_metadata, duplicate_connection, get_connection,
-    list_connection_types, list_connections, list_metadata, test_connection, update_connection,
+    compile_query, create_connection, delete_connection, describe_metadata, duplicate_connection,
+    get_connection, list_connection_types, list_connections, list_metadata, test_connection,
+    update_connection,
 };
+use crate::flow_registry::{FlowRecord, FlowRegistry, RegistryError};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
-    metrics: FlowMetrics,
-    supervisor: Arc<RwLock<Option<FlowSupervisor>>>,
-    repository: Arc<RwLock<Option<LocalPacketRepository>>>,
+    registry: Arc<FlowRegistry>,
     admin: Arc<RwLock<AdminAccess>>,
     address: SocketAddr,
     pub(crate) connection_manager: Arc<ConnectionManager>,
@@ -61,6 +60,7 @@ struct AdminAccess {
 pub struct ObservabilityServer {
     metrics: FlowMetrics,
     supervisor: Option<FlowSupervisor>,
+    source: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -74,16 +74,17 @@ struct ApiMessage {
     message: String,
 }
 
-#[derive(Deserialize)]
-struct LimitQuery {
-    limit: Option<u32>,
-    packet_id: Option<String>,
-}
-
 #[derive(Default, Deserialize)]
 struct DeployQuery {
     #[serde(default)]
     start: bool,
+}
+
+#[derive(Default, Deserialize)]
+struct FlowQuery {
+    flow: Option<String>,
+    limit: Option<u32>,
+    packet_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -92,6 +93,19 @@ struct ValidationResult {
     flow_id: String,
     processors: usize,
     connections: usize,
+}
+
+#[derive(Serialize)]
+struct DraftCreated {
+    flow_id: String,
+    version: u32,
+}
+
+#[derive(Serialize)]
+struct FlowView {
+    #[serde(flatten)]
+    record: FlowRecord,
+    runtime: Option<jaiba_runtime::engine::SupervisedFlowSnapshot>,
 }
 
 type ConnectionStores = (
@@ -177,11 +191,15 @@ impl ObservabilityServer {
         Self {
             metrics,
             supervisor: None,
+            source: None,
         }
     }
 
-    pub fn with_supervisor(mut self, supervisor: FlowSupervisor) -> Self {
+    /// Registra el flujo inicial (p. ej. el servido por el CLI) junto con su
+    /// YAML de origen para que quede versionado en el registro.
+    pub fn with_supervisor(mut self, supervisor: FlowSupervisor, source: String) -> Self {
         self.supervisor = Some(supervisor);
+        self.source = Some(source);
         self
     }
 
@@ -194,14 +212,30 @@ impl ObservabilityServer {
         )
         .await
         .map_err(|error| FlowError::Configuration(error.to_string()))?;
-        let (repository, admin_enabled, admin_authentication, admin_token, body_limit) =
-            if let Some(supervisor) = self.supervisor.as_ref() {
+
+        // Registro de flujos: persiste bajo JAIBA_DATA_DIR/flows.json.
+        let data_dir = env::var("JAIBA_DATA_DIR")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(std::path::PathBuf::from);
+        let max_flows = env::var("JAIBA_MAX_FLOWS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(16);
+        let registry = Arc::new(FlowRegistry::new(data_dir, max_flows));
+        match registry.load().await {
+            Ok(count) if count > 0 => {
+                tracing::info!(target: "jaiba.flows", restored = count, "registro de flujos restaurado");
+            }
+            Ok(_) => {}
+            Err(error) => tracing::error!(%error, "no se pudo cargar el registro de flujos"),
+        }
+
+        let (admin_enabled, admin_authentication, admin_token, body_limit) =
+            if let (Some(supervisor), Some(source)) =
+                (self.supervisor.as_ref(), self.source.as_ref())
+            {
                 let config = supervisor.config();
-                let repository = if config.engine.repository.enabled {
-                    Some(LocalPacketRepository::open(&config.engine.repository).await?)
-                } else {
-                    None
-                };
                 validate_admin_exposure(
                     config.engine.admin.enabled,
                     config.engine.admin.authentication,
@@ -214,20 +248,27 @@ impl ObservabilityServer {
                 } else {
                     None
                 };
-                (
-                    repository,
+                let repository = if config.engine.repository.enabled {
+                    Some(LocalPacketRepository::open(&config.engine.repository).await?)
+                } else {
+                    None
+                };
+                let admin = (
                     config.engine.admin.enabled,
                     config.engine.admin.authentication,
                     token,
                     config.engine.admin.max_request_body_bytes,
-                )
+                );
+                registry
+                    .seed_running(source, supervisor.clone(), self.metrics.clone(), repository)
+                    .await
+                    .map_err(|error| FlowError::Server(error.message()))?;
+                admin
             } else {
-                (None, false, AdminAuthentication::Bearer, None, 1024 * 1024)
+                (false, AdminAuthentication::Bearer, None, 1024 * 1024)
             };
         let state = AppState {
-            metrics: self.metrics,
-            supervisor: Arc::new(RwLock::new(self.supervisor.clone())),
-            repository: Arc::new(RwLock::new(repository)),
+            registry,
             admin: Arc::new(RwLock::new(AdminAccess {
                 enabled: admin_enabled,
                 authentication: admin_authentication,
@@ -243,10 +284,25 @@ impl ObservabilityServer {
             .route("/metrics", get(prometheus))
             .route("/ws", get(websocket))
             .route("/ws/v1", get(websocket_v1))
-            .route("/api/v1/flows", get(list_flows))
+            .route("/api/v1/flows", get(list_flows).post(create_flow))
             .route("/api/v1/flows/validate", post(validate_flow))
             .route("/api/v1/flows/{id}", get(get_flow))
             .route("/api/v1/flows/{id}", put(deploy_flow))
+            .route("/api/v1/flows/{id}/versions", get(list_versions))
+            .route("/api/v1/flows/{id}/versions/{version}", get(export_version))
+            .route(
+                "/api/v1/flows/{id}/versions/{version}/validate",
+                post(validate_version),
+            )
+            .route(
+                "/api/v1/flows/{id}/versions/{version}/deploy",
+                post(deploy_version),
+            )
+            .route(
+                "/api/v1/flows/{id}/versions/{version}/archive",
+                post(archive_version),
+            )
+            .route("/api/v1/flows/{id}/rollback", post(rollback_flow))
             .route("/api/v1/flows/{id}/start", post(start_flow))
             .route("/api/v1/flows/{id}/pause", post(pause_flow))
             .route("/api/v1/flows/{id}/resume", post(resume_flow))
@@ -276,6 +332,10 @@ impl ObservabilityServer {
                 get(describe_metadata),
             )
             .route(
+                "/api/v1/connections/{id}/query/compile",
+                post(compile_query),
+            )
+            .route(
                 "/api/v1/dead-letter/{queue_id}/replay",
                 post(replay_dead_letter),
             )
@@ -284,7 +344,7 @@ impl ObservabilityServer {
         let listener = TcpListener::bind(address).await?;
         tracing::info!(%address, "observability and administration server listening");
         axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal(state.supervisor))
+            .with_graceful_shutdown(shutdown_signal(state.registry.clone()))
             .await
             .map_err(|error| FlowError::Server(error.to_string()))
     }
@@ -298,22 +358,13 @@ async fn health() -> Json<Health> {
 }
 
 async fn readiness(State(state): State<AppState>) -> Response {
-    let supervisor = state
-        .supervisor
-        .read()
-        .expect("supervisor lock poisoned")
-        .clone();
-    match supervisor {
-        Some(supervisor) if supervisor.snapshot().ready => {
-            (StatusCode::OK, Json(supervisor.snapshot())).into_response()
-        }
-        Some(supervisor) => {
-            (StatusCode::SERVICE_UNAVAILABLE, Json(supervisor.snapshot())).into_response()
-        }
+    match state.registry.primary_snapshot().await {
+        Some(snapshot) if snapshot.ready => (StatusCode::OK, Json(snapshot)).into_response(),
+        Some(snapshot) => (StatusCode::SERVICE_UNAVAILABLE, Json(snapshot)).into_response(),
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiMessage {
-                message: "no flow is configured".to_owned(),
+                message: "no flow is running".to_owned(),
             }),
         )
             .into_response(),
@@ -324,13 +375,13 @@ async fn prometheus(State(state): State<AppState>) -> Response {
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        state.metrics.prometheus(),
+        state.registry.prometheus().await,
     )
         .into_response()
 }
 
 async fn websocket(upgrade: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
-    upgrade.on_upgrade(move |socket| stream_metrics(socket, state.metrics))
+    upgrade.on_upgrade(move |socket| stream_metrics(socket, state))
 }
 
 async fn websocket_v1(
@@ -340,18 +391,26 @@ async fn websocket_v1(
     upgrade.on_upgrade(move |socket| stream_runtime(socket, state))
 }
 
+/// Lista todos los flujos registrados con su historial de versiones y estados.
 async fn list_flows(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(response) = authorize(&state, &headers) {
         return response;
     }
-    let flows: Vec<SupervisedFlowSnapshot> = state
-        .supervisor
-        .read()
-        .expect("supervisor lock poisoned")
-        .as_ref()
-        .map(|supervisor| vec![supervisor.snapshot()])
-        .unwrap_or_default();
-    Json(flows).into_response()
+    Json(state.registry.list_records().await).into_response()
+}
+
+/// Importa/crea una nueva versión DRAFT del flujo a partir del YAML del cuerpo.
+async fn create_flow(State(state): State<AppState>, headers: HeaderMap, body: String) -> Response {
+    if let Err(response) = authorize(&state, &headers) {
+        return response;
+    }
+    match state.registry.create_draft(&body, None).await {
+        Ok((flow_id, version)) => {
+            tracing::warn!(audit_action = "flow_create", flow_id = %flow_id, version, "administrative action");
+            (StatusCode::CREATED, Json(DraftCreated { flow_id, version })).into_response()
+        }
+        Err(error) => registry_error(error),
+    }
 }
 
 async fn validate_flow(
@@ -374,6 +433,8 @@ async fn validate_flow(
     }
 }
 
+/// Despliegue en un paso (compatibilidad): registra el YAML como nueva versión,
+/// la valida y la despliega transaccionalmente.
 async fn deploy_flow(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -394,76 +455,180 @@ async fn deploy_flow(
             config.id
         )));
     }
-    if let Err(error) = validate_admin_exposure(
-        config.engine.admin.enabled,
-        config.engine.admin.authentication,
-        state.address,
-    ) {
-        return configuration_error(error);
-    }
-    let next_token = if config.engine.admin.enabled
-        && config.engine.admin.authentication == AdminAuthentication::Bearer
-    {
-        match resolve_admin_token(&config.engine.admin.token_env) {
-            Some(token) => Some(token),
-            None => {
-                return configuration_error(FlowError::Configuration(format!(
-                    "administrative token environment variable '{}' is missing",
-                    config.engine.admin.token_env
-                )));
-            }
-        }
-    } else {
-        None
-    };
-    let next_repository = if config.engine.repository.enabled {
-        match LocalPacketRepository::open(&config.engine.repository).await {
-            Ok(repository) => Some(repository),
-            Err(error) => return internal(error),
-        }
-    } else {
-        None
-    };
-
-    let previous = state
-        .supervisor
-        .read()
-        .expect("supervisor lock poisoned")
-        .clone();
-    if let Some(supervisor) = previous
-        && let Err(error) = supervisor.stop_gracefully().await
-    {
-        return internal(error);
-    }
-
-    let resolver = match ProfileConnectionResolver::from_env().await {
-        Ok(resolver) => {
-            resolver.map(|resolver| Arc::new(resolver) as Arc<dyn ConnectionResolver>)
-        }
+    let next_admin = match admin_access_for(&config, state.address) {
+        Ok(admin) => admin,
         Err(error) => return configuration_error(error),
     };
-    let supervisor = FlowSupervisor::new(config.clone(), state.metrics.clone())
-        .with_connection_resolver(resolver);
-    if query.start
-        && let Err(error) = supervisor.start().await
-    {
-        return internal(error);
-    }
-    *state.supervisor.write().expect("supervisor lock poisoned") = Some(supervisor.clone());
-    *state.repository.write().expect("repository lock poisoned") = next_repository;
-    *state.admin.write().expect("admin lock poisoned") = AdminAccess {
-        enabled: config.engine.admin.enabled,
-        authentication: config.engine.admin.authentication,
-        token: next_token,
+    let version = match state.registry.create_draft(&body, None).await {
+        Ok((_, version)) => version,
+        Err(error) => return registry_error(error),
     };
+    if let Err(error) = state.registry.validate_version(&id, version).await {
+        return registry_error(error);
+    }
+    let resolver = match build_resolver().await {
+        Ok(resolver) => resolver,
+        Err(error) => return configuration_error(error),
+    };
+    match state
+        .registry
+        .deploy_version(&id, version, query.start, resolver)
+        .await
+    {
+        Ok(snapshot) => {
+            *state.admin.write().expect("admin lock poisoned") = next_admin;
+            tracing::warn!(audit_action = "flow_deploy", flow_id = %id, version, started = query.start, "administrative action");
+            Json(snapshot).into_response()
+        }
+        Err(error) => registry_error(error),
+    }
+}
 
-    tracing::warn!(
-        audit_action = "flow_deploy",
-        flow_id = %id,
-        started = query.start,
-        "administrative action"
-    );
-    Json(supervisor.snapshot()).into_response()
+/// Valida una versión DRAFT concreta (DRAFT → VALIDATED).
+async fn validate_version(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, version)): Path<(String, u32)>,
+) -> Response {
+    if let Err(response) = authorize(&state, &headers) {
+        return response;
+    }
+    match state.registry.validate_version(&id, version).await {
+        Ok(record) => {
+            tracing::warn!(audit_action = "flow_validate", flow_id = %id, version, "administrative action");
+            Json(record).into_response()
+        }
+        Err(error) => registry_error(error),
+    }
+}
+
+/// Despliega transaccionalmente una versión VALIDATED.
+async fn deploy_version(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, version)): Path<(String, u32)>,
+    Query(query): Query<DeployQuery>,
+) -> Response {
+    if let Err(response) = authorize(&state, &headers) {
+        return response;
+    }
+    let source = match state.registry.export_version(&id, version).await {
+        Some(source) => source,
+        None => return not_found("flow version was not found"),
+    };
+    let config = match parse_and_validate(&source) {
+        Ok(config) => config,
+        Err(error) => return configuration_error(error),
+    };
+    let next_admin = match admin_access_for(&config, state.address) {
+        Ok(admin) => admin,
+        Err(error) => return configuration_error(error),
+    };
+    let resolver = match build_resolver().await {
+        Ok(resolver) => resolver,
+        Err(error) => return configuration_error(error),
+    };
+    match state
+        .registry
+        .deploy_version(&id, version, query.start, resolver)
+        .await
+    {
+        Ok(snapshot) => {
+            *state.admin.write().expect("admin lock poisoned") = next_admin;
+            tracing::warn!(audit_action = "flow_deploy", flow_id = %id, version, started = query.start, "administrative action");
+            Json(snapshot).into_response()
+        }
+        Err(error) => registry_error(error),
+    }
+}
+
+/// Rollback a la versión previamente desplegada.
+async fn rollback_flow(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<DeployQuery>,
+) -> Response {
+    if let Err(response) = authorize(&state, &headers) {
+        return response;
+    }
+    let source = match state.registry.rollback_source(&id).await {
+        Ok(source) => source,
+        Err(error) => return registry_error(error),
+    };
+    let config = match parse_and_validate(&source) {
+        Ok(config) => config,
+        Err(error) => return configuration_error(error),
+    };
+    let next_admin = match admin_access_for(&config, state.address) {
+        Ok(admin) => admin,
+        Err(error) => return configuration_error(error),
+    };
+    let resolver = match build_resolver().await {
+        Ok(resolver) => resolver,
+        Err(error) => return configuration_error(error),
+    };
+    match state.registry.rollback(&id, query.start, resolver).await {
+        Ok(snapshot) => {
+            *state.admin.write().expect("admin lock poisoned") = next_admin;
+            tracing::warn!(audit_action = "flow_rollback", flow_id = %id, started = query.start, "administrative action");
+            Json(snapshot).into_response()
+        }
+        Err(error) => registry_error(error),
+    }
+}
+
+/// Archiva una versión concreta.
+async fn archive_version(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, version)): Path<(String, u32)>,
+) -> Response {
+    if let Err(response) = authorize(&state, &headers) {
+        return response;
+    }
+    match state.registry.archive_version(&id, version).await {
+        Ok(record) => {
+            tracing::warn!(audit_action = "flow_archive", flow_id = %id, version, "administrative action");
+            Json(record).into_response()
+        }
+        Err(error) => registry_error(error),
+    }
+}
+
+/// Lista las versiones de un flujo.
+async fn list_versions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(response) = authorize(&state, &headers) {
+        return response;
+    }
+    match state.registry.get_record(&id).await {
+        Some(record) => Json(record.versions).into_response(),
+        None => not_found("flow was not found"),
+    }
+}
+
+/// Exporta el YAML inmutable de una versión.
+async fn export_version(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, version)): Path<(String, u32)>,
+) -> Response {
+    if let Err(response) = authorize(&state, &headers) {
+        return response;
+    }
+    match state.registry.export_version(&id, version).await {
+        Some(source) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/yaml")],
+            source,
+        )
+            .into_response(),
+        None => not_found("flow version was not found"),
+    }
 }
 
 fn resolve_admin_token(variable: &str) -> Option<String> {
@@ -482,9 +647,12 @@ async fn get_flow(
     if let Err(response) = authorize(&state, &headers) {
         return response;
     }
-    match resolve_flow(&state, &id) {
-        Ok(supervisor) => Json(supervisor.snapshot()).into_response(),
-        Err(response) => response,
+    match state.registry.get_record(&id).await {
+        Some(record) => {
+            let runtime = state.registry.snapshot(&id).await;
+            Json(FlowView { record, runtime }).into_response()
+        }
+        None => not_found("flow was not found"),
     }
 }
 
@@ -493,10 +661,20 @@ async fn start_flow(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    mutate_async(&state, &headers, &id, "start", |supervisor| async move {
-        supervisor.start().await
-    })
-    .await
+    if let Err(response) = authorize(&state, &headers) {
+        return response;
+    }
+    let Some(supervisor) = state.registry.supervisor(&id).await else {
+        return not_found("flow is not running");
+    };
+    match supervisor.start().await {
+        Ok(true) => {
+            tracing::warn!(audit_action = "start", flow_id = %id, "administrative action");
+            Json(supervisor.snapshot()).into_response()
+        }
+        Ok(false) => conflict("operation is not valid in the current flow state"),
+        Err(error) => internal(error),
+    }
 }
 
 async fn stop_flow(
@@ -504,10 +682,19 @@ async fn stop_flow(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    mutate_async(&state, &headers, &id, "stop", |supervisor| async move {
-        supervisor.stop_gracefully().await.map(|_| true)
-    })
-    .await
+    if let Err(response) = authorize(&state, &headers) {
+        return response;
+    }
+    let Some(supervisor) = state.registry.supervisor(&id).await else {
+        return not_found("flow is not running");
+    };
+    match supervisor.stop_gracefully().await {
+        Ok(()) => {
+            tracing::warn!(audit_action = "stop", flow_id = %id, "administrative action");
+            Json(supervisor.snapshot()).into_response()
+        }
+        Err(error) => internal(error),
+    }
 }
 
 async fn pause_flow(
@@ -515,7 +702,7 @@ async fn pause_flow(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    mutate_sync(&state, &headers, &id, "pause", FlowSupervisor::pause)
+    mutate_sync(&state, &headers, &id, "pause", FlowSupervisor::pause).await
 }
 
 async fn resume_flow(
@@ -523,7 +710,7 @@ async fn resume_flow(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    mutate_sync(&state, &headers, &id, "resume", FlowSupervisor::resume)
+    mutate_sync(&state, &headers, &id, "resume", FlowSupervisor::resume).await
 }
 
 async fn drain_flow(
@@ -531,41 +718,30 @@ async fn drain_flow(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    mutate_sync(&state, &headers, &id, "drain", FlowSupervisor::drain)
+    mutate_sync(&state, &headers, &id, "drain", FlowSupervisor::drain).await
 }
 
 async fn provenance(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(query): Query<LimitQuery>,
+    Query(query): Query<FlowQuery>,
 ) -> Response {
     if let Err(response) = authorize(&state, &headers) {
         return response;
     }
-    let repository = state
-        .repository
-        .read()
-        .expect("repository lock poisoned")
-        .clone();
-    let supervisor = state
-        .supervisor
-        .read()
-        .expect("supervisor lock poisoned")
-        .clone();
-    let (Some(repository), Some(supervisor)) = (repository, supervisor) else {
+    let Some(flow_id) = resolve_target_flow(&state, query.flow.as_deref()).await else {
+        return unavailable("no flow with a persistent repository is available");
+    };
+    let Some(repository) = state.registry.repository(&flow_id).await else {
         return unavailable("persistent repository is disabled");
     };
     let result = if let Some(packet_id) = query.packet_id {
         repository
-            .provenance_for_packet(
-                supervisor.flow_id(),
-                &packet_id,
-                query.limit.unwrap_or(1000),
-            )
+            .provenance_for_packet(&flow_id, &packet_id, query.limit.unwrap_or(1000))
             .await
     } else {
         repository
-            .recent_provenance(supervisor.flow_id(), query.limit.unwrap_or(100))
+            .recent_provenance(&flow_id, query.limit.unwrap_or(100))
             .await
     };
     json_result(result)
@@ -574,27 +750,20 @@ async fn provenance(
 async fn dead_letters(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(query): Query<LimitQuery>,
+    Query(query): Query<FlowQuery>,
 ) -> Response {
     if let Err(response) = authorize(&state, &headers) {
         return response;
     }
-    let repository = state
-        .repository
-        .read()
-        .expect("repository lock poisoned")
-        .clone();
-    let supervisor = state
-        .supervisor
-        .read()
-        .expect("supervisor lock poisoned")
-        .clone();
-    let (Some(repository), Some(supervisor)) = (repository, supervisor) else {
+    let Some(flow_id) = resolve_target_flow(&state, query.flow.as_deref()).await else {
+        return unavailable("no flow with a persistent repository is available");
+    };
+    let Some(repository) = state.registry.repository(&flow_id).await else {
         return unavailable("persistent repository is disabled");
     };
     json_result(
         repository
-            .dead_letters(supervisor.flow_id(), query.limit.unwrap_or(100))
+            .dead_letters(&flow_id, query.limit.unwrap_or(100))
             .await,
     )
 }
@@ -603,16 +772,15 @@ async fn replay_dead_letter(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(queue_id): Path<String>,
+    Query(query): Query<FlowQuery>,
 ) -> Response {
     if let Err(response) = authorize(&state, &headers) {
         return response;
     }
-    let repository = state
-        .repository
-        .read()
-        .expect("repository lock poisoned")
-        .clone();
-    let Some(repository) = repository else {
+    let Some(flow_id) = resolve_target_flow(&state, query.flow.as_deref()).await else {
+        return unavailable("no flow with a persistent repository is available");
+    };
+    let Some(repository) = state.registry.repository(&flow_id).await else {
         return unavailable("persistent repository is disabled");
     };
     match repository.requeue_dead_letter(&queue_id).await {
@@ -628,7 +796,15 @@ async fn replay_dead_letter(
     }
 }
 
-fn mutate_sync(
+/// Determina el flujo objetivo: el indicado por `?flow=` o el único en ejecución.
+async fn resolve_target_flow(state: &AppState, flow: Option<&str>) -> Option<String> {
+    match flow {
+        Some(flow) => Some(flow.to_owned()),
+        None => state.registry.sole_running_id().await,
+    }
+}
+
+async fn mutate_sync(
     state: &AppState,
     headers: &HeaderMap,
     id: &str,
@@ -638,9 +814,8 @@ fn mutate_sync(
     if let Err(response) = authorize(state, headers) {
         return response;
     }
-    let supervisor = match resolve_flow(state, id) {
-        Ok(supervisor) => supervisor,
-        Err(response) => return response,
+    let Some(supervisor) = state.registry.supervisor(id).await else {
+        return not_found("flow is not running");
     };
     if !operation(&supervisor) {
         return conflict("operation is not valid in the current flow state");
@@ -649,32 +824,60 @@ fn mutate_sync(
     Json(supervisor.snapshot()).into_response()
 }
 
-async fn mutate_async<F, Fut>(
-    state: &AppState,
-    headers: &HeaderMap,
-    id: &str,
-    action: &'static str,
-    operation: F,
-) -> Response
-where
-    F: FnOnce(FlowSupervisor) -> Fut,
-    Fut: Future<Output = Result<bool, FlowError>>,
-{
-    if let Err(response) = authorize(state, headers) {
-        return response;
-    }
-    let supervisor = match resolve_flow(state, id) {
-        Ok(supervisor) => supervisor,
-        Err(response) => return response,
-    };
-    match operation(supervisor.clone()).await {
-        Ok(true) => {
-            tracing::warn!(audit_action = action, flow_id = %id, "administrative action");
-            Json(supervisor.snapshot()).into_response()
+fn registry_error(error: RegistryError) -> Response {
+    let status = match &error {
+        RegistryError::NotFound(_) => StatusCode::NOT_FOUND,
+        RegistryError::InvalidState(_) | RegistryError::LimitExceeded(_) => StatusCode::CONFLICT,
+        RegistryError::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        RegistryError::Internal(inner) => {
+            tracing::error!(error = %inner, "flow registry operation failed");
+            StatusCode::INTERNAL_SERVER_ERROR
         }
-        Ok(false) => conflict("operation is not valid in the current flow state"),
-        Err(error) => internal(error),
-    }
+    };
+    (
+        status,
+        Json(ApiMessage {
+            message: error.message(),
+        }),
+    )
+        .into_response()
+}
+
+/// Construye el resolvedor de conexiones por alias a partir del entorno.
+async fn build_resolver() -> Result<Option<Arc<dyn ConnectionResolver>>, FlowError> {
+    Ok(ProfileConnectionResolver::from_env()
+        .await?
+        .map(|resolver| Arc::new(resolver) as Arc<dyn ConnectionResolver>))
+}
+
+/// Valida la exposición de admin y resuelve el token para un flujo concreto.
+#[allow(clippy::result_large_err)]
+fn admin_access_for(config: &FlowConfig, address: SocketAddr) -> Result<AdminAccess, FlowError> {
+    validate_admin_exposure(
+        config.engine.admin.enabled,
+        config.engine.admin.authentication,
+        address,
+    )?;
+    let token = if config.engine.admin.enabled
+        && config.engine.admin.authentication == AdminAuthentication::Bearer
+    {
+        match resolve_admin_token(&config.engine.admin.token_env) {
+            Some(token) => Some(token),
+            None => {
+                return Err(FlowError::Configuration(format!(
+                    "administrative token environment variable '{}' is missing",
+                    config.engine.admin.token_env
+                )));
+            }
+        }
+    } else {
+        None
+    };
+    Ok(AdminAccess {
+        enabled: config.engine.admin.enabled,
+        authentication: config.engine.admin.authentication,
+        token,
+    })
 }
 
 #[allow(clippy::result_large_err)]
@@ -712,20 +915,7 @@ pub(crate) fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), Res
     }
 }
 
-#[allow(clippy::result_large_err)]
-fn resolve_flow(state: &AppState, id: &str) -> Result<FlowSupervisor, Response> {
-    match state
-        .supervisor
-        .read()
-        .expect("supervisor lock poisoned")
-        .clone()
-    {
-        Some(supervisor) if supervisor.flow_id() == id => Ok(supervisor),
-        _ => Err(not_found("flow was not found")),
-    }
-}
-
-fn parse_and_validate(body: &str) -> Result<FlowConfig, FlowError> {
+pub(crate) fn parse_and_validate(body: &str) -> Result<FlowConfig, FlowError> {
     let config: FlowConfig = serde_yaml::from_str(body)?;
     if config.id.trim().is_empty() {
         return Err(FlowError::Configuration(
@@ -859,11 +1049,12 @@ fn configuration_error(error: FlowError) -> Response {
         .into_response()
 }
 
-async fn stream_metrics(mut socket: WebSocket, metrics: FlowMetrics) {
+async fn stream_metrics(mut socket: WebSocket, state: AppState) {
     let mut ticker = interval(Duration::from_secs(1));
     loop {
         ticker.tick().await;
-        let Ok(message) = serde_json::to_string(&metrics.summary()) else {
+        let summary = state.registry.primary_snapshot().await.map(|s| s.metrics);
+        let Ok(message) = serde_json::to_string(&summary) else {
             break;
         };
         if socket.send(Message::Text(message.into())).await.is_err() {
@@ -876,21 +1067,18 @@ async fn stream_metrics(mut socket: WebSocket, metrics: FlowMetrics) {
 struct RuntimeEvent {
     kind: &'static str,
     flow: Option<SupervisedFlowSnapshot>,
+    flows: Vec<SupervisedFlowSnapshot>,
 }
 
 async fn stream_runtime(mut socket: WebSocket, state: AppState) {
     let mut ticker = interval(Duration::from_secs(1));
     loop {
         ticker.tick().await;
-        let flow = state
-            .supervisor
-            .read()
-            .expect("supervisor lock poisoned")
-            .as_ref()
-            .map(FlowSupervisor::snapshot);
+        let flows = state.registry.snapshots().await;
         let event = RuntimeEvent {
             kind: "runtime_snapshot",
-            flow,
+            flow: flows.first().cloned(),
+            flows,
         };
         let Ok(message) = serde_json::to_string(&event) else {
             break;
@@ -901,17 +1089,12 @@ async fn stream_runtime(mut socket: WebSocket, state: AppState) {
     }
 }
 
-async fn shutdown_signal(supervisor: Arc<RwLock<Option<FlowSupervisor>>>) {
+async fn shutdown_signal(registry: Arc<FlowRegistry>) {
     if let Err(error) = tokio::signal::ctrl_c().await {
         tracing::error!(%error, "failed to install shutdown signal");
         return;
     }
-    let current = supervisor.read().expect("supervisor lock poisoned").clone();
-    if let Some(supervisor) = current
-        && let Err(error) = supervisor.stop_gracefully().await
-    {
-        tracing::error!(%error, "coordinated flow shutdown failed");
-    }
+    registry.stop_all().await;
 }
 
 fn validate_admin_exposure(

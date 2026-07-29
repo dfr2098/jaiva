@@ -3,10 +3,12 @@ import type {
   DatabaseConnection,
   DatabaseConnectionInput,
   ConnectionDriver,
+  CompiledQuery,
   FlowAction,
   FlowSnapshot,
   FlowValidationResult,
   ProvenanceRecord,
+  QuerySpec,
   RuntimeEvent,
   DatabaseObject,
   ObjectDescription,
@@ -139,6 +141,15 @@ export const jaivaApi = {
   describeConnectionObject: (id: string, schema: string, name: string) =>
     request<ObjectDescription>(
       `/api/v1/connections/${encodeURIComponent(id)}/metadata/${encodeURIComponent(schema)}/${encodeURIComponent(name)}`,
+    ),
+  compileQuery: (id: string, spec: QuerySpec) =>
+    request<CompiledQuery>(
+      `/api/v1/connections/${encodeURIComponent(id)}/query/compile`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(spec),
+      },
     ),
   runtimeSocket: (onEvent: (event: RuntimeEvent) => void) => {
     const socket = new WebSocket(websocketUrl("/ws/v1"));

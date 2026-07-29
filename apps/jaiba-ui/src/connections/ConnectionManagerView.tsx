@@ -8,6 +8,7 @@ import type {
   DatabaseConnectionInput,
 } from "../types";
 import { SqlAutocomplete } from "./SqlAutocomplete";
+import { SqlQueryBuilder } from "./SqlQueryBuilder";
 
 const EMPTY: DatabaseConnectionInput = {
   name: "",
@@ -53,7 +54,11 @@ function dateLabel(timestamp: number | null) {
     : "Nunca";
 }
 
-export function ConnectionManagerView() {
+export function ConnectionManagerView({
+  onCreateQueryNode,
+}: {
+  onCreateQueryNode?: () => void;
+}) {
   const [drivers, setDrivers] = useState<ConnectionDriver[]>([]);
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -299,7 +304,12 @@ export function ConnectionManagerView() {
               </div>
               {["postgres", "mysql", "maria_db", "oracle", "sql_server"].includes(
                 current.connection_type,
-              ) ? <SqlAutocomplete connection={current} /> : null}
+              ) ? (
+                <>
+                  <SqlAutocomplete connection={current} />
+                  <SqlQueryBuilder connection={current} onCreateQueryNode={onCreateQueryNode} />
+                </>
+              ) : null}
             </>
           ) : (
             <div className="connection-welcome">

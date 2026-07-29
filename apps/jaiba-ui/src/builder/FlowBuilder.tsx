@@ -54,6 +54,7 @@ import {
   type SimulationSettings,
 } from "./model";
 import { downloadYaml, parseFlowYaml, toYaml, validateFlow } from "./yaml";
+import { takePendingQueryNode } from "./pendingQueryNode";
 
 const DRAG_TYPE = "application/jaiba-processor";
 const DRAFT_KEY = "jaiba.visual.builder.v1";
@@ -340,6 +341,46 @@ function FlowBuilderInner() {
     },
     [setNodes, addLog, fitView],
   );
+
+  // Consume un nodo Query dejado por el constructor visual del explorador:
+  // registra la conexión (si falta) y crea el nodo query_postgres ya configurado.
+  useEffect(() => {
+    const pending = takePendingQueryNode();
+    if (!pending) return;
+    setMeta((current) =>
+      current.databaseConnections.some((connection) => connection.name === pending.connectionName)
+        ? current
+        : {
+            ...current,
+            databaseConnections: [
+              ...current.databaseConnections,
+              {
+                name: pending.connectionName,
+                type: pending.connectionType,
+                url_env: `${pending.connectionName.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_URL`,
+                max_connections: 5,
+              },
+            ],
+          },
+    );
+    setNodes((current: ProcessorNode[]) => {
+      const ids = new Set(current.map((node) => node.data.processorId));
+      const node = createProcessorNode(
+        "query_postgres",
+        { x: 120, y: 120 + current.length * 40 },
+        ids,
+      );
+      node.data.config = {
+        ...node.data.config,
+        connection: pending.connectionName,
+        query: pending.query,
+        ...(pending.parameters.length > 0 ? { parameters: pending.parameters } : {}),
+      };
+      return [...current, node];
+    });
+    addLog("evento", "info", `Nodo Query creado desde el explorador: ${pending.table}.`);
+    window.setTimeout(() => void fitView({ padding: 0.3, maxZoom: 1.2, duration: 250 }), 80);
+  }, [setMeta, setNodes, addLog, fitView]);
 
   const onDrop = useCallback(
     (event: React.DragEvent) => {

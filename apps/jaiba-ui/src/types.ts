@@ -201,3 +201,58 @@ export interface ObjectDescription {
   keys: KeyMetadata[];
   indexes: IndexMetadata[];
 }
+
+export type FilterOperator =
+  | "eq"
+  | "not_eq"
+  | "greater_than"
+  | "greater_or_equal"
+  | "less_than"
+  | "less_or_equal"
+  | "contains"
+  | "starts_with"
+  | "in"
+  | "is_null"
+  | "is_not_null";
+
+export type SortDirection = "asc" | "desc";
+
+export type JoinKind = "inner" | "left" | "right" | "full";
+
+export interface QuerySource {
+  schema: string | null;
+  table: string;
+}
+
+export interface QueryFilter {
+  field: string;
+  operator: FilterOperator;
+  value: unknown;
+}
+
+export interface QueryOrder {
+  field: string;
+  direction: SortDirection;
+}
+
+export interface QueryJoin {
+  kind: JoinKind;
+  source: QuerySource;
+  left: string;
+  right: string;
+}
+
+export interface QuerySpec {
+  source: QuerySource;
+  columns: string[];
+  joins: QueryJoin[];
+  filters: QueryFilter[];
+  group_by: string[];
+  order_by: QueryOrder[];
+  limit: number | null;
+}
+
+export interface CompiledQuery {
+  statement: string;
+  parameters: unknown[];
+}

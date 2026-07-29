@@ -9,6 +9,7 @@ un núcleo DAG, un runtime desacoplado, plugins y una UI sin lógica de negocio.
 - [Arquitectura](docs/architecture.md)
 - [Visión y límites del proyecto](docs/project-vision.md)
 - [Ruta de modularización](docs/modular-roadmap.md)
+- [Bitácora técnica y memoria de implementación](docs/implementation-notes.md)
 - [Configuración](docs/configuration.md)
 - [Procesadores](docs/processors.md)
 - [Operación y observabilidad](docs/operations.md)
@@ -20,52 +21,52 @@ un núcleo DAG, un runtime desacoplado, plugins y una UI sin lógica de negocio.
 
 ```mermaid
 flowchart LR
-    SRC[(Oracle / MySQL / PostgreSQL)]
+    USER["Usuario"]
 
-    subgraph JAIBA["Jaiba Runtime"]
-        SCHED["Scheduler"]
-        READ["Data Source<br/>Lectura por lotes"]
-        REPOSITORY[("Packet + Content Repository<br/>SQLite WAL · SHA-256")]
-        QUEUE[["Cola limitada<br/>Backpressure"]]
-        TRANSFORM["Transformaciones<br/>Validar · Renombrar · Convertir"]
-        ROUTE{"Resultado"}
-        WRITE["Data Destination<br/>Insert / Upsert"]
-        CHECKPOINT[("Checkpoint")]
-        RETRY["Reintento exponencial"]
-        DLQ[("Dead-letter queue")]
-        METRICS["Métricas"]
-
-        SCHED --> READ
-        READ --> REPOSITORY
-        REPOSITORY --> QUEUE
-        QUEUE --> TRANSFORM
-        TRANSFORM --> ROUTE
-        ROUTE -- success --> WRITE
-        WRITE -- commit correcto --> CHECKPOINT
-        ROUTE -- retry --> RETRY
-        RETRY --> TRANSFORM
-        ROUTE -- failure --> DLQ
-
-        READ -.-> METRICS
-        QUEUE -.-> METRICS
-        TRANSFORM -.-> METRICS
-        WRITE -.-> METRICS
-        RETRY -.-> METRICS
-        DLQ -.-> METRICS
-        REPOSITORY -.-> METRICS
+    subgraph UI["jaiba-ui"]
+        CMUI["Conexiones y<br/>constructor SQL"]
+        DESIGNER["Diseñador DAG"]
+        OPS["Operación y<br/>trazabilidad"]
     end
 
-    SRC --> READ
-    WRITE --> DST[(Base o sistema destino)]
+    subgraph SERVER["jaiba-server"]
+        API["REST + WebSocket"]
+        CM["Connection Manager"]
+        SQL["Compilador SQL seguro"]
+        VERSIONS[("Registro versionado<br/>DRAFT · VALIDATED<br/>DEPLOYED · ARCHIVED")]
+    end
 
-    METRICS --> PROM["Prometheus<br/>GET /metrics"]
-    PROM --> GRAFANA["Grafana"]
-    METRICS --> WS["WebSocket<br/>GET /ws"]
-    WS --> UI["Interfaz Jaiva"]
+    subgraph RUNTIME["jaiba-runtime"]
+        ENGINE["FlowEngine"]
+        QUEUE[["Colas limitadas<br/>Backpressure"]]
+        PROCESSORS["Procesadores"]
+        REPOSITORY[("Packet + Content<br/>SQLite WAL · SHA-256")]
+        OBS["Métricas · Provenance<br/>Dead-letter"]
+    end
+
+    SYSTEMS[("PostgreSQL · MySQL · Oracle<br/>SQL Server · Kafka · archivos")]
+
+    USER --> CMUI
+    USER --> DESIGNER
+    USER --> OPS
+    CMUI -->|QuerySpec| API
+    API --> CM
+    CM --> SQL
+    SQL -->|SQL + parámetros| CMUI
+    CMUI -->|nodo query_postgres| DESIGNER
+    DESIGNER -->|YAML| API
+    API --> VERSIONS
+    VERSIONS -->|desplegar / rollback| ENGINE
+    ENGINE --> QUEUE --> PROCESSORS
+    PROCESSORS <--> SYSTEMS
+    QUEUE <--> REPOSITORY
+    ENGINE --> OBS
+    OBS -->|WebSocket / REST / Prometheus| OPS
 ```
 
-El checkpoint se actualiza únicamente después de confirmar la escritura en el
-destino. Cuando una cola alcanza su límite, la fuente debe esperar para evitar
+La UI describe operaciones; no carga drivers ni recibe contraseñas. El servidor
+compila consultas y versiona los YAML. El runtime es el único componente que
+ejecuta el DAG. Cuando una cola alcanza su límite, la fuente espera para evitar
 consumir memoria sin control.
 
 ## Capacidades actuales

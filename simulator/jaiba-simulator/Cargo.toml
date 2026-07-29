@@ -12,3 +12,4 @@ jaiba-plugin-sdk = { path = "../../crates/jaiba-plugin-sdk" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true

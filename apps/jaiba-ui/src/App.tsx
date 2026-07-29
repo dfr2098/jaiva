@@ -152,7 +152,7 @@ export default function App() {
       ) : view === "connections" ? (
         <main className="connections-main">
           <Suspense fallback={<div className="builder-loading">Cargando conexiones…</div>}>
-            <ConnectionManagerView />
+            <ConnectionManagerView onCreateQueryNode={() => setView("builder")} />
           </Suspense>
         </main>
       ) : (

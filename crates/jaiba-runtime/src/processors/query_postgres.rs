@@ -11,6 +11,7 @@ use crate::{
 pub struct QueryPostgres {
     connection: String,
     query: String,
+    parameters: Vec<Value>,
     batch_size: usize,
 }
 
@@ -18,6 +19,10 @@ pub struct QueryPostgres {
 struct QueryPostgresConfig {
     connection: String,
     query: String,
+    /// Parámetros ligados (`$1`, `$2`, …). El constructor visual genera SQL
+    /// parametrizado, por lo que los valores nunca se interpolan en el texto.
+    #[serde(default)]
+    parameters: Vec<Value>,
     #[serde(default = "default_batch_size")]
     batch_size: usize,
 }
@@ -36,12 +41,56 @@ impl QueryPostgres {
                 "query_postgres requires a non-empty query".to_owned(),
             ));
         }
+        for parameter in &config.parameters {
+            validate_parameter(parameter)?;
+        }
 
         Ok(Self {
             connection: config.connection,
             query: config.query,
+            parameters: config.parameters,
             batch_size: config.batch_size.max(1),
         })
+    }
+}
+
+fn validate_parameter(value: &Value) -> Result<(), FlowError> {
+    match value {
+        Value::Null => Err(FlowError::Configuration(
+            "query_postgres does not accept untyped null parameters; use IS NULL".to_owned(),
+        )),
+        Value::Number(number) if number.as_i64().is_none() && number.as_f64().is_none() => {
+            Err(FlowError::Configuration(format!(
+                "query_postgres numeric parameter is outside the supported range: {number}"
+            )))
+        }
+        Value::Number(number) if number.as_u64().is_some_and(|value| value > i64::MAX as u64) => {
+            Err(FlowError::Configuration(format!(
+                "query_postgres integer parameter exceeds PostgreSQL BIGINT: {number}"
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Liga un valor JSON al tipo escalar SQL adecuado. Las listas/objetos se
+/// envían como JSONB para no romper la ejecución si aparecen.
+fn bind_json<'q>(
+    query: sqlx::query::QueryScalar<'q, sqlx::Postgres, Value, sqlx::postgres::PgArguments>,
+    value: &'q Value,
+) -> sqlx::query::QueryScalar<'q, sqlx::Postgres, Value, sqlx::postgres::PgArguments> {
+    match value {
+        Value::Null => unreachable!("null parameters are rejected during configuration"),
+        Value::Bool(flag) => query.bind(*flag),
+        Value::Number(number) => {
+            if let Some(integer) = number.as_i64() {
+                query.bind(integer)
+            } else {
+                query.bind(number.as_f64().unwrap_or_default())
+            }
+        }
+        Value::String(text) => query.bind(text.as_str()),
+        other => query.bind(other.clone()),
     }
 }
 
@@ -54,7 +103,11 @@ impl Processor for QueryPostgres {
         output: &OutputSender,
     ) -> Result<(), FlowError> {
         let pool = context.connections.postgres(&self.connection)?;
-        let mut rows = sqlx::query_scalar::<_, Value>(&self.query).fetch(pool);
+        let mut query = sqlx::query_scalar::<_, Value>(&self.query);
+        for parameter in &self.parameters {
+            query = bind_json(query, parameter);
+        }
+        let mut rows = query.fetch(pool);
         let mut batch = Vec::with_capacity(self.batch_size);
         let mut batch_number = 0_u64;
 
@@ -97,4 +150,34 @@ fn make_packet(template: &DataPacket, records: Vec<Value>, batch_number: u64) ->
         packet.records().expect("records packet").len().to_string(),
     );
     packet
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn rejects_untyped_null_parameters() {
+        let error = QueryPostgres::from_config(&json!({
+            "connection": "main",
+            "query": "SELECT jsonb_build_object('id', id) FROM items WHERE id = $1",
+            "parameters": [null]
+        }))
+        .err()
+        .expect("null must be rejected");
+        assert!(error.to_string().contains("untyped null"));
+    }
+
+    #[test]
+    fn rejects_integers_larger_than_postgres_bigint() {
+        let error = QueryPostgres::from_config(&json!({
+            "connection": "main",
+            "query": "SELECT jsonb_build_object('id', id) FROM items WHERE id = $1",
+            "parameters": [u64::MAX]
+        }))
+        .err()
+        .expect("oversized integer must be rejected");
+        assert!(error.to_string().contains("BIGINT"));
+    }
 }

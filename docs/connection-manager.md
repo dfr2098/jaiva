@@ -39,10 +39,58 @@ crear configuraciones engañosas.
 - `GET|PUT|DELETE /api/v1/connections/{id}`
 - `POST /api/v1/connections/{id}/duplicate`
 - `POST /api/v1/connections/{id}/test`
+- `GET /api/v1/connections/{id}/metadata`
+- `GET /api/v1/connections/{id}/metadata/{schema}/{name}`
+- `POST /api/v1/connections/{id}/query/compile`
 
 Estas rutas usan la misma autenticación administrativa que los flujos. Una
 prueba correcta informa disponibilidad, latencia, versión, uso del pool y fecha.
 Una prueba fallida conserva la fecha y el diagnóstico sin incluir el secreto.
+
+## Explorador y constructor SQL
+
+PostgreSQL y MySQL permiten explorar tablas, vistas, rutinas, columnas, llaves
+e índices. El constructor envía una especificación neutral `QuerySpec`; el
+servidor genera SQL seguro para el dialecto y devuelve la sentencia junto con
+sus parámetros separados.
+
+PostgreSQL permite enviar la consulta compilada al diseñador y crear
+automáticamente un nodo `query_postgres`. MySQL permite explorar y compilar,
+pero la creación de un nodo ejecutable queda deshabilitada hasta incorporar
+`query_mysql` al runtime.
+
+El recorrido técnico completo está descrito en
+[la bitácora de implementación](implementation-notes.md).
+
+```mermaid
+sequenceDiagram
+    actor U as Usuario
+    participant UI as jaiba-ui
+    participant API as jaiba-server
+    participant CM as Connection Manager
+    participant DB as PostgreSQL / MySQL
+    participant SQL as SQL Builder
+    participant FB as Flow Builder
+
+    U->>UI: Abre una conexión
+    UI->>API: GET metadata
+    API->>CM: Resuelve perfil y secreto
+    CM->>DB: Consulta information_schema
+    DB-->>CM: Tablas, columnas, llaves e índices
+    CM-->>UI: Metadatos sin credenciales
+    U->>UI: Selecciona columnas y filtros
+    UI->>API: POST QuerySpec
+    API->>SQL: Compilar según dialecto
+    SQL-->>UI: SQL + parámetros separados
+
+    alt conexión PostgreSQL
+        U->>UI: Enviar al diseñador
+        UI->>FB: Guarda traspaso temporal
+        FB->>FB: Crea nodo query_postgres
+    else conexión MySQL
+        UI-->>U: Permite copiar SQL; nodo aún no disponible
+    end
+```
 
 ## Seguridad
 

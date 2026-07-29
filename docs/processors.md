@@ -114,6 +114,12 @@ config:
     - customer_id
 ```
 
+En modo `auto`, la presencia de `conflict_columns` selecciona `upsert`; sin
+ellas se selecciona `insert`. Antes de escribir, el motor calcula una estrategia
+como `multi_row_insert`, `native_upsert` o `transactional_upsert`, limita el lote
+según las capacidades del driver y registra el plan en los atributos
+`write.*` del paquete.
+
 ## `query_oracle`
 
 Ejecuta una consulta de solo lectura en Oracle y emite cada fila como un objeto
@@ -129,12 +135,6 @@ config:
 ```
 
 Solo acepta sentencias cuyo primer término sea `SELECT` o `WITH`.
-
-En modo `auto`, la presencia de `conflict_columns` selecciona `upsert`; sin
-ellas se selecciona `insert`. Antes de escribir, el motor calcula una estrategia
-como `multi_row_insert`, `native_upsert` o `transactional_upsert`, limita el lote
-según las capacidades del driver y registra el plan en los atributos
-`write.*` del paquete.
 
 ## `publish_kafka`
 

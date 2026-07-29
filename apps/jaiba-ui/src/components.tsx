@@ -12,6 +12,8 @@ import type {
 } from "./types";
 
 export function CrabMark() {
+  // Mantener el arte original como archivo importado permite que Vite genere
+  // una URL versionada y evita depender de rutas absolutas en el contenedor.
   return (
     <img
       className="crab-mark"

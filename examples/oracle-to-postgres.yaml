@@ -1,5 +1,7 @@
 id: oracle-to-postgres-test
 
+# Las contraseñas nunca se escriben en YAML. El script exporta estas variables
+# únicamente durante la ejecución del proceso Jaiba.
 database_connections:
   source:
     type: oracle
@@ -21,6 +23,7 @@ engine:
     completed_retention_hours: 24
 
 processors:
+  # DUAL permite probar la extracción sin crear ni modificar tablas en Oracle.
   - id: read_oracle
     type: query_oracle
     config:
@@ -45,10 +48,12 @@ processors:
       mode: auto
       batch_size: 100
       columns:
+        # query_oracle normaliza ID/NAME/LOADED_AT a minúsculas.
         id: id
         name: name
         loaded_at: loaded_at
       conflict_columns:
+        # Esta clave hace que mode:auto seleccione un upsert.
         - id
     retry:
       maximum_attempts: 3
@@ -59,6 +64,7 @@ processors:
     type: log_records
 
 connections:
+  # Success mueve los lotes; failure centraliza los diagnósticos.
   - from: read_oracle
     relationship: success
     to: load_postgres

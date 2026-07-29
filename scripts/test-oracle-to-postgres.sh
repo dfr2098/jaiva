@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Prueba local, repetible y no destructiva:
+# Oracle DUAL -> query_oracle -> auto_destination -> PostgreSQL.
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# La contraseña aleatoria evita reutilizar credenciales de SYSTEM o DMA.
 test_password="${JAIBA_TRANSFER_TEST_PASSWORD:-$(openssl rand -hex 24)}"
 cargo_bin="${CARGO_BIN:-$(command -v cargo || true)}"
 if [[ -z "${cargo_bin}" && -x "${HOME}/.cargo/bin/cargo" ]]; then
@@ -14,6 +17,7 @@ fi
 
 oracle_sql="
 WHENEVER SQLERROR EXIT SQL.SQLCODE
+-- El usuario debe existir en la PDB de la URL, no en CDB_ROOT.
 ALTER SESSION SET CONTAINER=FREEPDB1;
 DECLARE
   role_count NUMBER;
@@ -35,6 +39,8 @@ EXIT
 printf '%s\n' "${oracle_sql}" |
   docker exec -i oracle19 sqlplus -s / as sysdba >/dev/null
 
+# El rol solo obtiene acceso a la tabla aislada de la prueba. Repetir el script
+# conserva la tabla y el volumen.
 docker exec dma_postgres psql \
   -v ON_ERROR_STOP=1 \
   -U dma \
@@ -58,11 +64,14 @@ docker exec dma_postgres psql \
 export ORACLE_DATABASE_URL="oracle://JAIVA_FLOW_TEST:${test_password}@127.0.0.1:1521/FREEPDB1"
 export DATABASE_URL="postgres://jaiva_flow_test:${test_password}@127.0.0.1:5432/dma?sslmode=disable"
 
+# oracle-driver habilita rust-oracle/ODPI-C. Las variables exportadas solo viven
+# en este proceso y sus hijos.
 cd "${repo_dir}"
 "${cargo_bin}" run --features oracle-driver -- examples/oracle-to-postgres.yaml
 
 echo
 echo "Filas verificadas en PostgreSQL:"
+# La consulta final hace visible el resultado real de la carga.
 docker exec dma_postgres psql \
   -U dma \
   -d dma \

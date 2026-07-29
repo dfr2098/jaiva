@@ -439,6 +439,15 @@ la [instalación oficial de Instant Client](https://docs.oracle.com/en/database/
 El ejemplo completo está en
 [`examples/oracle-write.yaml`](examples/oracle-write.yaml).
 
+Para probar una extracción y carga completa Oracle → PostgreSQL:
+
+```bash
+bash scripts/test-oracle-to-postgres.sh
+```
+
+El procedimiento, los usuarios técnicos, el mapeo y el diagnóstico están en
+[`docs/oracle-to-postgres.md`](docs/oracle-to-postgres.md).
+
 ## SQL Server
 
 El adaptador TDS se habilita con `--features sqlserver-driver` y acepta
@@ -462,7 +471,7 @@ expone topic, partición y offset en atributos de procedencia. Consulta
 
 ## Próximas integraciones
 
-- Lectores genéricos para MySQL, Oracle y SQL Server.
+- Lectores genéricos para MySQL y SQL Server.
 - Pool de conexiones SQL Server.
 - Array binding y pool de sesiones para acelerar Oracle.
 - Cancelación coordinada y circuit breaker.

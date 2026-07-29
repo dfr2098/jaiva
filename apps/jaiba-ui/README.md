@@ -12,6 +12,16 @@ La paleta visual procede de la jaiba:
 - óxido rojizo de las puntas;
 - arena y blanco espuma para contraste.
 
+## Identidad visual
+
+El encabezado y el favicon usan el arte original del cangrejo jarocho ubicado
+en `src/img/jaiba-logo.png`. El archivo es una copia sin modificaciones de la
+imagen de referencia; no debe regenerarse ni sobrescribirse durante el build.
+
+La importación ocurre desde `src/components.tsx`, por lo que Vite agrega un hash
+al nombre del recurso compilado. Para cambiar el tamaño visible se debe ajustar
+`.crab-mark` en `src/styles.css`, sin alterar los píxeles del archivo original.
+
 ## Iniciar el motor sin login local
 
 Usa `examples/visualisa-flow.yaml`:

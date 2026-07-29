@@ -86,6 +86,8 @@ impl OracleWriter {
             )
             .map_err(oracle_error)?;
             let rows = connection.query(&query, &[]).map_err(oracle_error)?;
+            // Oracle returns unquoted identifiers in uppercase. Normalizing
+            // here keeps YAML field mappings portable across destinations.
             let columns = rows
                 .column_info()
                 .iter()
@@ -113,6 +115,8 @@ impl OracleWriter {
                     ));
                 }
             }
+            // Emit one empty batch for an empty result so the downstream graph
+            // receives a deterministic completion packet.
             if !batch.is_empty() || batches.is_empty() {
                 batches.push(batch);
             }
@@ -205,6 +209,8 @@ fn oracle_json_value(
     index: usize,
     oracle_type: &OracleType,
 ) -> Result<Value, FlowError> {
+    // Fetch through Oracle's null-aware string representation first. NUMBER is
+    // parsed below so integral JSON values remain integral.
     let text = row.get::<_, Option<String>>(index).map_err(oracle_error)?;
     let Some(text) = text else {
         return Ok(Value::Null);
@@ -216,6 +222,8 @@ fn oracle_json_value(
         | OracleType::BinaryDouble
         | OracleType::Int64
         | OracleType::UInt64 => {
+            // Prefer integer, then floating point. Values outside JSON's
+            // numeric representation remain strings instead of losing data.
             if let Ok(integer) = text.parse::<i64>() {
                 Ok(Value::from(integer))
             } else if let Ok(number) = text.parse::<f64>() {

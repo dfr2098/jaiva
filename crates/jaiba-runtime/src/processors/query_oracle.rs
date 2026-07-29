@@ -7,6 +7,10 @@ use crate::{
     error::FlowError,
 };
 
+/// Read-only Oracle source that emits one record packet per configured batch.
+///
+/// The connector performs blocking OCI work outside Tokio's async workers;
+/// this processor handles validation and packet metadata.
 pub struct QueryOracle {
     connection: String,
     query: String,
@@ -15,7 +19,9 @@ pub struct QueryOracle {
 
 #[derive(Deserialize)]
 struct QueryOracleConfig {
+    /// Connection alias declared in YAML or resolved by Connection Manager.
     connection: String,
+    /// Read-only SQL. DML and DDL are rejected before opening the connection.
     query: String,
     #[serde(default = "default_batch_size")]
     batch_size: usize,
@@ -30,6 +36,8 @@ impl QueryOracle {
         let config: QueryOracleConfig = serde_json::from_value(value.clone())
             .map_err(|error| FlowError::Configuration(error.to_string()))?;
         let query = config.query.trim();
+        // Early safety guard rather than a full SQL parser. OCI validates the
+        // complete statement when the connector executes it.
         let keyword = query
             .split_whitespace()
             .next()
@@ -63,6 +71,8 @@ impl Processor for QueryOracle {
             .await?;
         for (batch_number, records) in batches.into_iter().enumerate() {
             let mut result = DataPacket::with_records(records);
+            // Preserve correlation attributes and add source metadata used by
+            // provenance, metrics and downstream diagnostics.
             result.attributes.clone_from(&packet.attributes);
             result
                 .attributes

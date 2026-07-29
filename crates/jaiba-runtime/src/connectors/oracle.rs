@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use oracle::sql_type::OracleType;
 use oracle::sql_type::ToSql;
+use serde_json::Map;
 use serde_json::Value;
 use url::Url;
 
@@ -61,6 +63,63 @@ impl OracleWriter {
                 connect_string: format!("{host}:{port}/{service}"),
             }),
         })
+    }
+
+    /// Executes a read-only query and converts rows to JSON object batches.
+    ///
+    /// Oracle calls are blocking, so the complete fetch runs on Tokio's
+    /// blocking pool. Column names are normalized to lowercase so that
+    /// unquoted Oracle identifiers map naturally to destination columns.
+    pub async fn query_json_batches(
+        &self,
+        query: &str,
+        batch_size: usize,
+    ) -> Result<Vec<Vec<Value>>, FlowError> {
+        let settings = self.settings.clone();
+        let query = query.to_owned();
+        let batch_size = batch_size.max(1);
+        tokio::task::spawn_blocking(move || {
+            let connection = oracle::Connection::connect(
+                &settings.username,
+                &settings.password,
+                &settings.connect_string,
+            )
+            .map_err(oracle_error)?;
+            let rows = connection.query(&query, &[]).map_err(oracle_error)?;
+            let columns = rows
+                .column_info()
+                .iter()
+                .map(|column| {
+                    (
+                        column.name().to_ascii_lowercase(),
+                        column.oracle_type().clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let mut batches = Vec::new();
+            let mut batch = Vec::with_capacity(batch_size);
+            for row in rows {
+                let row = row.map_err(oracle_error)?;
+                let mut object = Map::with_capacity(columns.len());
+                for (index, (name, oracle_type)) in columns.iter().enumerate() {
+                    let value = oracle_json_value(&row, index, oracle_type)?;
+                    object.insert(name.clone(), value);
+                }
+                batch.push(Value::Object(object));
+                if batch.len() == batch_size {
+                    batches.push(std::mem::replace(
+                        &mut batch,
+                        Vec::with_capacity(batch_size),
+                    ));
+                }
+            }
+            if !batch.is_empty() || batches.is_empty() {
+                batches.push(batch);
+            }
+            Ok(batches)
+        })
+        .await
+        .map_err(|error| FlowError::DatabaseConnector(error.to_string()))?
     }
 
     fn insert_statement(&self, request: &WriteRequest) -> Result<String, FlowError> {
@@ -138,6 +197,53 @@ impl OracleWriter {
             WriteMode::Insert => self.insert_statement(request),
             WriteMode::Upsert => self.merge_statement(request),
         }
+    }
+}
+
+fn oracle_json_value(
+    row: &oracle::Row,
+    index: usize,
+    oracle_type: &OracleType,
+) -> Result<Value, FlowError> {
+    let text = row.get::<_, Option<String>>(index).map_err(oracle_error)?;
+    let Some(text) = text else {
+        return Ok(Value::Null);
+    };
+    match oracle_type {
+        OracleType::Number(_, _)
+        | OracleType::Float(_)
+        | OracleType::BinaryFloat
+        | OracleType::BinaryDouble
+        | OracleType::Int64
+        | OracleType::UInt64 => {
+            if let Ok(integer) = text.parse::<i64>() {
+                Ok(Value::from(integer))
+            } else if let Ok(number) = text.parse::<f64>() {
+                serde_json::Number::from_f64(number)
+                    .map(Value::Number)
+                    .ok_or_else(|| {
+                        FlowError::DatabaseConnector(format!(
+                            "Oracle returned a non-finite number: {text}"
+                        ))
+                    })
+            } else {
+                Ok(Value::String(text))
+            }
+        }
+        OracleType::Boolean => {
+            text.parse::<bool>()
+                .map(Value::Bool)
+                .or_else(|_| match text.as_str() {
+                    "1" => Ok(Value::Bool(true)),
+                    "0" => Ok(Value::Bool(false)),
+                    _ => Err(FlowError::DatabaseConnector(format!(
+                        "Oracle returned an invalid boolean: {text}"
+                    ))),
+                })
+        }
+        OracleType::Json => serde_json::from_str(&text)
+            .map_err(|error| FlowError::DatabaseConnector(error.to_string())),
+        _ => Ok(Value::String(text)),
     }
 }
 

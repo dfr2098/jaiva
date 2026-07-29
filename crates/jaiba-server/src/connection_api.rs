@@ -300,7 +300,7 @@ pub(crate) async fn create_connection(
         .store(
             &secret_ref,
             ConnectionSecret {
-                username: input.username.clone(),
+                username: input.username.trim().to_owned(),
                 password: input.password.clone().unwrap_or_default(),
                 options: Default::default(),
             },
@@ -313,7 +313,7 @@ pub(crate) async fn create_connection(
     match state
         .connection_manager
         .create(
-            input.name,
+            input.name.trim().to_owned(),
             input.connection_type,
             endpoint,
             secret_ref.clone(),
@@ -365,7 +365,7 @@ pub(crate) async fn update_connection(
         .store(
             &profile.secret_ref,
             ConnectionSecret {
-                username: input.username.clone(),
+                username: input.username.trim().to_owned(),
                 password: input.password.clone().unwrap_or(previous.password),
                 options: previous.options,
             },
@@ -375,7 +375,7 @@ pub(crate) async fn update_connection(
         return manager_error(error);
     }
     let endpoint = endpoint(&input);
-    profile.name = input.name;
+    profile.name = input.name.trim().to_owned();
     profile.connection_type = input.connection_type;
     profile.endpoint = endpoint;
     if let Err(error) = state.connection_manager.update(profile.clone()).await {
@@ -1284,7 +1284,19 @@ fn oracle_connect(
         &secret.password,
         format!("{}:{}/{}", endpoint.host, endpoint.port, service),
     )
-    .map_err(|error| PluginError::Connection(error.to_string()))
+    .map_err(oracle_connection)
+}
+
+#[cfg(feature = "oracle-driver")]
+fn oracle_connection(error: oracle::Error) -> PluginError {
+    let message = error.to_string();
+    if message.contains("DPI-1047") {
+        return PluginError::Connection(format!(
+            "{message}. Instala Oracle Instant Client de 64 bits y agrega su directorio a \
+             LD_LIBRARY_PATH antes de iniciar Jaiba"
+        ));
+    }
+    PluginError::Connection(message)
 }
 
 #[cfg(feature = "oracle-driver")]

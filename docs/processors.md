@@ -94,6 +94,48 @@ Todo el paquete se escribe dentro de una transacción. Si un sublote falla, la
 transacción completa se revierte y el paquete sigue la política de reintentos y
 la ruta `failure`.
 
+## `auto_destination`
+
+Detecta el motor asociado con `connection` y genera un plan de carga usando las
+capacidades declaradas por su writer. Admite actualmente PostgreSQL,
+MySQL/MariaDB, Oracle y SQL Server.
+
+```yaml
+type: auto_destination
+config:
+  connection: destination
+  table: public.customers
+  mode: auto
+  batch_size: 1000
+  columns:
+    id: customer_id
+    name: customer_name
+  conflict_columns:
+    - customer_id
+```
+
+## `query_oracle`
+
+Ejecuta una consulta de solo lectura en Oracle y emite cada fila como un objeto
+JSON. Los nombres de columnas se normalizan a minúsculas para facilitar el
+mapeo al destino. Requiere compilar Jaiba con `oracle-driver`.
+
+```yaml
+type: query_oracle
+config:
+  connection: Oracle
+  query: SELECT ID, NAME FROM DMA_TEST.CUSTOMERS
+  batch_size: 1000
+```
+
+Solo acepta sentencias cuyo primer término sea `SELECT` o `WITH`.
+
+En modo `auto`, la presencia de `conflict_columns` selecciona `upsert`; sin
+ellas se selecciona `insert`. Antes de escribir, el motor calcula una estrategia
+como `multi_row_insert`, `native_upsert` o `transactional_upsert`, limita el lote
+según las capacidades del driver y registra el plan en los atributos
+`write.*` del paquete.
+
 ## `publish_kafka`
 
 Publica registros JSON o contenido binario y espera confirmación del broker:

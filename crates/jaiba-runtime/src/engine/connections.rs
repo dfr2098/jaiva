@@ -19,6 +19,8 @@ use crate::{
 pub struct ConnectionManager {
     postgres: Arc<HashMap<String, PgPool>>,
     mysql: Arc<HashMap<String, MySqlPool>>,
+    #[cfg(feature = "oracle-driver")]
+    oracle: Arc<HashMap<String, OracleWriter>>,
     writers: Arc<HashMap<String, Arc<dyn DatabaseWriter>>>,
     #[cfg(feature = "kafka-driver")]
     kafka: Arc<HashMap<String, FutureProducer>>,
@@ -33,6 +35,8 @@ impl ConnectionManager {
     ) -> Result<Self, FlowError> {
         let mut postgres = HashMap::new();
         let mut mysql = HashMap::new();
+        #[cfg(feature = "oracle-driver")]
+        let mut oracle = HashMap::new();
         let mut writers: HashMap<String, Arc<dyn DatabaseWriter>> = HashMap::new();
         #[cfg(feature = "kafka-driver")]
         let mut kafka = HashMap::new();
@@ -52,6 +56,8 @@ impl ConnectionManager {
                 None,
                 &mut postgres,
                 &mut mysql,
+                #[cfg(feature = "oracle-driver")]
+                &mut oracle,
                 &mut writers,
             )
             .await?;
@@ -76,6 +82,8 @@ impl ConnectionManager {
                     Some(std::time::Duration::from_millis(resolved.timeout_ms)),
                     &mut postgres,
                     &mut mysql,
+                    #[cfg(feature = "oracle-driver")]
+                    &mut oracle,
                     &mut writers,
                 )
                 .await?;
@@ -128,6 +136,8 @@ impl ConnectionManager {
         Ok(Self {
             postgres: Arc::new(postgres),
             mysql: Arc::new(mysql),
+            #[cfg(feature = "oracle-driver")]
+            oracle: Arc::new(oracle),
             writers: Arc::new(writers),
             #[cfg(feature = "kafka-driver")]
             kafka: Arc::new(kafka),
@@ -137,6 +147,13 @@ impl ConnectionManager {
     pub fn postgres(&self, name: &str) -> Result<&PgPool, FlowError> {
         self.postgres.get(name).ok_or_else(|| {
             FlowError::Configuration(format!("PostgreSQL connection '{name}' does not exist"))
+        })
+    }
+
+    #[cfg(feature = "oracle-driver")]
+    pub fn oracle(&self, name: &str) -> Result<&OracleWriter, FlowError> {
+        self.oracle.get(name).ok_or_else(|| {
+            FlowError::Configuration(format!("Oracle connection '{name}' does not exist"))
         })
     }
 
@@ -169,6 +186,7 @@ async fn insert_database(
     acquire_timeout: Option<std::time::Duration>,
     postgres: &mut HashMap<String, PgPool>,
     mysql: &mut HashMap<String, MySqlPool>,
+    #[cfg(feature = "oracle-driver")] oracle: &mut HashMap<String, OracleWriter>,
     writers: &mut HashMap<String, Arc<dyn DatabaseWriter>>,
 ) -> Result<(), FlowError> {
     match connection_type {
@@ -192,13 +210,18 @@ async fn insert_database(
             } else {
                 DatabaseKind::MariaDb
             };
-            writers.insert(name.to_owned(), Arc::new(MySqlWriter::new(pool.clone(), kind)?));
+            writers.insert(
+                name.to_owned(),
+                Arc::new(MySqlWriter::new(pool.clone(), kind)?),
+            );
             mysql.insert(name.to_owned(), pool);
         }
         "oracle" => {
             #[cfg(feature = "oracle-driver")]
             {
-                writers.insert(name.to_owned(), Arc::new(OracleWriter::from_url(url)?));
+                let connection = OracleWriter::from_url(url)?;
+                writers.insert(name.to_owned(), Arc::new(connection.clone()));
+                oracle.insert(name.to_owned(), connection);
             }
             #[cfg(not(feature = "oracle-driver"))]
             {
@@ -237,6 +260,8 @@ impl fmt::Debug for ConnectionManager {
             .field("postgres", &self.postgres.keys().collect::<Vec<_>>())
             .field("mysql", &self.mysql.keys().collect::<Vec<_>>())
             .field("writers", &self.writers.keys().collect::<Vec<_>>());
+        #[cfg(feature = "oracle-driver")]
+        debug.field("oracle", &self.oracle.keys().collect::<Vec<_>>());
         #[cfg(feature = "kafka-driver")]
         debug.field("kafka", &self.kafka.keys().collect::<Vec<_>>());
         debug.finish()

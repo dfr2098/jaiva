@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { jaivaApi } from "./api";
+import jaibaLogo from "./img/jaiba-logo.png";
 import type {
   DeadLetterEntry,
   FlowAction,
@@ -12,31 +13,11 @@ import type {
 
 export function CrabMark() {
   return (
-    <svg
+    <img
       className="crab-mark"
-      viewBox="0 0 64 64"
-      role="img"
-      aria-label="Jaiba"
-    >
-      <path
-        className="crab-shell"
-        d="M16 29c2-8 9-13 16-13s14 5 16 13l-4 15c-3 6-21 6-24 0Z"
-      />
-      <path
-        className="crab-blue"
-        d="M18 24C9 23 5 17 7 11c1 5 5 6 9 4-2-4-1-8 2-10 0 7 5 9 10 10Z"
-      />
-      <path
-        className="crab-blue"
-        d="M46 24c9-1 13-7 11-13-1 5-5 6-9 4 2-4 1-8-2-10 0 7-5 9-10 10Z"
-      />
-      <path
-        className="crab-rust"
-        d="m17 36-12 5m13 2L7 51m40-15 12 5m-13 2 11 8M25 48l-5 10m19-10 5 10"
-      />
-      <circle cx="25" cy="27" r="2" />
-      <circle cx="39" cy="27" r="2" />
-    </svg>
+      src={jaibaLogo}
+      alt="Cangrejo jarocho, logo de Jaiba"
+    />
   );
 }
 

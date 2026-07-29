@@ -39,8 +39,7 @@ export default function App() {
   const refresh = useCallback(async () => {
     try {
       await jaivaApi.health();
-      const flows = await jaivaApi.flows();
-      setFlow(flows[0] ?? null);
+      setFlow(await jaivaApi.runtime());
       setOnline(true);
       setMessage("Motor Jaiba disponible");
       setError(null);
@@ -173,7 +172,7 @@ export default function App() {
           </div>
           <aside className="hero-state">
             <span>Estado del flujo</span>
-            <LifecycleBadge state={flow?.control.state} />
+            <LifecycleBadge state={flow?.control?.state} />
             <small>{flow?.flow_id ?? "Esperando un flujo"}</small>
           </aside>
         </section>
@@ -221,7 +220,7 @@ export default function App() {
               busy={busy}
               disabled={!flow || !online}
               onAction={(action) => void mutate(action)}
-              state={flow?.control.state}
+              state={flow?.control?.state}
             />
             <p className={`operation-message ${error ? "error" : ""}`}>
               {error ?? "Los controles actúan directamente sobre el supervisor del motor."}

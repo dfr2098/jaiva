@@ -15,6 +15,8 @@ Node.js o Nginx en el motor Rust. Detener Visualisa no detiene los flujos.
 ## 8.2 Actualización en tiempo real
 
 - `GET /ws/v1` publica un `runtime_snapshot` por segundo.
+- `GET /runtime` permite recuperar la misma instantánea mediante polling sin
+  convertir los estados detenidos en errores HTTP.
 - El monitor consume WebSocket y usa sondeo cada 10 segundos como respaldo.
 - `GET /ws` conserva el contrato anterior de métricas para clientes existentes.
 - Nginx y Vite permiten el upgrade WebSocket mediante `/jaiva-api`.

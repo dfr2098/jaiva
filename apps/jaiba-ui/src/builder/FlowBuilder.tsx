@@ -258,8 +258,8 @@ function FlowBuilderInner() {
       let online = false;
       try {
         await jaivaApi.health();
-        const flows = await jaivaApi.flows();
-        if (active) setEngineFlow(flows[0] ?? null);
+        const runtime = await jaivaApi.runtime();
+        if (active) setEngineFlow(runtime);
         online = true;
       } catch {
         online = false;

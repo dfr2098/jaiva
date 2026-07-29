@@ -25,6 +25,10 @@ processors:
         customer_id: id
         customer_name: name
 
+  - id: encode
+    type: encode_json
+    config: {}
+
   - id: destination
     type: log_records
 
@@ -34,5 +38,9 @@ connections:
     to: transform
 
   - from: transform
+    relationship: success
+    to: encode
+
+  - from: encode
     relationship: success
     to: destination

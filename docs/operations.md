@@ -35,6 +35,7 @@ export JAIBA_SERVER_ADDR=0.0.0.0:9090
 
 - `GET /health`: disponibilidad.
 - `GET /ready`: preparación real del flujo según su ciclo de vida.
+- `GET /runtime`: instantánea actual del flujo, siempre con estado HTTP `200`.
 - `GET /metrics`: Prometheus.
 - `GET /ws`: snapshot JSON cada segundo.
 - `/api/v1/*`: control autenticado, provenance y dead-letter.

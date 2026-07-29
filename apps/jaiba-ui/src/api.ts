@@ -29,6 +29,15 @@ const API_ROOT =
   import.meta.env.VITE_JAIVA_API_BASE ??
   "/jaiba-api";
 
+const FLOW_STATES = new Set([
+  "STOPPED",
+  "STARTING",
+  "RUNNING",
+  "PAUSED",
+  "DRAINING",
+  "FAILED",
+]);
+
 function apiUrl(path: string): string {
   return `${API_ROOT}${path}`;
 }
@@ -37,6 +46,18 @@ function websocketUrl(path: string): string {
   const absolute = new URL(apiUrl(path), window.location.href);
   absolute.protocol = absolute.protocol === "https:" ? "wss:" : "ws:";
   return absolute.toString();
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isFlowSnapshot(value: unknown): value is FlowSnapshot {
+  if (!isObject(value) || typeof value.flow_id !== "string") return false;
+  if (!isObject(value.control) || !FLOW_STATES.has(String(value.control.state))) {
+    return false;
+  }
+  return isObject(value.metrics);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -62,7 +83,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const jaivaApi = {
   health: () => request<{ status: string; service: string }>("/health"),
-  flows: () => request<FlowSnapshot[]>("/api/v1/flows"),
+  runtime: async (): Promise<FlowSnapshot | null> => {
+    const response = await fetch(apiUrl("/runtime"), {
+      headers: { Accept: "application/json" },
+    });
+    const body: unknown = await response.json().catch(() => null);
+
+    if (isFlowSnapshot(body)) return body;
+    if (!response.ok) {
+      const message =
+        isObject(body) && typeof body.message === "string"
+          ? body.message
+          : `El motor respondiÃ³ ${response.status}`;
+      throw new Error(message);
+    }
+    return null;
+  },
   mutate: (flowId: string, action: FlowAction) =>
     request<FlowSnapshot>(
       `/api/v1/flows/${encodeURIComponent(flowId)}/${action}`,
@@ -160,7 +196,14 @@ export const jaivaApi = {
     const socket = new WebSocket(websocketUrl("/ws/v1"));
     socket.addEventListener("message", (message) => {
       try {
-        onEvent(JSON.parse(String(message.data)) as RuntimeEvent);
+        const event: unknown = JSON.parse(String(message.data));
+        if (
+          isObject(event) &&
+          event.kind === "runtime_snapshot" &&
+          (event.flow === null || isFlowSnapshot(event.flow))
+        ) {
+          onEvent(event as unknown as RuntimeEvent);
+        }
       } catch {
         // Ignore malformed events; the next snapshot replaces them.
       }

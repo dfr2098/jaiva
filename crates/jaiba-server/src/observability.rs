@@ -281,6 +281,7 @@ impl ObservabilityServer {
         let app = Router::new()
             .route("/health", get(health))
             .route("/ready", get(readiness))
+            .route("/runtime", get(runtime))
             .route("/metrics", get(prometheus))
             .route("/ws", get(websocket))
             .route("/ws/v1", get(websocket_v1))
@@ -373,6 +374,10 @@ async fn readiness(State(state): State<AppState>) -> Response {
         )
             .into_response(),
     }
+}
+
+async fn runtime(State(state): State<AppState>) -> Json<Option<SupervisedFlowSnapshot>> {
+    Json(state.registry.primary_snapshot().await)
 }
 
 async fn prometheus(State(state): State<AppState>) -> Response {

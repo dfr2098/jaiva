@@ -385,7 +385,7 @@ export function validateFlow(
     }
 
     if (
-      node.data.type === "put_database" &&
+      (node.data.type === "put_database" || node.data.type === "auto_destination") &&
       node.data.config.mode === "upsert" &&
       (!Array.isArray(node.data.config.conflict_columns) ||
         (node.data.config.conflict_columns as unknown[]).length === 0)

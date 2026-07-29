@@ -351,7 +351,9 @@ Server, archivos u otros plugins.
 |---|---|
 | `generate_records` | Genera registros para pruebas |
 | `query_postgres` | Lee PostgreSQL mediante un pool compartido y crea lotes |
+| `query_oracle` | Lee Oracle por lotes y normaliza las filas como objetos JSON |
 | `put_database` | Escritura transaccional `insert`/`upsert` para PostgreSQL, MySQL/MariaDB, Oracle y SQL Server |
+| `auto_destination` | Detecta el motor y selecciona el plan de carga para los destinos de base de datos disponibles |
 | `publish_kafka` | Publica JSON o bytes con confirmación e idempotencia del productor |
 | `rename_fields` | Renombra campos de objetos |
 | `encode_json` | Convierte registros a JSON |

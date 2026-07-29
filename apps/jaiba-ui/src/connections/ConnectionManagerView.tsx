@@ -145,14 +145,28 @@ export function ConnectionManagerView({
       const saved = editing
         ? await jaivaApi.updateConnection(editing, form)
         : await jaivaApi.createConnection(form);
-      const final = testAfter ? await jaivaApi.testConnection(saved.id) : saved;
-      setMessage(
-        testAfter ? `Conexión ${final.name} validada.` : `Conexión ${final.name} guardada.`,
-      );
       setForm(EMPTY);
       setModal(null);
       await refresh();
-      setSelected(final.id);
+      setSelected(saved.id);
+
+      if (!testAfter) {
+        setMessage(`Conexión ${saved.name} guardada.`);
+        return;
+      }
+
+      try {
+        const tested = await jaivaApi.testConnection(saved.id);
+        setMessage(`Conexión ${tested.name} validada.`);
+        await refresh();
+        setSelected(tested.id);
+      } catch (reason) {
+        const detail = reason instanceof Error ? reason.message : "La prueba falló";
+        setMessage(`Conexión ${saved.name} guardada.`);
+        await refresh();
+        setSelected(saved.id);
+        setError(`El perfil se guardó, pero la prueba falló: ${detail}`);
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "No se pudo guardar la conexión");
     } finally {

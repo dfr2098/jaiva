@@ -9,8 +9,8 @@ mod postgres;
 mod sqlserver;
 
 pub use database::{
-    DatabaseKind, DatabaseWriter, IdentifierDialect, WriteCapabilities, WriteMode, WriteRequest,
-    WriteSummary, quote_identifier, quote_qualified_identifier,
+    DatabaseKind, DatabaseWriter, IdentifierDialect, WriteCapabilities, WriteMode, WritePlan,
+    WriteRequest, WriteStrategy, WriteSummary, quote_identifier, quote_qualified_identifier,
 };
 pub use mysql::MySqlWriter;
 #[cfg(feature = "oracle-driver")]

@@ -164,6 +164,7 @@ export interface DatabaseConnectionInput {
 
 export type DatabaseObjectKind =
   | "schema"
+  | "collection"
   | "table"
   | "view"
   | "procedure"

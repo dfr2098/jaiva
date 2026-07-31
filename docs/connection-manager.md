@@ -35,6 +35,7 @@ flowchart LR
     CM --> REG["Registro de adaptadores"]
     REG --> PG["PostgreSQL"]
     REG --> MY["MySQL"]
+    REG --> MONGO["MongoDB"]
     REG --> ORA["Oracle"]
     REG --> NEW["SQLite / nuevo motor"]
     CM --> SEC["SecretStore"]
@@ -68,6 +69,50 @@ Cuando existe un procesador ejecutable, el adaptador devuelve
 `processor_type` y `execution_statement`. La UI los trata como datos opacos y
 no decide según el motor. Si el adaptador solo compila, la interfaz permite
 copiar el SQL sin ofrecer un nodo.
+
+## MongoDB: primera fase
+
+MongoDB se habilita con `--features mongodb-driver`. En esta fase el adaptador:
+
+- guarda el perfil sin devolver la contraseña;
+- prueba autenticación y conectividad mediante `ping`;
+- muestra versión, latencia y acceso a metadatos en el diagnóstico;
+- lista las colecciones de la base seleccionada;
+- infiere los campos y tipos BSON a partir de un documento de muestra.
+
+La fase 2 añade los nodos ejecutables `query_mongodb` y `put_mongodb` al
+diseñador. El adaptador todavía no publica un constructor visual de consultas;
+el filtro, la proyección y el orden se editan como documentos JSON en el nodo.
+
+Para iniciar el servidor con el adaptador:
+
+```bash
+cargo run --features mongodb-driver -- serve examples/visualisa-flow.yaml
+```
+
+Para el contenedor local de pruebas use este perfil en **Conexiones**:
+
+| Campo | Valor |
+|---|---|
+| Host | `127.0.0.1` |
+| Puerto | `27017` |
+| Base | `pruebas` |
+| Usuario | `admin` |
+| Contraseña | la definida en `MONGO_INITDB_ROOT_PASSWORD` |
+| SSL/TLS | desactivado |
+
+El adaptador usa `authSource=admin` de manera predeterminada, que corresponde al
+usuario raíz creado por la imagen oficial de MongoDB.
+
+Para ejecutar una copia MongoDB → MongoDB:
+
+```bash
+export MONGODB_URL='mongodb://admin:admin123@127.0.0.1:27017/pruebas?authSource=admin'
+cargo run --features mongodb-driver -- examples/mongodb-copy.yaml
+```
+
+El flujo completo está en
+[`examples/mongodb-copy.yaml`](../examples/mongodb-copy.yaml).
 
 El recorrido técnico completo está descrito en
 [la bitácora de implementación](implementation-notes.md).

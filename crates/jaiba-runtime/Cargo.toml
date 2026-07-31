@@ -10,6 +10,7 @@ default = []
 oracle-driver = ["dep:oracle"]
 sqlserver-driver = ["dep:tiberius", "dep:tokio-util"]
 kafka-driver = ["dep:rdkafka"]
+mongodb-driver = ["dep:mongodb"]
 
 [dependencies]
 jaiba-core = { path = "../jaiba-core" }
@@ -34,3 +35,4 @@ oracle = { workspace = true, optional = true }
 tiberius = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 rdkafka = { workspace = true, optional = true }
+mongodb = { workspace = true, optional = true }

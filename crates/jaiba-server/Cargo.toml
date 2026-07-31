@@ -10,6 +10,7 @@ default = []
 oracle-driver = ["jaiba-runtime/oracle-driver", "dep:oracle"]
 sqlserver-driver = ["jaiba-runtime/sqlserver-driver", "dep:tiberius", "dep:tokio-util"]
 kafka-driver = ["jaiba-runtime/kafka-driver"]
+mongodb-driver = ["jaiba-runtime/mongodb-driver", "dep:mongodb", "dep:url"]
 
 [dependencies]
 jaiba-connection-manager = { path = "../jaiba-connection-manager" }
@@ -29,3 +30,5 @@ uuid.workspace = true
 oracle = { workspace = true, optional = true }
 tiberius = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
+mongodb = { workspace = true, optional = true }
+url = { workspace = true, optional = true }

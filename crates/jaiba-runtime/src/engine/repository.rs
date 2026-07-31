@@ -940,6 +940,9 @@ mod tests {
         assert_eq!(recent.len(), 2);
         assert_eq!(recent[0].event_type, "REQUEUED");
 
+        // SQLite mantiene el archivo abierto hasta que el pool termina de
+        // cerrarse; esperarlo evita un bloqueo al limpiar la prueba en Windows.
+        repository.pool.close().await;
         let root = config
             .database_path
             .parent()

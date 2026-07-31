@@ -2,9 +2,15 @@ mod checkpoint;
 mod encode;
 mod generate_records;
 mod log_records;
+#[cfg(feature = "mongodb-driver")]
+mod mongodb_support;
 #[cfg(feature = "kafka-driver")]
 mod publish_kafka;
 mod put_database;
+#[cfg(feature = "mongodb-driver")]
+mod put_mongodb;
+#[cfg(feature = "mongodb-driver")]
+mod query_mongodb;
 #[cfg(feature = "oracle-driver")]
 mod query_oracle;
 mod query_postgres;
@@ -22,6 +28,10 @@ use log_records::LogRecords;
 #[cfg(feature = "kafka-driver")]
 use publish_kafka::PublishKafka;
 use put_database::PutDatabase;
+#[cfg(feature = "mongodb-driver")]
+use put_mongodb::PutMongoDb;
+#[cfg(feature = "mongodb-driver")]
+use query_mongodb::QueryMongoDb;
 #[cfg(feature = "oracle-driver")]
 use query_oracle::QueryOracle;
 use query_postgres::QueryPostgres;
@@ -44,12 +54,20 @@ pub fn default_registry() -> ProcessorRegistry {
     registry.register("query_postgres", |config| {
         Ok(Arc::new(QueryPostgres::from_config(config)?))
     });
+    #[cfg(feature = "mongodb-driver")]
+    registry.register("query_mongodb", |config| {
+        Ok(Arc::new(QueryMongoDb::from_config(config)?))
+    });
     #[cfg(feature = "oracle-driver")]
     registry.register("query_oracle", |config| {
         Ok(Arc::new(QueryOracle::from_config(config)?))
     });
     registry.register("put_database", |config| {
         Ok(Arc::new(PutDatabase::from_config(config)?))
+    });
+    #[cfg(feature = "mongodb-driver")]
+    registry.register("put_mongodb", |config| {
+        Ok(Arc::new(PutMongoDb::from_config(config)?))
     });
     registry.register("auto_destination", |config| {
         Ok(Arc::new(PutDatabase::from_auto_config(config)?))

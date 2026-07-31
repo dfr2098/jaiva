@@ -23,6 +23,7 @@ async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
 csv = "1"
 futures-util = "0.3"
+mongodb = "3"
 oracle = "0.6.3"
 rdkafka = { version = "0.39", features = ["cmake-build", "curl-static", "tokio"] }
 serde = { version = "1", features = ["derive"] }

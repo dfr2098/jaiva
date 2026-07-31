@@ -1,5 +1,7 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
+#[cfg(feature = "mongodb-driver")]
+use mongodb::Client as MongoClient;
 #[cfg(feature = "kafka-driver")]
 use rdkafka::{ClientConfig, producer::FutureProducer};
 use sqlx::{MySqlPool, PgPool, mysql::MySqlPoolOptions, postgres::PgPoolOptions};
@@ -19,6 +21,8 @@ use crate::{
 pub struct ConnectionManager {
     postgres: Arc<HashMap<String, PgPool>>,
     mysql: Arc<HashMap<String, MySqlPool>>,
+    #[cfg(feature = "mongodb-driver")]
+    mongodb: Arc<HashMap<String, MongoClient>>,
     #[cfg(feature = "oracle-driver")]
     oracle: Arc<HashMap<String, OracleWriter>>,
     writers: Arc<HashMap<String, Arc<dyn DatabaseWriter>>>,
@@ -35,6 +39,8 @@ impl ConnectionManager {
     ) -> Result<Self, FlowError> {
         let mut postgres = HashMap::new();
         let mut mysql = HashMap::new();
+        #[cfg(feature = "mongodb-driver")]
+        let mut mongodb = HashMap::new();
         #[cfg(feature = "oracle-driver")]
         let mut oracle = HashMap::new();
         let mut writers: HashMap<String, Arc<dyn DatabaseWriter>> = HashMap::new();
@@ -56,6 +62,8 @@ impl ConnectionManager {
                 None,
                 &mut postgres,
                 &mut mysql,
+                #[cfg(feature = "mongodb-driver")]
+                &mut mongodb,
                 #[cfg(feature = "oracle-driver")]
                 &mut oracle,
                 &mut writers,
@@ -82,6 +90,8 @@ impl ConnectionManager {
                     Some(std::time::Duration::from_millis(resolved.timeout_ms)),
                     &mut postgres,
                     &mut mysql,
+                    #[cfg(feature = "mongodb-driver")]
+                    &mut mongodb,
                     #[cfg(feature = "oracle-driver")]
                     &mut oracle,
                     &mut writers,
@@ -136,6 +146,8 @@ impl ConnectionManager {
         Ok(Self {
             postgres: Arc::new(postgres),
             mysql: Arc::new(mysql),
+            #[cfg(feature = "mongodb-driver")]
+            mongodb: Arc::new(mongodb),
             #[cfg(feature = "oracle-driver")]
             oracle: Arc::new(oracle),
             writers: Arc::new(writers),
@@ -147,6 +159,13 @@ impl ConnectionManager {
     pub fn postgres(&self, name: &str) -> Result<&PgPool, FlowError> {
         self.postgres.get(name).ok_or_else(|| {
             FlowError::Configuration(format!("PostgreSQL connection '{name}' does not exist"))
+        })
+    }
+
+    #[cfg(feature = "mongodb-driver")]
+    pub fn mongodb(&self, name: &str) -> Result<&MongoClient, FlowError> {
+        self.mongodb.get(name).ok_or_else(|| {
+            FlowError::Configuration(format!("MongoDB connection '{name}' does not exist"))
         })
     }
 
@@ -186,6 +205,7 @@ async fn insert_database(
     acquire_timeout: Option<std::time::Duration>,
     postgres: &mut HashMap<String, PgPool>,
     mysql: &mut HashMap<String, MySqlPool>,
+    #[cfg(feature = "mongodb-driver")] mongodb: &mut HashMap<String, MongoClient>,
     #[cfg(feature = "oracle-driver")] oracle: &mut HashMap<String, OracleWriter>,
     writers: &mut HashMap<String, Arc<dyn DatabaseWriter>>,
 ) -> Result<(), FlowError> {
@@ -215,6 +235,22 @@ async fn insert_database(
                 Arc::new(MySqlWriter::new(pool.clone(), kind)?),
             );
             mysql.insert(name.to_owned(), pool);
+        }
+        "mongodb" | "mongo" => {
+            #[cfg(feature = "mongodb-driver")]
+            {
+                let client = MongoClient::with_uri_str(url)
+                    .await
+                    .map_err(|error| FlowError::DatabaseConnector(error.to_string()))?;
+                mongodb.insert(name.to_owned(), client);
+            }
+            #[cfg(not(feature = "mongodb-driver"))]
+            {
+                let _ = url;
+                return Err(FlowError::Configuration(
+                    "MongoDB connections require the 'mongodb-driver' feature".to_owned(),
+                ));
+            }
         }
         "oracle" => {
             #[cfg(feature = "oracle-driver")]
@@ -262,6 +298,8 @@ impl fmt::Debug for ConnectionManager {
             .field("writers", &self.writers.keys().collect::<Vec<_>>());
         #[cfg(feature = "oracle-driver")]
         debug.field("oracle", &self.oracle.keys().collect::<Vec<_>>());
+        #[cfg(feature = "mongodb-driver")]
+        debug.field("mongodb", &self.mongodb.keys().collect::<Vec<_>>());
         #[cfg(feature = "kafka-driver")]
         debug.field("kafka", &self.kafka.keys().collect::<Vec<_>>());
         debug.finish()

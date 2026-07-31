@@ -1,0 +1,56 @@
+id: mongodb-copy
+
+# Ejemplo fase 2: exporte una URI que incluya la base predeterminada.
+# MONGODB_URL=mongodb://admin:admin123@127.0.0.1:27017/pruebas?authSource=admin
+database_connections:
+  mongo:
+    type: mongodb
+    url_env: MONGODB_URL
+    max_connections: 5
+
+engine:
+  queue_capacity: 100
+  max_concurrency: 4
+  repository:
+    enabled: false
+
+processors:
+  - id: extract
+    type: query_mongodb
+    config:
+      connection: mongo
+      collection: customers
+      filter:
+        active: true
+      projection:
+        name: 1
+        email: 1
+        active: 1
+      sort:
+        _id: 1
+      batch_size: 500
+
+  - id: load
+    type: put_mongodb
+    config:
+      connection: mongo
+      collection: customers_loaded
+      mode: upsert
+      key_fields:
+        - _id
+      batch_size: 500
+      ordered: true
+
+  - id: errors
+    type: log_records
+
+connections:
+  - from: extract
+    relationship: success
+    to: load
+  - from: extract
+    relationship: failure
+    to: errors
+  - from: load
+    relationship: failure
+    to: errors

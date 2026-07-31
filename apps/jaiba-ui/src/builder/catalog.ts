@@ -9,7 +9,8 @@ export type FieldKind =
   | "connectionRef"
   | "keyValue"
   | "stringList"
-  | "jsonArray";
+  | "jsonArray"
+  | "jsonObject";
 
 export interface FieldDef {
   key: string;
@@ -103,6 +104,56 @@ export const PROCESSOR_CATALOG: ProcessorDef[] = [
     defaultConfig: { connection: "", query: "", batch_size: 1000 },
   },
   {
+    type: "query_mongodb",
+    label: "Leer MongoDB",
+    category: "source",
+    description: "Lee documentos MongoDB por lotes conservando tipos BSON.",
+    fields: [
+      {
+        key: "connection",
+        label: "Conexión MongoDB",
+        kind: "connectionRef",
+        connectionKind: "database",
+        required: true,
+      },
+      {
+        key: "collection",
+        label: "Colección",
+        kind: "text",
+        required: true,
+        placeholder: "customers",
+      },
+      {
+        key: "filter",
+        label: "Filtro JSON",
+        kind: "jsonObject",
+        help: 'Ejemplo: { "active": true, "age": { "$gte": 18 } }',
+      },
+      {
+        key: "projection",
+        label: "Proyección JSON",
+        kind: "jsonObject",
+        help: 'Ejemplo: { "name": 1, "email": 1 }',
+      },
+      {
+        key: "sort",
+        label: "Orden JSON",
+        kind: "jsonObject",
+        help: 'Ejemplo: { "created_at": -1 }',
+      },
+      { key: "skip", label: "Omitir documentos", kind: "number" },
+      { key: "limit", label: "Límite (opcional)", kind: "number" },
+      { key: "batch_size", label: "Tamaño de lote", kind: "number" },
+    ],
+    defaultConfig: {
+      connection: "",
+      collection: "",
+      filter: {},
+      skip: 0,
+      batch_size: 1000,
+    },
+  },
+  {
     type: "put_database",
     label: "Escribir base de datos",
     category: "sink",
@@ -184,6 +235,56 @@ export const PROCESSOR_CATALOG: ProcessorDef[] = [
       batch_size: 1000,
       columns: {},
       conflict_columns: [],
+    },
+  },
+  {
+    type: "put_mongodb",
+    label: "Escribir MongoDB",
+    category: "sink",
+    description: "Inserta documentos o realiza upsert por campos clave.",
+    fields: [
+      {
+        key: "connection",
+        label: "Conexión MongoDB",
+        kind: "connectionRef",
+        connectionKind: "database",
+        required: true,
+      },
+      {
+        key: "collection",
+        label: "Colección",
+        kind: "text",
+        required: true,
+        placeholder: "customers_loaded",
+      },
+      {
+        key: "mode",
+        label: "Modo",
+        kind: "select",
+        options: ["insert", "upsert"],
+        required: true,
+      },
+      {
+        key: "key_fields",
+        label: "Campos clave",
+        kind: "stringList",
+        help: "Obligatorios para upsert; admite rutas como customer.id.",
+      },
+      { key: "batch_size", label: "Tamaño de lote", kind: "number" },
+      {
+        key: "ordered",
+        label: "Escritura ordenada",
+        kind: "boolean",
+        help: "Detiene el lote insert al encontrar el primer error.",
+      },
+    ],
+    defaultConfig: {
+      connection: "",
+      collection: "",
+      mode: "insert",
+      key_fields: ["_id"],
+      batch_size: 1000,
+      ordered: true,
     },
   },
   {

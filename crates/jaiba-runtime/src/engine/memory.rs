@@ -1,4 +1,7 @@
-use std::{fs, sync::Arc};
+use std::sync::Arc;
+
+#[cfg(target_os = "linux")]
+use std::fs;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -7,6 +10,8 @@ use crate::{config::MemoryConfig, error::FlowError};
 use super::FlowMetrics;
 
 const UNIT_BYTES: u64 = 64 * 1024;
+#[cfg(not(target_os = "linux"))]
+const PORTABLE_MEMORY_FALLBACK_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Shared byte budget for packets in streaming execution.
 ///
@@ -113,6 +118,7 @@ fn detected_memory_limit() -> Result<u64, FlowError> {
     Ok(cgroup.map_or(physical, |limit| limit.min(physical)))
 }
 
+#[cfg(target_os = "linux")]
 fn read_mem_total() -> Result<u64, FlowError> {
     let contents = fs::read_to_string("/proc/meminfo")?;
     let kilobytes = contents
@@ -126,6 +132,15 @@ fn read_mem_total() -> Result<u64, FlowError> {
     Ok(kilobytes.saturating_mul(1024))
 }
 
+/// `/proc/meminfo` no existe en Windows ni macOS. Hasta incorporar una sonda
+/// nativa por plataforma usamos un límite deliberadamente conservador; el
+/// porcentaje configurado sigue aplicándose sobre este valor.
+#[cfg(not(target_os = "linux"))]
+fn read_mem_total() -> Result<u64, FlowError> {
+    Ok(PORTABLE_MEMORY_FALLBACK_BYTES)
+}
+
+#[cfg(target_os = "linux")]
 fn read_cgroup_limit() -> Option<u64> {
     let value = fs::read_to_string("/sys/fs/cgroup/memory.max").ok()?;
     let trimmed = value.trim();
@@ -134,6 +149,11 @@ fn read_cgroup_limit() -> Option<u64> {
     } else {
         trimmed.parse().ok()
     }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_cgroup_limit() -> Option<u64> {
+    None
 }
 
 #[cfg(test)]

@@ -27,6 +27,34 @@ config:
     FROM (SELECT * FROM public.customers) row_data
 ```
 
+## `query_mongodb`
+
+Requiere `--features mongodb-driver`. Lee una colección mediante cursor y emite
+documentos en paquetes acotados por `batch_size`. `filter`, `projection` y
+`sort` son documentos MongoDB expresados como JSON o Extended JSON.
+
+```yaml
+type: query_mongodb
+config:
+  connection: mongo
+  collection: customers
+  filter:
+    active: true
+    age:
+      $gte: 18
+  projection:
+    name: 1
+    email: 1
+  sort:
+    created_at: -1
+  skip: 0
+  limit: 10000
+  batch_size: 500
+```
+
+Los valores BSON que no existen de forma nativa en JSON conservan Extended JSON;
+por ejemplo, un `ObjectId` se transporta como `{"$oid":"..."}`.
+
 ## `rename_fields`
 
 Renombra propiedades de registros JSON.
@@ -93,6 +121,33 @@ config:
 Todo el paquete se escribe dentro de una transacción. Si un sublote falla, la
 transacción completa se revierte y el paquete sigue la política de reintentos y
 la ruta `failure`.
+
+## `put_mongodb`
+
+Carga objetos JSON o Extended JSON en una colección MongoDB:
+
+```yaml
+type: put_mongodb
+config:
+  connection: mongo
+  collection: customers_loaded
+  mode: upsert
+  key_fields:
+    - _id
+  batch_size: 500
+  ordered: true
+```
+
+- `insert` usa inserciones múltiples por lote.
+- `upsert` busca por `key_fields` y reemplaza el documento completo; admite
+  rutas punteadas como `customer.id`.
+- `_id` es el campo clave predeterminado.
+
+En un MongoDB independiente las escrituras de un paquete no son una transacción
+global. `insert` puede confirmar documentos antes de encontrar un error; para
+flujos reintentables se recomienda `upsert` con claves estables. Las
+transacciones multi-documento requieren un replica set y quedan fuera de esta
+fase.
 
 ## `auto_destination`
 

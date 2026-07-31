@@ -9,6 +9,7 @@ import type {
   DiagnosticCheck,
 } from "../types";
 import { SqlQueryBuilder } from "./SqlQueryBuilder";
+import { MetadataExplorer } from "./MetadataExplorer";
 
 const EMPTY: DatabaseConnectionInput = {
   name: "",
@@ -28,6 +29,7 @@ const marks: Record<string, string> = {
   postgres: "PG",
   mysql: "MY",
   maria_db: "MA",
+  mongodb: "MO",
   oracle: "OR",
   sql_server: "MS",
   kafka: "KF",
@@ -361,6 +363,10 @@ export function ConnectionManagerView({
               ) : null}
               {currentDriver?.capabilities.includes("query_builder") ? (
                 <SqlQueryBuilder connection={current} onCreateQueryNode={onCreateQueryNode} />
+              ) : null}
+              {currentDriver?.capabilities.includes("schema_explorer") &&
+              !currentDriver.capabilities.includes("query_builder") ? (
+                <MetadataExplorer connection={current} />
               ) : null}
             </>
           ) : (

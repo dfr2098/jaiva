@@ -21,8 +21,8 @@ use crate::{config::FlowConfig, error::FlowError};
 /// Parámetros concretos de una conexión, ya resueltos a partir de un alias.
 #[derive(Debug, Clone)]
 pub struct ResolvedConnection {
-    /// Tipo que entiende el runtime: `postgres`, `mysql`, `mariadb`, `oracle` o
-    /// `sqlserver`.
+    /// Tipo que entiende el runtime: `postgres`, `mysql`, `mariadb`, `mongodb`,
+    /// `oracle` o `sqlserver`.
     pub connection_type: String,
     /// URL de conexión lista para el driver (credenciales ya incluidas y
     /// codificadas de forma segura).
@@ -94,7 +94,7 @@ impl ConnectionResolver for ProfileConnectionResolver {
             .map_err(|error| FlowError::Configuration(error.to_string()))?;
         let (scheme, runtime_type) = scheme_for(&profile.connection_type).ok_or_else(|| {
             FlowError::Configuration(format!(
-                "el perfil '{alias}' no es una conexión de base de datos SQL"
+                "el perfil '{alias}' no es una conexión de base de datos compatible"
             ))
         })?;
         Ok(ResolvedConnection {
@@ -106,12 +106,13 @@ impl ConnectionResolver for ProfileConnectionResolver {
     }
 }
 
-/// Devuelve `(esquema_url, tipo_runtime)` para un tipo de conexión SQL.
+/// Devuelve `(esquema_url, tipo_runtime)` para una conexión de base de datos.
 fn scheme_for(connection_type: &ConnectionType) -> Option<(&'static str, &'static str)> {
     match connection_type {
         ConnectionType::Postgres => Some(("postgres", "postgres")),
         ConnectionType::MySql => Some(("mysql", "mysql")),
         ConnectionType::MariaDb => Some(("mysql", "mariadb")),
+        ConnectionType::MongoDb => Some(("mongodb", "mongodb")),
         ConnectionType::Oracle => Some(("oracle", "oracle")),
         ConnectionType::SqlServer => Some(("sqlserver", "sqlserver")),
         _ => None,
@@ -127,23 +128,41 @@ fn build_url(
 ) -> Result<String, FlowError> {
     let mut url = Url::parse(&format!("{scheme}://{}:{}", endpoint.host, endpoint.port))
         .map_err(|error| FlowError::Configuration(format!("URL de conexión inválida: {error}")))?;
-    url.set_username(&secret.username)
-        .map_err(|_| FlowError::Configuration("no se pudo fijar el usuario en la URL".to_owned()))?;
+    url.set_username(&secret.username).map_err(|_| {
+        FlowError::Configuration("no se pudo fijar el usuario en la URL".to_owned())
+    })?;
     url.set_password(Some(&secret.password)).map_err(|_| {
         FlowError::Configuration("no se pudo fijar la contraseña en la URL".to_owned())
     })?;
-    if let Some(database) = endpoint.database.as_deref().filter(|value| !value.is_empty()) {
+    if let Some(database) = endpoint
+        .database
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
         url.set_path(&format!("/{database}"));
     }
     match scheme {
         "postgres" => {
-            url.query_pairs_mut().append_pair(
-                "sslmode",
-                if endpoint.ssl { "require" } else { "disable" },
-            );
+            url.query_pairs_mut()
+                .append_pair("sslmode", if endpoint.ssl { "require" } else { "disable" });
         }
         "mysql" if endpoint.ssl => {
             url.query_pairs_mut().append_pair("ssl-mode", "REQUIRED");
+        }
+        "mongodb" => {
+            let auth_source = secret
+                .options
+                .get("auth_source")
+                .or_else(|| endpoint.options.get("auth_source"))
+                .map(String::as_str)
+                .unwrap_or("admin");
+            url.query_pairs_mut()
+                .append_pair("authSource", auth_source)
+                .append_pair("tls", if endpoint.ssl { "true" } else { "false" })
+                .append_pair("minPoolSize", &endpoint.pool_min.to_string())
+                .append_pair("maxPoolSize", &endpoint.pool_max.to_string())
+                .append_pair("connectTimeoutMS", &endpoint.timeout_ms.to_string())
+                .append_pair("serverSelectionTimeoutMS", &endpoint.timeout_ms.to_string());
         }
         _ => {}
     }
@@ -235,5 +254,34 @@ mod tests {
         assert!(resolver.resolve("id-1").await.is_ok());
         assert!(resolver.resolve("desconocido").await.is_err());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn builds_mongodb_url_with_auth_source_pool_and_timeout() {
+        let mut mongodb = endpoint();
+        mongodb.port = 27_017;
+        mongodb.database = Some("pruebas".to_owned());
+        mongodb.ssl = false;
+        mongodb
+            .options
+            .insert("auth_source".to_owned(), "admin".to_owned());
+        let url = build_url(
+            "mongodb",
+            &mongodb,
+            &ConnectionSecret {
+                username: "admin user".to_owned(),
+                password: "p@ss/word".to_owned(),
+                options: BTreeMap::new(),
+            },
+        )
+        .expect("build MongoDB URL");
+
+        assert!(url.starts_with("mongodb://admin%20user:"));
+        assert!(url.contains("@db.internal:27017/pruebas"));
+        assert!(url.contains("authSource=admin"));
+        assert!(url.contains("tls=false"));
+        assert!(url.contains("maxPoolSize=7"));
+        assert!(url.contains("serverSelectionTimeoutMS=5000"));
+        assert!(!url.contains("p@ss/word"));
     }
 }

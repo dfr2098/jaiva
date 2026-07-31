@@ -421,6 +421,7 @@ cargo test
 cargo test --features oracle-driver
 cargo test --features sqlserver-driver
 cargo test --features kafka-driver
+cargo test --features mongodb-driver
 ```
 
 ## Oracle
@@ -447,6 +448,27 @@ bash scripts/test-oracle-to-postgres.sh
 
 El procedimiento, los usuarios técnicos, el mapeo y el diagnóstico están en
 [`docs/oracle-to-postgres.md`](docs/oracle-to-postgres.md).
+
+## MongoDB
+
+MongoDB incluye perfiles, prueba de conexión, diagnósticos, exploración de
+colecciones y los procesadores `query_mongodb`/`put_mongodb` mediante el driver
+oficial de Rust:
+
+```bash
+cargo run --features mongodb-driver -- serve examples/visualisa-flow.yaml
+```
+
+Configure host `127.0.0.1`, puerto `27017`, base `pruebas`, el usuario raíz del
+contenedor y SSL desactivado. Consulte los detalles y el alcance de esta fase en
+[`docs/connection-manager.md`](docs/connection-manager.md#mongodb-primera-fase).
+
+Ejecute la carga de ejemplo:
+
+```bash
+export MONGODB_URL='mongodb://admin:admin123@127.0.0.1:27017/pruebas?authSource=admin'
+cargo run --features mongodb-driver -- examples/mongodb-copy.yaml
+```
 
 ## SQL Server
 

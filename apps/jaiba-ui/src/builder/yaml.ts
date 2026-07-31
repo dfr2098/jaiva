@@ -395,6 +395,17 @@ export function validateFlow(
         message: `'${id}' usa upsert y necesita columnas de conflicto.`,
       });
     }
+    if (
+      node.data.type === "put_mongodb" &&
+      node.data.config.mode === "upsert" &&
+      (!Array.isArray(node.data.config.key_fields) ||
+        (node.data.config.key_fields as unknown[]).length === 0)
+    ) {
+      issues.push({
+        level: "error",
+        message: `'${id}' usa upsert MongoDB y necesita campos clave.`,
+      });
+    }
   }
 
   const nodeIds = new Set(nodes.map((node) => node.id));

@@ -34,6 +34,7 @@ pub enum ConnectionType {
     SqlServer,
     MySql,
     MariaDb,
+    MongoDb,
     Kafka,
     OpcUa,
     Rest,
@@ -48,6 +49,7 @@ impl ConnectionType {
             Self::SqlServer => "sql_server",
             Self::MySql => "mysql",
             Self::MariaDb => "maria_db",
+            Self::MongoDb => "mongodb",
             Self::Kafka => "kafka",
             Self::OpcUa => "opc_ua",
             Self::Rest => "rest",
@@ -76,6 +78,7 @@ impl<'de> Deserialize<'de> for ConnectionType {
             "sql_server" => Self::SqlServer,
             "mysql" => Self::MySql,
             "maria_db" => Self::MariaDb,
+            "mongodb" | "mongo" => Self::MongoDb,
             "kafka" => Self::Kafka,
             "opc_ua" => Self::OpcUa,
             "rest" => Self::Rest,
@@ -173,6 +176,7 @@ pub struct DiagnosticCheck {
 #[serde(rename_all = "snake_case")]
 pub enum DatabaseObjectKind {
     Schema,
+    Collection,
     Table,
     View,
     Procedure,

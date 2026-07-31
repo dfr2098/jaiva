@@ -113,6 +113,8 @@ function FieldControl({ field, value, connectionNames, onChange }: FieldEditorPr
       return <StringListEditor value={asStringArray(value)} onChange={onChange} />;
     case "jsonArray":
       return <JsonArrayEditor value={value} onChange={onChange} />;
+    case "jsonObject":
+      return <JsonObjectEditor value={value} onChange={onChange} />;
     default:
       return null;
   }
@@ -286,11 +288,67 @@ function JsonArrayEditor({
   );
 }
 
+function JsonObjectEditor({
+  value,
+  onChange,
+}: {
+  value: unknown;
+  onChange: (value: unknown) => void;
+}) {
+  const [text, setText] = useState(() => stringifyJsonObject(value));
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setText(stringifyJsonObject(value));
+  }, [value]);
+
+  return (
+    <div className="builder-json">
+      <textarea
+        className={`builder-input builder-textarea code ${error ? "invalid" : ""}`}
+        value={text}
+        rows={6}
+        spellCheck={false}
+        onChange={(event) => {
+          const next = event.target.value;
+          setText(next);
+          if (next.trim() === "") {
+            setError(null);
+            onChange({});
+            return;
+          }
+          try {
+            const parsed: unknown = JSON.parse(next);
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+              setError("Debe ser un objeto JSON {}");
+              return;
+            }
+            setError(null);
+            onChange(parsed);
+          } catch (parseError) {
+            setError(parseError instanceof Error ? parseError.message : "JSON inválido");
+          }
+        }}
+      />
+      {error ? <small className="builder-help error">{error}</small> : null}
+    </div>
+  );
+}
+
 function stringifyJson(value: unknown): string {
   if (value === undefined || value === null) return "[]";
   try {
     return JSON.stringify(value, null, 2);
   } catch {
     return "[]";
+  }
+}
+
+function stringifyJsonObject(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "{}";
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "{}";
   }
 }

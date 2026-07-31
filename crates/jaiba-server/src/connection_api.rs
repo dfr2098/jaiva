@@ -26,6 +26,11 @@ use jaiba_plugin_sdk::{
     DiagnosticCheck, IndexMetadata, KeyMetadata, ObjectDescription, PluginDescriptor, PluginError,
     PoolStatus, QuerySpec,
 };
+#[cfg(feature = "mongodb-driver")]
+use mongodb::{
+    Client as MongoClient,
+    bson::{Bson, Document, doc},
+};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use sqlx::{
@@ -38,6 +43,8 @@ use tiberius::{AuthMethod, Client, Config};
 use tokio::net::TcpStream;
 #[cfg(feature = "sqlserver-driver")]
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
+#[cfg(feature = "mongodb-driver")]
+use url::Url;
 use uuid::Uuid;
 
 use crate::observability::{AppState, authorize};
@@ -195,6 +202,10 @@ pub(crate) async fn connection_manager(
         .register_plugin(Arc::new(MySqlConnectionPlugin {
             connection_type: ConnectionType::MySql,
         }))
+        .await;
+    #[cfg(feature = "mongodb-driver")]
+    manager
+        .register_plugin(Arc::new(MongoDbConnectionPlugin))
         .await;
     #[cfg(feature = "oracle-driver")]
     manager
@@ -1090,6 +1101,189 @@ impl ConnectionPlugin for MySqlConnectionPlugin {
     }
 }
 
+#[cfg(feature = "mongodb-driver")]
+struct MongoDbConnectionPlugin;
+
+#[cfg(feature = "mongodb-driver")]
+#[async_trait]
+impl ConnectionPlugin for MongoDbConnectionPlugin {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor {
+            id: "jaiba.mongodb".to_owned(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            display_name: "MongoDB".to_owned(),
+            category: "Documental".to_owned(),
+            default_port: 27_017,
+            capabilities: vec![
+                "test".to_owned(),
+                "diagnostics".to_owned(),
+                "schema_explorer".to_owned(),
+            ],
+        }
+    }
+
+    fn connection_type(&self) -> ConnectionType {
+        ConnectionType::MongoDb
+    }
+
+    async fn test(
+        &self,
+        endpoint: &ConnectionEndpoint,
+        secret: &ConnectionSecret,
+    ) -> Result<ConnectionTestResult, PluginError> {
+        let started = Instant::now();
+        let client = mongodb_client(endpoint, secret).await?;
+        let database = mongodb_database(endpoint)?;
+        client
+            .database(database)
+            .run_command(doc! { "ping": 1 })
+            .await
+            .map_err(|error| PluginError::Connection(error.to_string()))?;
+        let build_info = client
+            .database("admin")
+            .run_command(doc! { "buildInfo": 1 })
+            .await
+            .map_err(|error| PluginError::Connection(error.to_string()))?;
+        let version = build_info
+            .get_str("version")
+            .unwrap_or("MongoDB")
+            .to_owned();
+        Ok(success(started, version, 1, 0, endpoint.pool_max))
+    }
+
+    async fn diagnose(
+        &self,
+        endpoint: &ConnectionEndpoint,
+        secret: &ConnectionSecret,
+    ) -> Result<Vec<DiagnosticCheck>, PluginError> {
+        let connected_at = Instant::now();
+        let client = mongodb_client(endpoint, secret).await?;
+        let database_name = mongodb_database(endpoint)?;
+        client
+            .database(database_name)
+            .run_command(doc! { "ping": 1 })
+            .await
+            .map_err(|error| PluginError::Diagnostic(error.to_string()))?;
+        let connection_latency = connected_at.elapsed().as_millis() as u64;
+
+        let version_started = Instant::now();
+        let build_info = client
+            .database("admin")
+            .run_command(doc! { "buildInfo": 1 })
+            .await
+            .map_err(|error| PluginError::Diagnostic(error.to_string()))?;
+        let version_latency = version_started.elapsed().as_millis() as u64;
+        let version = build_info
+            .get_str("version")
+            .unwrap_or("MongoDB")
+            .to_owned();
+
+        let metadata_started = Instant::now();
+        let visible_objects = client
+            .database(database_name)
+            .list_collection_names()
+            .await
+            .map_err(|error| PluginError::Diagnostic(error.to_string()))?
+            .len();
+        let metadata_latency = metadata_started.elapsed().as_millis() as u64;
+
+        Ok(vec![
+            DiagnosticCheck {
+                code: "connectivity".to_owned(),
+                label: "Conectividad".to_owned(),
+                status: Availability::Available,
+                latency_ms: Some(connection_latency),
+                details: serde_json::json!({
+                    "host": endpoint.host,
+                    "port": endpoint.port,
+                    "ssl": endpoint.ssl,
+                }),
+            },
+            DiagnosticCheck {
+                code: "server_version".to_owned(),
+                label: "Versión del servidor".to_owned(),
+                status: Availability::Available,
+                latency_ms: Some(version_latency),
+                details: serde_json::json!({ "version": version }),
+            },
+            DiagnosticCheck {
+                code: "metadata_access".to_owned(),
+                label: "Acceso a colecciones".to_owned(),
+                status: Availability::Available,
+                latency_ms: Some(metadata_latency),
+                details: serde_json::json!({
+                    "database": database_name,
+                    "visible_objects": visible_objects,
+                }),
+            },
+        ])
+    }
+
+    async fn list_objects(
+        &self,
+        endpoint: &ConnectionEndpoint,
+        secret: &ConnectionSecret,
+        schema: Option<&str>,
+    ) -> Result<Vec<DatabaseObject>, PluginError> {
+        let client = mongodb_client(endpoint, secret).await?;
+        let database_name = schema.unwrap_or(mongodb_database(endpoint)?);
+        let mut collections = client
+            .database(database_name)
+            .list_collection_names()
+            .await
+            .map_err(|error| PluginError::Exploration(error.to_string()))?
+            .into_iter()
+            .map(|name| DatabaseObject {
+                schema: Some(database_name.to_owned()),
+                name,
+                kind: DatabaseObjectKind::Collection,
+            })
+            .collect::<Vec<_>>();
+        collections.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(collections)
+    }
+
+    async fn describe_object(
+        &self,
+        endpoint: &ConnectionEndpoint,
+        secret: &ConnectionSecret,
+        object: &DatabaseObject,
+    ) -> Result<ObjectDescription, PluginError> {
+        let client = mongodb_client(endpoint, secret).await?;
+        let database_name = object
+            .schema
+            .as_deref()
+            .unwrap_or(mongodb_database(endpoint)?);
+        let sample = client
+            .database(database_name)
+            .collection::<Document>(&object.name)
+            .find_one(doc! {})
+            .await
+            .map_err(|error| PluginError::Exploration(error.to_string()))?;
+        let columns = sample
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, (name, value))| ColumnMetadata {
+                data_type: mongodb_bson_type(&value).to_owned(),
+                nullable: name != "_id",
+                ordinal: ordinal as u32 + 1,
+                name,
+                default_value: None,
+            })
+            .collect();
+        let mut collection = object.clone();
+        collection.kind = DatabaseObjectKind::Collection;
+        Ok(description(&collection, columns))
+    }
+
+    fn compile_query(&self, _specification: &QuerySpec) -> Result<CompiledQuery, PluginError> {
+        Err(PluginError::Unsupported(
+            "constructor de consultas MongoDB".to_owned(),
+        ))
+    }
+}
+
 #[cfg(feature = "oracle-driver")]
 struct OracleConnectionPlugin;
 
@@ -1586,11 +1780,90 @@ async fn mysql_pool(
         .map_err(|error| PluginError::Connection(error.to_string()))
 }
 
+#[cfg(feature = "mongodb-driver")]
+async fn mongodb_client(
+    endpoint: &ConnectionEndpoint,
+    secret: &ConnectionSecret,
+) -> Result<MongoClient, PluginError> {
+    MongoClient::with_uri_str(mongodb_url(endpoint, secret)?)
+        .await
+        .map_err(|error| PluginError::Connection(error.to_string()))
+}
+
+#[cfg(feature = "mongodb-driver")]
+fn mongodb_url(
+    endpoint: &ConnectionEndpoint,
+    secret: &ConnectionSecret,
+) -> Result<String, PluginError> {
+    let mut url = Url::parse(&format!("mongodb://{}:{}", endpoint.host, endpoint.port))
+        .map_err(|error| PluginError::Configuration(error.to_string()))?;
+    url.set_username(&secret.username)
+        .map_err(|_| PluginError::Configuration("usuario MongoDB inválido".to_owned()))?;
+    url.set_password(Some(&secret.password))
+        .map_err(|_| PluginError::Configuration("contraseña MongoDB inválida".to_owned()))?;
+    if let Some(database) = endpoint.database.as_deref() {
+        url.set_path(database);
+    }
+    let auth_source = secret
+        .options
+        .get("auth_source")
+        .or_else(|| endpoint.options.get("auth_source"))
+        .map(String::as_str)
+        .unwrap_or("admin");
+    url.query_pairs_mut()
+        .append_pair("authSource", auth_source)
+        .append_pair("tls", if endpoint.ssl { "true" } else { "false" })
+        .append_pair("minPoolSize", &endpoint.pool_min.to_string())
+        .append_pair("maxPoolSize", &endpoint.pool_max.to_string())
+        .append_pair("connectTimeoutMS", &endpoint.timeout_ms.to_string())
+        .append_pair("serverSelectionTimeoutMS", &endpoint.timeout_ms.to_string());
+    Ok(url.into())
+}
+
+#[cfg(feature = "mongodb-driver")]
+fn mongodb_database(endpoint: &ConnectionEndpoint) -> Result<&str, PluginError> {
+    endpoint
+        .database
+        .as_deref()
+        .filter(|database| !database.trim().is_empty())
+        .ok_or_else(|| PluginError::Configuration("la base MongoDB es obligatoria".to_owned()))
+}
+
+#[cfg(feature = "mongodb-driver")]
+fn mongodb_bson_type(value: &Bson) -> &'static str {
+    match value {
+        Bson::Double(_) => "double",
+        Bson::String(_) => "string",
+        Bson::Array(_) => "array",
+        Bson::Document(_) => "document",
+        Bson::Boolean(_) => "boolean",
+        Bson::Null => "null",
+        Bson::RegularExpression(_) => "regex",
+        Bson::JavaScriptCode(_) | Bson::JavaScriptCodeWithScope(_) => "javascript",
+        Bson::Int32(_) => "int32",
+        Bson::Int64(_) => "int64",
+        Bson::Timestamp(_) => "timestamp",
+        Bson::Binary(_) => "binary",
+        Bson::ObjectId(_) => "object_id",
+        Bson::DateTime(_) => "datetime",
+        Bson::Symbol(_) => "symbol",
+        Bson::Decimal128(_) => "decimal128",
+        Bson::Undefined => "undefined",
+        Bson::MaxKey => "max_key",
+        Bson::MinKey => "min_key",
+        Bson::DbPointer(_) => "db_pointer",
+    }
+}
+
 fn exploration_error(error: sqlx::Error) -> PluginError {
     PluginError::Exploration(error.to_string())
 }
 
-#[cfg(any(feature = "oracle-driver", feature = "sqlserver-driver"))]
+#[cfg(any(
+    feature = "mongodb-driver",
+    feature = "oracle-driver",
+    feature = "sqlserver-driver"
+))]
 fn description(object: &DatabaseObject, columns: Vec<ColumnMetadata>) -> ObjectDescription {
     ObjectDescription {
         object: object.clone(),
@@ -1756,6 +2029,36 @@ mod integration_tests {
         ))
     }
 
+    #[cfg(feature = "mongodb-driver")]
+    fn mongodb_test_configuration() -> Option<(ConnectionEndpoint, ConnectionSecret)> {
+        let password = env::var("JAIBA_TEST_MONGODB_PASSWORD").ok()?;
+        let host = env::var("JAIBA_TEST_MONGODB_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
+        let port = env::var("JAIBA_TEST_MONGODB_PORT")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(27_017);
+        let database =
+            env::var("JAIBA_TEST_MONGODB_DATABASE").unwrap_or_else(|_| "pruebas".to_owned());
+        let username = env::var("JAIBA_TEST_MONGODB_USER").unwrap_or_else(|_| "admin".to_owned());
+        Some((
+            ConnectionEndpoint {
+                host,
+                port,
+                database: Some(database),
+                ssl: false,
+                pool_min: 1,
+                pool_max: 2,
+                timeout_ms: 5_000,
+                options: BTreeMap::new(),
+            },
+            ConnectionSecret {
+                username,
+                password,
+                options: BTreeMap::new(),
+            },
+        ))
+    }
+
     #[cfg(feature = "oracle-driver")]
     fn oracle_test_configuration() -> Option<(ConnectionEndpoint, ConnectionSecret)> {
         let password = env::var("JAIBA_TEST_ORACLE_PASSWORD").ok()?;
@@ -1814,6 +2117,100 @@ mod integration_tests {
                 options: BTreeMap::new(),
             },
         ))
+    }
+
+    #[cfg(feature = "mongodb-driver")]
+    #[tokio::test]
+    async fn mongodb_real_connection_diagnostics_and_collection_metadata() {
+        let Some((endpoint, secret)) = mongodb_test_configuration() else {
+            eprintln!("skipping real MongoDB test: JAIBA_TEST_MONGODB_PASSWORD is not set");
+            return;
+        };
+
+        let client = mongodb_client(&endpoint, &secret)
+            .await
+            .expect("connect to the MongoDB integration database");
+        let database = client.database(mongodb_database(&endpoint).expect("database name"));
+        let collection = database.collection::<Document>("jaiba_phase_1_probe");
+        let _ = collection.drop().await;
+        collection
+            .insert_one(doc! {
+                "_id": "probe-1",
+                "amount": 125.50,
+                "active": true,
+                "note": "Jaiba integration test",
+            })
+            .await
+            .expect("seed MongoDB integration document");
+
+        let secrets = Arc::new(InMemorySecretStore::default());
+        secrets.insert("test://mongodb", secret).await;
+        let manager = connection_manager(secrets, None, None)
+            .await
+            .expect("build connection manager");
+        let profile = manager
+            .create(
+                "mongodb_phase_1",
+                ConnectionType::MongoDb,
+                endpoint.clone(),
+                "test://mongodb",
+            )
+            .await
+            .expect("create MongoDB profile");
+
+        let test_result = manager.test(&profile.id).await.expect("test connection");
+        assert_eq!(test_result.availability, Availability::Available);
+        assert!(
+            test_result
+                .version
+                .as_deref()
+                .is_some_and(|value| value.starts_with('8'))
+        );
+
+        let diagnostics = manager
+            .diagnose(&profile.id)
+            .await
+            .expect("run MongoDB diagnostics");
+        assert_eq!(diagnostics.len(), 3);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|check| check.status == Availability::Available)
+        );
+
+        let objects = manager
+            .list_objects(&profile.id, endpoint.database.as_deref())
+            .await
+            .expect("list MongoDB collections");
+        let probe = objects
+            .iter()
+            .find(|object| {
+                object.name == "jaiba_phase_1_probe"
+                    && object.kind == DatabaseObjectKind::Collection
+            })
+            .expect("probe collection appears in metadata");
+        let description = manager
+            .describe_object(&profile.id, probe)
+            .await
+            .expect("describe MongoDB collection");
+        assert_eq!(description.object.kind, DatabaseObjectKind::Collection);
+        assert!(
+            description
+                .columns
+                .iter()
+                .any(|column| column.name == "_id" && column.data_type == "string")
+        );
+        assert!(
+            description
+                .columns
+                .iter()
+                .any(|column| column.name == "active" && column.data_type == "boolean")
+        );
+
+        collection
+            .drop()
+            .await
+            .expect("clean MongoDB integration collection");
     }
 
     /// Prueba opt-in contra MySQL real. Se omite cuando no se define

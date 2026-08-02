@@ -5,6 +5,7 @@
 //! deliberadamente temporal; puede sustituirse por Vault/KMS sin cambiar la UI.
 
 use std::{
+    collections::BTreeMap,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -64,12 +65,19 @@ pub(crate) struct ConnectionTypeView {
 pub(crate) struct ConnectionInput {
     name: String,
     connection_type: ConnectionType,
+    #[serde(default)]
     host: String,
+    #[serde(default)]
     port: u16,
     database: Option<String>,
+    #[serde(default)]
     username: String,
     #[serde(default)]
     password: Option<String>,
+    /// URL completa (`mongodb://` / `mongodb+srv://`). Solo MongoDB.
+    /// Si se envía, tiene prioridad sobre host/puerto/usuario/contraseña sueltos.
+    #[serde(default)]
+    url: Option<String>,
     #[serde(default)]
     ssl: bool,
     #[serde(default = "pool_min")]
@@ -305,22 +313,14 @@ pub(crate) async fn create_connection(
             input.connection_type.clone(),
         ));
     }
+    let (endpoint, secret) = match materialize_connection(&input, None) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let secret_ref = format!("secret://connection/{}", Uuid::new_v4());
-    if let Err(error) = state
-        .connection_secrets
-        .store(
-            &secret_ref,
-            ConnectionSecret {
-                username: input.username.trim().to_owned(),
-                password: input.password.clone().unwrap_or_default(),
-                options: Default::default(),
-            },
-        )
-        .await
-    {
+    if let Err(error) = state.connection_secrets.store(&secret_ref, secret).await {
         return manager_error(error);
     }
-    let endpoint = endpoint(&input);
     match state
         .connection_manager
         .create(
@@ -371,21 +371,17 @@ pub(crate) async fn update_connection(
         Ok(secret) => secret,
         Err(error) => return manager_error(error),
     };
+    let (endpoint, secret) = match materialize_connection(&input, Some(&previous)) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     if let Err(error) = state
         .connection_secrets
-        .store(
-            &profile.secret_ref,
-            ConnectionSecret {
-                username: input.username.trim().to_owned(),
-                password: input.password.clone().unwrap_or(previous.password),
-                options: previous.options,
-            },
-        )
+        .store(&profile.secret_ref, secret)
         .await
     {
         return manager_error(error);
     }
-    let endpoint = endpoint(&input);
     profile.name = input.name.trim().to_owned();
     profile.connection_type = input.connection_type;
     profile.endpoint = endpoint;
@@ -494,41 +490,209 @@ async fn view(state: &AppState, profile: ConnectionProfile) -> Result<Connection
     })
 }
 
-fn endpoint(input: &ConnectionInput) -> ConnectionEndpoint {
+fn endpoint_from_parts(
+    host: String,
+    port: u16,
+    database: Option<String>,
+    ssl: bool,
+    input: &ConnectionInput,
+) -> ConnectionEndpoint {
     ConnectionEndpoint {
-        host: input.host.trim().to_owned(),
-        port: input.port,
-        database: input
-            .database
-            .as_ref()
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty()),
-        ssl: input.ssl,
+        host,
+        port,
+        database,
+        ssl,
         pool_min: input.pool_min,
         pool_max: input.pool_max,
         timeout_ms: input.timeout_ms,
-        options: Default::default(),
+        options: BTreeMap::new(),
     }
+}
+
+/// Construye endpoint + secreto a partir de campos sueltos o de una URL MongoDB.
+#[allow(clippy::result_large_err)]
+fn materialize_connection(
+    input: &ConnectionInput,
+    previous: Option<&ConnectionSecret>,
+) -> Result<(ConnectionEndpoint, ConnectionSecret), Response> {
+    let url = input
+        .url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if let Some(raw) = url {
+        if input.connection_type != ConnectionType::MongoDb {
+            return Err(bad_request(
+                "el campo url solo está soportado para conexiones MongoDB",
+            ));
+        }
+        #[cfg(feature = "mongodb-driver")]
+        {
+            let parsed = parse_mongodb_connection_url(raw).map_err(bad_request)?;
+            let username = if !input.username.trim().is_empty() {
+                input.username.trim().to_owned()
+            } else {
+                parsed.username.clone()
+            };
+            let password = input
+                .password
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .or_else(|| parsed.password.clone())
+                .or_else(|| previous.map(|secret| secret.password.clone()))
+                .unwrap_or_default();
+            let mut options = BTreeMap::new();
+            if let Some(auth_source) = &parsed.auth_source {
+                options.insert("auth_source".to_owned(), auth_source.clone());
+            }
+            let connection_url = apply_credentials_to_mongo_url(raw, &username, &password)
+                .map_err(bad_request)?;
+            options.insert("connection_url".to_owned(), connection_url);
+            let database = input
+                .database
+                .as_ref()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+                .or(parsed.database);
+            let endpoint = endpoint_from_parts(
+                parsed.host,
+                parsed.port,
+                database,
+                input.ssl || parsed.ssl,
+                input,
+            );
+            return Ok((
+                endpoint,
+                ConnectionSecret {
+                    username,
+                    password,
+                    options,
+                },
+            ));
+        }
+        #[cfg(not(feature = "mongodb-driver"))]
+        {
+            let _ = raw;
+            return Err(bad_request(
+                "MongoDB requiere compilar con --features mongodb-driver",
+            ));
+        }
+    }
+
+    let mut options = previous
+        .map(|secret| secret.options.clone())
+        .unwrap_or_default();
+    let username = input.username.trim().to_owned();
+    let password = input
+        .password
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| previous.map(|secret| secret.password.clone()))
+        .unwrap_or_default();
+    // Si el perfil ya tenía URI (Atlas/SRV), actualizar credenciales en ella.
+    if let Some(stored) = options.get("connection_url").cloned() {
+        #[cfg(feature = "mongodb-driver")]
+        if input.connection_type == ConnectionType::MongoDb {
+            let updated = apply_credentials_to_mongo_url(&stored, &username, &password)
+                .map_err(bad_request)?;
+            options.insert("connection_url".to_owned(), updated);
+        }
+        #[cfg(not(feature = "mongodb-driver"))]
+        {
+            let _ = stored;
+        }
+    }
+    let database = input
+        .database
+        .as_ref()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let endpoint = endpoint_from_parts(
+        input.host.trim().to_owned(),
+        input.port,
+        database,
+        input.ssl,
+        input,
+    );
+    Ok((
+        endpoint,
+        ConnectionSecret {
+            username,
+            password,
+            options,
+        },
+    ))
 }
 
 #[allow(clippy::result_large_err)]
 fn validate_input(input: &ConnectionInput, password_required: bool) -> Result<(), Response> {
-    if input.name.trim().is_empty()
-        || input.host.trim().is_empty()
-        || input.username.trim().is_empty()
-        || input.port == 0
-    {
+    if input.name.trim().is_empty() {
+        return Err(bad_request("el nombre del perfil es obligatorio"));
+    }
+    if input.pool_min > input.pool_max || input.pool_max == 0 {
+        return Err(bad_request("el pool mínimo no puede superar al máximo"));
+    }
+
+    let url = input
+        .url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if let Some(raw) = url {
+        if input.connection_type != ConnectionType::MongoDb {
+            return Err(bad_request(
+                "el campo url solo está soportado para conexiones MongoDB",
+            ));
+        }
+        #[cfg(feature = "mongodb-driver")]
+        {
+            let parsed = parse_mongodb_connection_url(raw).map_err(bad_request)?;
+            let username = if !input.username.trim().is_empty() {
+                input.username.trim()
+            } else {
+                parsed.username.as_str()
+            };
+            if username.is_empty() {
+                return Err(bad_request(
+                    "la URL MongoDB debe incluir usuario, o indíquelo en el formulario",
+                ));
+            }
+            let password = input
+                .password
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .or(parsed.password.as_deref());
+            if password_required && password.unwrap_or_default().is_empty() {
+                return Err(bad_request(
+                    "la contraseña es obligatoria (en la URL o en el formulario)",
+                ));
+            }
+            return Ok(());
+        }
+        #[cfg(not(feature = "mongodb-driver"))]
+        {
+            return Err(bad_request(
+                "MongoDB requiere compilar con --features mongodb-driver",
+            ));
+        }
+    }
+
+    if input.host.trim().is_empty() || input.username.trim().is_empty() || input.port == 0 {
         return Err(bad_request(
-            "nombre, host, puerto y usuario son obligatorios",
+            "nombre, host, puerto y usuario son obligatorios (o una URL MongoDB válida)",
         ));
     }
     if password_required && input.password.as_deref().unwrap_or_default().is_empty() {
         return Err(bad_request(
             "la contraseña es obligatoria al crear la conexión",
         ));
-    }
-    if input.pool_min > input.pool_max || input.pool_max == 0 {
-        return Err(bad_request("el pool mínimo no puede superar al máximo"));
     }
     Ok(())
 }
@@ -554,11 +718,11 @@ fn manager_error(error: ConnectionManagerError) -> Response {
         .into_response()
 }
 
-fn bad_request(message: &str) -> Response {
+fn bad_request(message: impl Into<String>) -> Response {
     (
         StatusCode::BAD_REQUEST,
         Json(ErrorMessage {
-            message: message.to_owned(),
+            message: message.into(),
         }),
     )
         .into_response()
@@ -1781,6 +1945,82 @@ async fn mysql_pool(
 }
 
 #[cfg(feature = "mongodb-driver")]
+#[derive(Debug, Clone)]
+struct ParsedMongoUrl {
+    host: String,
+    port: u16,
+    database: Option<String>,
+    username: String,
+    password: Option<String>,
+    auth_source: Option<String>,
+    ssl: bool,
+}
+
+#[cfg(feature = "mongodb-driver")]
+fn parse_mongodb_connection_url(raw: &str) -> Result<ParsedMongoUrl, String> {
+    let url = Url::parse(raw.trim()).map_err(|error| format!("URL MongoDB inválida: {error}"))?;
+    match url.scheme() {
+        "mongodb" | "mongodb+srv" => {}
+        other => {
+            return Err(format!(
+                "esquema '{other}' no soportado; use mongodb:// o mongodb+srv://"
+            ));
+        }
+    }
+    let host = url
+        .host_str()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "la URL MongoDB debe incluir host".to_owned())?
+        .to_owned();
+    let port = url.port().unwrap_or(27_017);
+    let database = {
+        let path = url.path().trim_matches('/');
+        if path.is_empty() {
+            None
+        } else {
+            Some(path.to_owned())
+        }
+    };
+    let username = url.username().to_owned();
+    let password = url.password().map(str::to_owned);
+    let mut auth_source = None;
+    let mut ssl = url.scheme() == "mongodb+srv";
+    for (key, value) in url.query_pairs() {
+        match key.as_ref() {
+            "authSource" => auth_source = Some(value.into_owned()),
+            "tls" | "ssl" => {
+                ssl = matches!(value.as_ref(), "true" | "1" | "yes");
+            }
+            _ => {}
+        }
+    }
+    Ok(ParsedMongoUrl {
+        host,
+        port,
+        database,
+        username,
+        password,
+        auth_source,
+        ssl,
+    })
+}
+
+#[cfg(feature = "mongodb-driver")]
+fn apply_credentials_to_mongo_url(
+    raw: &str,
+    username: &str,
+    password: &str,
+) -> Result<String, String> {
+    let mut url =
+        Url::parse(raw.trim()).map_err(|error| format!("URL MongoDB inválida: {error}"))?;
+    url.set_username(username)
+        .map_err(|_| "usuario MongoDB inválido en la URL".to_owned())?;
+    url.set_password(Some(password))
+        .map_err(|_| "contraseña MongoDB inválida en la URL".to_owned())?;
+    Ok(url.into())
+}
+
+#[cfg(feature = "mongodb-driver")]
 async fn mongodb_client(
     endpoint: &ConnectionEndpoint,
     secret: &ConnectionSecret,
@@ -1795,6 +2035,16 @@ fn mongodb_url(
     endpoint: &ConnectionEndpoint,
     secret: &ConnectionSecret,
 ) -> Result<String, PluginError> {
+    if let Some(stored) = secret
+        .options
+        .get("connection_url")
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        return apply_credentials_to_mongo_url(stored, &secret.username, &secret.password)
+            .map_err(PluginError::Configuration);
+    }
+
     let mut url = Url::parse(&format!("mongodb://{}:{}", endpoint.host, endpoint.port))
         .map_err(|error| PluginError::Configuration(error.to_string()))?;
     url.set_username(&secret.username)
@@ -2033,13 +2283,15 @@ mod integration_tests {
     fn mongodb_test_configuration() -> Option<(ConnectionEndpoint, ConnectionSecret)> {
         let password = env::var("JAIBA_TEST_MONGODB_PASSWORD").ok()?;
         let host = env::var("JAIBA_TEST_MONGODB_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
+        // Puerto host típico del contenedor de pruebas (mapeo 27018→27017).
         let port = env::var("JAIBA_TEST_MONGODB_PORT")
             .ok()
             .and_then(|value| value.parse().ok())
-            .unwrap_or(27_017);
+            .unwrap_or(27_018);
         let database =
-            env::var("JAIBA_TEST_MONGODB_DATABASE").unwrap_or_else(|_| "pruebas".to_owned());
-        let username = env::var("JAIBA_TEST_MONGODB_USER").unwrap_or_else(|_| "admin".to_owned());
+            env::var("JAIBA_TEST_MONGODB_DATABASE").unwrap_or_else(|_| "dma_test".to_owned());
+        let username =
+            env::var("JAIBA_TEST_MONGODB_USER").unwrap_or_else(|_| "dma_test".to_owned());
         Some((
             ConnectionEndpoint {
                 host,
@@ -2160,11 +2412,17 @@ mod integration_tests {
 
         let test_result = manager.test(&profile.id).await.expect("test connection");
         assert_eq!(test_result.availability, Availability::Available);
+        // MongoDB 7.x / 8.x en entornos de prueba.
         assert!(
-            test_result
-                .version
-                .as_deref()
-                .is_some_and(|value| value.starts_with('8'))
+            test_result.version.as_deref().is_some_and(|value| {
+                value
+                    .split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .and_then(|major| major.parse::<u32>().ok())
+                    .is_some_and(|major| (7..=9).contains(&major))
+            }),
+            "unexpected MongoDB version: {:?}",
+            test_result.version
         );
 
         let diagnostics = manager
@@ -2849,5 +3107,91 @@ connections:
             .into_results()
             .await
             .expect("clean SQL Server integration table");
+    }
+
+    /// Valida que un perfil creado solo con URL MongoDB pueda probarse.
+    #[cfg(feature = "mongodb-driver")]
+    #[tokio::test]
+    async fn mongodb_real_connection_from_url() {
+        let Some(password) = env::var("JAIBA_TEST_MONGODB_PASSWORD").ok() else {
+            eprintln!("skipping real MongoDB URL test: JAIBA_TEST_MONGODB_PASSWORD is not set");
+            return;
+        };
+        let host = env::var("JAIBA_TEST_MONGODB_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
+        let port = env::var("JAIBA_TEST_MONGODB_PORT").unwrap_or_else(|_| "27018".to_owned());
+        let database =
+            env::var("JAIBA_TEST_MONGODB_DATABASE").unwrap_or_else(|_| "dma_test".to_owned());
+        let username =
+            env::var("JAIBA_TEST_MONGODB_USER").unwrap_or_else(|_| "dma_test".to_owned());
+        let raw = format!(
+            "mongodb://{username}:{password}@{host}:{port}/{database}?authSource=admin"
+        );
+
+        let input = ConnectionInput {
+            name: "mongo_from_url".to_owned(),
+            connection_type: ConnectionType::MongoDb,
+            host: String::new(),
+            port: 0,
+            database: None,
+            username: String::new(),
+            password: None,
+            url: Some(raw),
+            ssl: false,
+            pool_min: 1,
+            pool_max: 2,
+            timeout_ms: 5_000,
+        };
+        validate_input(&input, true).expect("URL MongoDB válida");
+        let (endpoint, secret) =
+            materialize_connection(&input, None).expect("materializar desde URL");
+        assert_eq!(endpoint.host, host);
+        assert!(secret.options.contains_key("connection_url"));
+
+        let client = mongodb_client(&endpoint, &secret)
+            .await
+            .expect("conectar con URL materializada");
+        client
+            .database("admin")
+            .run_command(doc! { "ping": 1 })
+            .await
+            .expect("ping MongoDB vía URL");
+    }
+}
+
+#[cfg(all(test, feature = "mongodb-driver"))]
+mod mongo_url_unit_tests {
+    use super::*;
+
+    #[test]
+    fn parses_mongodb_url_with_auth_source() {
+        let parsed = parse_mongodb_connection_url(
+            "mongodb://dma_test:s3cret@127.0.0.1:27018/dma_test?authSource=admin&tls=false",
+        )
+        .expect("parse");
+        assert_eq!(parsed.host, "127.0.0.1");
+        assert_eq!(parsed.port, 27_018);
+        assert_eq!(parsed.database.as_deref(), Some("dma_test"));
+        assert_eq!(parsed.username, "dma_test");
+        assert_eq!(parsed.password.as_deref(), Some("s3cret"));
+        assert_eq!(parsed.auth_source.as_deref(), Some("admin"));
+        assert!(!parsed.ssl);
+    }
+
+    #[test]
+    fn parses_mongodb_srv_as_tls() {
+        let parsed = parse_mongodb_connection_url(
+            "mongodb+srv://app:pass@cluster0.example.net/prod?retryWrites=true",
+        )
+        .expect("parse srv");
+        assert_eq!(parsed.host, "cluster0.example.net");
+        assert_eq!(parsed.port, 27_017);
+        assert!(parsed.ssl);
+        assert_eq!(parsed.database.as_deref(), Some("prod"));
+    }
+
+    #[test]
+    fn rejects_non_mongo_scheme() {
+        let error = parse_mongodb_connection_url("postgres://u:p@h/db").expect_err("reject");
+        assert!(error.contains("mongodb://"));
     }
 }

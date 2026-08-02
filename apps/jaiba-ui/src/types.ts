@@ -58,9 +58,41 @@ export interface FlowSnapshot {
 
 export type FlowAction = "start" | "pause" | "resume" | "drain" | "stop";
 
+export type FlowVersionState = "DRAFT" | "VALIDATED" | "DEPLOYED" | "ARCHIVED";
+
+export interface FlowVersion {
+  version: number;
+  state: FlowVersionState;
+  source: string;
+  checksum: string;
+  created_at: number;
+  validated_at?: number | null;
+  deployed_at?: number | null;
+  archived_at?: number | null;
+  note?: string | null;
+}
+
+export interface FlowRecord {
+  id: string;
+  versions: FlowVersion[];
+  active_version: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface FlowView extends FlowRecord {
+  runtime: FlowSnapshot | null;
+}
+
+export interface DraftCreated {
+  flow_id: string;
+  version: number;
+}
+
 export interface RuntimeEvent {
   kind: "runtime_snapshot";
   flow: FlowSnapshot | null;
+  flows?: FlowSnapshot[];
 }
 
 export interface ProvenanceRecord {
@@ -156,6 +188,8 @@ export interface DatabaseConnectionInput {
   database: string;
   username: string;
   password?: string;
+  /** URL completa MongoDB (`mongodb://` / `mongodb+srv://`). Opcional. */
+  url?: string;
   ssl: boolean;
   pool_min: number;
   pool_max: number;

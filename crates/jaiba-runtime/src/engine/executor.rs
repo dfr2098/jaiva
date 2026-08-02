@@ -332,6 +332,12 @@ impl FlowEngine {
                         deferred = Some(emission);
                     }
                 }
+                else => {
+                    return Err(FlowError::Server(
+                        "flow deadlocked: deferred emission exceeds engine.queue_capacity"
+                            .to_owned(),
+                    ));
+                }
             }
         }
 
@@ -985,6 +991,22 @@ fn validate(config: &FlowConfig) -> Result<(), FlowError> {
             "engine capacities must be greater than zero".to_owned(),
         ));
     }
+    {
+        let mut fanout: HashMap<(&str, &str), usize> = HashMap::new();
+        for connection in &config.connections {
+            *fanout
+                .entry((connection.from.as_str(), connection.relationship.as_str()))
+                .or_default() += 1;
+        }
+        if let Some(max_fanout) = fanout.values().copied().max()
+            && config.engine.queue_capacity < max_fanout
+        {
+            return Err(FlowError::Configuration(format!(
+                "engine.queue_capacity ({}) must be at least the maximum fan-out per relationship ({max_fanout})",
+                config.engine.queue_capacity
+            )));
+        }
+    }
     if config.engine.shutdown.drain_timeout_seconds == 0 {
         return Err(FlowError::Configuration(
             "shutdown drain_timeout_seconds must be greater than zero".to_owned(),
@@ -1110,6 +1132,7 @@ mod tests {
     struct SlowSource;
     struct Sink;
     struct BurstSource;
+    struct AlwaysFail;
     struct ConcurrencyProbe {
         active: AtomicUsize,
         maximum: AtomicUsize,
@@ -1137,6 +1160,22 @@ mod tests {
             _: &OutputSender,
         ) -> Result<(), FlowError> {
             Ok(())
+        }
+    }
+
+    /// Stub de prueba: siempre falla para ejercitar retry → dead-letter.
+    #[async_trait]
+    impl Processor for AlwaysFail {
+        async fn execute(
+            &self,
+            _: DataPacket,
+            context: &ProcessorContext,
+            _: &OutputSender,
+        ) -> Result<(), FlowError> {
+            Err(FlowError::Processor {
+                processor_id: context.processor_id.clone(),
+                message: "phase8 intentional failure".to_owned(),
+            })
         }
     }
 
@@ -1306,6 +1345,85 @@ connections:
         let summary = FlowEngine::new(config).unwrap().run().await.unwrap();
         assert_eq!(summary.failed, 1);
         assert_eq!(summary.processed, 2);
+    }
+
+    /// Fase 8: reintentos agotados → fila en DLQ → `requeue_dead_letter`.
+    #[tokio::test]
+    async fn flow_retry_then_dead_letter() {
+        let root = std::env::temp_dir().join(format!("jaiva-phase8-dlq-{}", uuid::Uuid::new_v4()));
+        let database_path = root.join("repository.db");
+        let content_path = root.join("content");
+        let config = parse(&format!(
+            r#"
+id: phase8-dlq
+engine:
+  repository:
+    enabled: true
+    database_path: {}
+    content_path: {}
+    completed_retention_hours: 1
+    provenance_retention_hours: 1
+processors:
+  - id: source
+    type: generate_records
+    config:
+      records:
+        - id: 1
+  - id: boom
+    type: always_fail
+    retry:
+      maximum_attempts: 2
+      initial_delay_ms: 1
+      maximum_delay_ms: 1
+connections:
+  - from: source
+    relationship: success
+    to: boom
+"#,
+            database_path.display(),
+            content_path.display()
+        ));
+
+        let mut registry = default_registry();
+        registry.register("always_fail", |_| Ok(Arc::new(AlwaysFail)));
+        let summary = FlowEngine::new(config)
+            .unwrap()
+            .with_registry(registry)
+            .run()
+            .await
+            .unwrap();
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.retried, 2);
+        assert_eq!(summary.repository_dead_letter, 1);
+
+        let repository = LocalPacketRepository::open(&crate::config::RepositoryConfig {
+            enabled: true,
+            database_path: database_path.clone(),
+            content_path: content_path.clone(),
+            abandoned_after_seconds: 60,
+            completed_retention_hours: 1,
+            provenance_retention_hours: 1,
+        })
+        .await
+        .unwrap();
+        let letters = repository.dead_letters("phase8-dlq", 10).await.unwrap();
+        assert_eq!(letters.len(), 1);
+        assert!(
+            letters[0]
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("phase8 intentional failure")
+        );
+        assert!(
+            repository
+                .requeue_dead_letter(&letters[0].queue_id)
+                .await
+                .unwrap()
+        );
+        assert_eq!(repository.pending("phase8-dlq").await.unwrap().len(), 1);
+        drop(repository);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]

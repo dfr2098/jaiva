@@ -4,7 +4,7 @@
 |---|---|---|
 | 9.1 | Cargo workspace, Core, Runtime, Server y CLI | Implementado |
 | 9.2 | SDK y Connection Manager independiente | Implementado |
-| 9.3 | Plugins de diagnóstico y pruebas reales | Implementado; PostgreSQL, MySQL, Oracle, SQL Server y Kafka validados |
+| 9.3 | Plugins de diagnóstico y pruebas reales | Implementado; PostgreSQL, MySQL, Oracle, SQL Server, MongoDB y Kafka validados |
 | 9.4 | REST del Connection Manager y módulo visual | Implementado |
 | 9.5 | Explorador y constructor SQL en UI | Implementado y validado |
 | 9.6 | Creación automática de nodos Query | Implementado y validado para PostgreSQL |

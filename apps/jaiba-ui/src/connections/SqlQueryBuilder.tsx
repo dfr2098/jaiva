@@ -86,16 +86,18 @@ export function SqlQueryBuilder({
   const [loadingTables, setLoadingTables] = useState(false);
   const [created, setCreated] = useState<string | null>(null);
 
-  const loadTables = useCallback(async () => {
+  const loadTables = useCallback(async (signal?: { cancelled: boolean }) => {
     setLoadingTables(true);
     try {
       const objects = await jaivaApi.connectionMetadata(connection.id);
+      if (signal?.cancelled) return;
       setTables(objects.filter((object) => object.kind === "table" || object.kind === "view"));
       setError(null);
     } catch (reason) {
+      if (signal?.cancelled) return;
       setError(reason instanceof Error ? reason.message : "No se pudieron listar las tablas");
     } finally {
-      setLoadingTables(false);
+      if (!signal?.cancelled) setLoadingTables(false);
     }
   }, [connection.id]);
 
@@ -111,7 +113,11 @@ export function SqlQueryBuilder({
     setLimit("");
     setCompiled(null);
     setCreated(null);
-    void loadTables();
+    const signal = { cancelled: false };
+    void loadTables(signal);
+    return () => {
+      signal.cancelled = true;
+    };
   }, [loadTables]);
 
   const source = sourceIndex === "" ? null : tables[Number(sourceIndex)] ?? null;

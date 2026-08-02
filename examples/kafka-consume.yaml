@@ -1,0 +1,47 @@
+id: kafka-consume-example
+
+kafka_connections:
+  dma:
+    brokers_env: KAFKA_BROKERS
+    client_id: jaiva-consumer
+    security_protocol: PLAINTEXT
+    message_timeout_ms: 30000
+
+engine:
+  repository:
+    enabled: true
+    database_path: .jaiva/kafka-consume-repository.db
+    content_path: .jaiva/kafka-consume-content
+    completed_retention_hours: 24
+    provenance_retention_hours: 2160
+
+processors:
+  - id: consume
+    type: consume_kafka
+    config:
+      connection: dma
+      topic: dma.journal.batch.v1
+      group_id: jaiva-consume-demo
+      auto_offset_reset: earliest
+      max_poll_messages: 50
+      max_poll_ms: 1000
+      max_idle_ms: 8000
+      decode: json
+    retry:
+      maximum_attempts: 3
+      initial_delay_ms: 500
+      maximum_delay_ms: 5000
+
+  - id: inspect
+    type: log_records
+
+  - id: errors
+    type: log_records
+
+connections:
+  - from: consume
+    relationship: success
+    to: inspect
+  - from: consume
+    relationship: failure
+    to: errors

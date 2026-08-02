@@ -233,6 +233,7 @@ mod tests {
 
         let admin: AdminClient<DefaultClientContext> = ClientConfig::new()
             .set("bootstrap.servers", &brokers)
+            .set("broker.address.family", "v4")
             .create()
             .expect("create Kafka admin client");
         let creation = admin
@@ -251,6 +252,7 @@ mod tests {
 
         let consumer: StreamConsumer = ClientConfig::new()
             .set("bootstrap.servers", &brokers)
+            .set("broker.address.family", "v4")
             .set("group.id", format!("jaiba-phase-9-3-{suffix}"))
             .set("auto.offset.reset", "earliest")
             .set("enable.auto.commit", "false")
@@ -262,6 +264,7 @@ mod tests {
 
         let producer: FutureProducer = ClientConfig::new()
             .set("bootstrap.servers", &brokers)
+            .set("broker.address.family", "v4")
             .set("client.id", "jaiba-phase-9-3")
             .set("security.protocol", "PLAINTEXT")
             .set("enable.idempotence", "true")

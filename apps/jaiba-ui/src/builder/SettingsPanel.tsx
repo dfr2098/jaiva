@@ -4,6 +4,7 @@ import type {
   FlowMeta,
   KafkaConnection,
   ParameterEntry,
+  ScheduleSettings,
 } from "./model";
 
 interface SettingsPanelProps {
@@ -17,6 +18,8 @@ export function SettingsPanel({ meta, onChange }: SettingsPanelProps) {
   const patch = (partial: Partial<FlowMeta>) => onChange({ ...meta, ...partial });
   const patchEngine = (partial: Partial<EngineSettings>) =>
     patch({ engine: { ...meta.engine, ...partial } });
+  const patchSchedule = (partial: Partial<ScheduleSettings>) =>
+    patch({ schedule: { ...meta.schedule, ...partial } });
 
   return (
     <div className="settings-panel">
@@ -30,6 +33,119 @@ export function SettingsPanel({ meta, onChange }: SettingsPanelProps) {
             onChange={(event) => patch({ id: event.target.value })}
           />
         </label>
+      </fieldset>
+
+      <fieldset className="inspector-group">
+        <legend>Ejecución continua</legend>
+        <label className="builder-field">
+          <span className="builder-field-label">Activar agenda</span>
+          <span className="builder-switch">
+            <input
+              type="checkbox"
+              checked={meta.schedule.enabled}
+              onChange={(event) => patchSchedule({ enabled: event.target.checked })}
+            />
+            <i />
+          </span>
+        </label>
+        {meta.schedule.enabled ? (
+          <>
+            <label className="builder-field">
+              <span className="builder-field-label">Disparador</span>
+              <select
+                className="builder-input"
+                value={meta.schedule.triggerType}
+                onChange={(event) =>
+                  patchSchedule({
+                    triggerType: event.target.value as ScheduleSettings["triggerType"],
+                  })
+                }
+              >
+                <option value="interval">Intervalo</option>
+                <option value="cron">Cron</option>
+                <option value="webhook">Webhook</option>
+              </select>
+            </label>
+            {meta.schedule.triggerType === "interval" ? (
+              <label className="builder-field">
+                <span className="builder-field-label">Cada (segundos)</span>
+                <input
+                  className="builder-input"
+                  type="number"
+                  min={1}
+                  value={meta.schedule.everySeconds}
+                  onChange={(event) =>
+                    patchSchedule({ everySeconds: Number(event.target.value) || 1 })
+                  }
+                />
+              </label>
+            ) : null}
+            {meta.schedule.triggerType === "cron" ? (
+              <>
+                <label className="builder-field">
+                  <span className="builder-field-label">Expresión cron (6 campos)</span>
+                  <input
+                    className="builder-input"
+                    value={meta.schedule.cronExpression}
+                    placeholder="0 0 2 * * *"
+                    onChange={(event) =>
+                      patchSchedule({ cronExpression: event.target.value })
+                    }
+                  />
+                  <small className="builder-help">
+                    seg min hora día mes dow — ej. `0 0 2 * * *` a las 02:00
+                  </small>
+                </label>
+                <label className="builder-field">
+                  <span className="builder-field-label">Zona horaria</span>
+                  <input
+                    className="builder-input"
+                    value={meta.schedule.timezone}
+                    placeholder="America/Mexico_City"
+                    onChange={(event) => patchSchedule({ timezone: event.target.value })}
+                  />
+                </label>
+              </>
+            ) : null}
+            {meta.schedule.triggerType === "webhook" ? (
+              <p className="builder-help">
+                Dispara con{" "}
+                <code>POST /api/v1/flows/{meta.id || "{id}"}/trigger</code>
+              </p>
+            ) : null}
+            <label className="builder-field">
+              <span className="builder-field-label">Si aún está corriendo</span>
+              <select
+                className="builder-input"
+                value={meta.schedule.overlap}
+                onChange={(event) =>
+                  patchSchedule({
+                    overlap: event.target.value as ScheduleSettings["overlap"],
+                  })
+                }
+              >
+                <option value="skip">Omitir (skip)</option>
+                <option value="queue">Encolar (queue)</option>
+                <option value="replace">Reemplazar (replace)</option>
+              </select>
+            </label>
+            <label className="builder-field">
+              <span className="builder-field-label">Tras reinicio</span>
+              <select
+                className="builder-input"
+                value={meta.schedule.catchUp}
+                onChange={(event) =>
+                  patchSchedule({
+                    catchUp: event.target.value as ScheduleSettings["catchUp"],
+                  })
+                }
+              >
+                <option value="none">No recuperar</option>
+                <option value="one">Un disparo de catch-up</option>
+              </select>
+            </label>
+          </>
+        ) : null}
       </fieldset>
 
       <fieldset className="inspector-group">

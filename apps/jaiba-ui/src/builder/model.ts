@@ -75,11 +75,26 @@ export interface EngineSettings {
   admin_token_env: string;
 }
 
+export type ScheduleTriggerType = "interval" | "cron" | "webhook";
+export type OverlapPolicy = "skip" | "queue" | "replace";
+export type CatchUpPolicy = "none" | "one";
+
+export interface ScheduleSettings {
+  enabled: boolean;
+  triggerType: ScheduleTriggerType;
+  everySeconds: number;
+  cronExpression: string;
+  timezone: string;
+  overlap: OverlapPolicy;
+  catchUp: CatchUpPolicy;
+}
+
 export interface FlowMeta {
   id: string;
   parameters: ParameterEntry[];
   databaseConnections: DatabaseConnection[];
   kafkaConnections: KafkaConnection[];
+  schedule: ScheduleSettings;
   engine: EngineSettings;
 }
 
@@ -114,6 +129,16 @@ export const ENGINE_DEFAULTS: EngineSettings = {
   admin_token_env: "JAIBA_ADMIN_TOKEN",
 };
 
+export const SCHEDULE_DEFAULTS: ScheduleSettings = {
+  enabled: false,
+  triggerType: "interval",
+  everySeconds: 60,
+  cronExpression: "0 0 2 * * *",
+  timezone: "America/Mexico_City",
+  overlap: "skip",
+  catchUp: "none",
+};
+
 export const EXECUTION_MODES: ExecutionMode[] = [
   "auto",
   "async_io",
@@ -133,6 +158,7 @@ export function defaultFlowMeta(): FlowMeta {
     parameters: [],
     databaseConnections: [],
     kafkaConnections: [],
+    schedule: { ...SCHEDULE_DEFAULTS },
     engine: { ...ENGINE_DEFAULTS },
   };
 }

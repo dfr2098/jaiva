@@ -1,0 +1,32 @@
+id: continuous-demo
+
+# Fase 6: ejecución continua. El motor re-dispara el flujo cada 15 s.
+# Solapamiento: si aún corre, se omite el tick (skip).
+schedule:
+  enabled: true
+  overlap: skip
+  catch_up: one
+  trigger:
+    type: interval
+    every_seconds: 15
+
+engine:
+  max_concurrency: 4
+  admin:
+    enabled: true
+    authentication: none
+
+processors:
+  - id: source
+    type: generate_records
+    config:
+      records:
+        - tick: 1
+          label: continuous
+  - id: destination
+    type: log_records
+
+connections:
+  - from: source
+    relationship: success
+    to: destination

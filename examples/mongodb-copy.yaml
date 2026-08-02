@@ -1,7 +1,7 @@
 id: mongodb-copy
 
-# Ejemplo fase 2: exporte una URI que incluya la base predeterminada.
-# MONGODB_URL=mongodb://admin:admin123@127.0.0.1:27017/pruebas?authSource=admin
+# Ejemplo: URI con base predeterminada (contenedor de pruebas en :27018).
+# MONGODB_URL=mongodb://dma_test:PASSWORD@127.0.0.1:27018/dma_test?authSource=admin
 database_connections:
   mongo:
     type: mongodb

@@ -19,8 +19,12 @@ repository = "https://github.com/jaiba-project/jaiba"
 
 [workspace.dependencies]
 aes-gcm = "0.10"
+argon2 = "0.5"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+chrono-tz = "0.10"
+cron = "0.15"
 csv = "1"
 futures-util = "0.3"
 mongodb = "3"

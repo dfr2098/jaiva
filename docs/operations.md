@@ -13,6 +13,28 @@ cargo run -- examples/postgres-write.yaml
 cargo run -- examples/mysql-write.yaml
 ```
 
+Drivers opcionales (hay que habilitarlos al compilar/ejecutar):
+
+```bash
+# Kafka (publish / consume)
+cargo run --features kafka-driver -- serve examples/visualisa-flow.yaml
+
+# MongoDB (Connection Manager + query_mongodb / put_mongodb)
+cargo run --features mongodb-driver -- serve examples/visualisa-flow.yaml
+
+# Oracle (Connection Manager + query_oracle / put)
+cargo run --features oracle-driver -- serve examples/visualisa-flow.yaml
+
+# SQL Server (Connection Manager + put_database)
+cargo run --features sqlserver-driver -- serve examples/visualisa-flow.yaml
+
+# Varios a la vez
+cargo run --features kafka-driver,mongodb-driver,sqlserver-driver,oracle-driver -- serve examples/visualisa-flow.yaml
+```
+
+Sin el feature correspondiente, el tipo no aparece en
+`/api/v1/connection-types` ni en el selector de la UI.
+
 ## Servidor de observabilidad
 
 ```bash
@@ -56,6 +78,25 @@ curl -H "Authorization: Bearer $JAIBA_ADMIN_TOKEN" \
 
 La referencia completa está en
 [Fase 7: control y endurecimiento operativo](priority-7-control-plane.md).
+
+### Suite Fase 8 (entorno de pruebas)
+
+Integra Postgres, Kafka, MongoDB y SQL Server ya levantados en el host:
+
+```bash
+export JAIBA_TEST_POSTGRES_PASSWORD='...'
+export JAIBA_TEST_MONGODB_PASSWORD='...'
+export JAIBA_TEST_SQLSERVER_PASSWORD='...'
+./scripts/phase8-integration.sh
+```
+
+Detalle, variables y cobertura:
+[priority-8-integration-tests.md](priority-8-integration-tests.md).
+
+Perfiles Mongo con URI (`mongodb://` / `mongodb+srv://`) y SQL Server en la UI:
+[connection-manager.md](connection-manager.md).
+
+Índice de documentación: [docs/README.md](README.md).
 
 ## Interfaz opcional
 

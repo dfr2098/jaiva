@@ -33,6 +33,10 @@ Requiere `--features mongodb-driver`. Lee una colección mediante cursor y emite
 documentos en paquetes acotados por `batch_size`. `filter`, `projection` y
 `sort` son documentos MongoDB expresados como JSON o Extended JSON.
 
+La conexión puede ser un alias del Connection Manager (perfil con host/puerto o
+con URI `mongodb://` / `mongodb+srv://`) o una entrada `database_connections`
+con `url_env`. Ver [connection-manager.md](connection-manager.md).
+
 ```yaml
 type: query_mongodb
 config:
@@ -198,14 +202,34 @@ Publica registros JSON o contenido binario y espera confirmación del broker:
 ```yaml
 type: publish_kafka
 config:
-  connection: dma
-  topic: dma.journal.batch.v1
+  connection: bus
+  topic: events.batch.v1
   key_field: batch_id
   queue_timeout_ms: 5000
 ```
 
 Requiere `--features kafka-driver`. Consulta
 `docs/priority-4-3-kafka.md` para garantías y observabilidad.
+
+## `consume_kafka`
+
+Fuente Kafka: lee un lote de mensajes con auto-commit desactivado y confirma el
+offset tras emitir cada paquete por `success` (at-least-once en el MVP).
+
+```yaml
+type: consume_kafka
+config:
+  connection: bus
+  topic: events.batch.v1
+  group_id: jaiva-readers
+  auto_offset_reset: earliest
+  max_poll_messages: 50
+  max_poll_ms: 1000
+  max_idle_ms: 8000
+  decode: json
+```
+
+Requiere `--features kafka-driver`. Detalle en `docs/priority-4-3-kafka.md`.
 
 ## Checkpoints
 

@@ -20,7 +20,15 @@ export interface FieldDef {
   placeholder?: string;
   help?: string;
   options?: string[];
-  connectionKind?: "database" | "postgres" | "kafka";
+  /** Filtro de perfiles ofrecidos en el selector de conexión. */
+  connectionKind?:
+    | "database"
+    | "postgres"
+    | "oracle"
+    | "mongodb"
+    | "mysql"
+    | "sqlserver"
+    | "kafka";
 }
 
 export interface ProcessorDef {
@@ -87,9 +95,9 @@ export const PROCESSOR_CATALOG: ProcessorDef[] = [
         key: "connection",
         label: "Conexión Oracle",
         kind: "connectionRef",
-        connectionKind: "database",
+        connectionKind: "oracle",
         required: true,
-        help: "Perfil Oracle definido en 'Conexiones'.",
+        help: "Alias de un perfil Oracle en Conexiones (o nombre en Configuración del flujo).",
       },
       {
         key: "query",
@@ -97,7 +105,7 @@ export const PROCESSOR_CATALOG: ProcessorDef[] = [
         kind: "textarea",
         required: true,
         placeholder: "SELECT ID, NAME FROM SCHEMA.TABLE",
-        help: "Solo se permiten consultas SELECT o WITH.",
+        help: "Solo se permiten consultas SELECT o WITH. Puedes crearla desde Conexiones → Constructor SQL.",
       },
       { key: "batch_size", label: "Tamaño de lote", kind: "number" },
     ],
@@ -113,8 +121,9 @@ export const PROCESSOR_CATALOG: ProcessorDef[] = [
         key: "connection",
         label: "Conexión MongoDB",
         kind: "connectionRef",
-        connectionKind: "database",
+        connectionKind: "mongodb",
         required: true,
+        help: "Alias de un perfil MongoDB en Conexiones.",
       },
       {
         key: "collection",
@@ -165,6 +174,7 @@ export const PROCESSOR_CATALOG: ProcessorDef[] = [
         kind: "connectionRef",
         connectionKind: "database",
         required: true,
+        help: "Alias de un perfil en Conexiones (Postgres, MySQL, Oracle, SQL Server…).",
       },
       { key: "table", label: "Tabla", kind: "text", required: true, placeholder: "public.customers" },
       { key: "mode", label: "Modo", kind: "select", options: ["insert", "upsert"], required: true },
@@ -174,7 +184,7 @@ export const PROCESSOR_CATALOG: ProcessorDef[] = [
         label: "Columnas (origen → destino)",
         kind: "keyValue",
         required: true,
-        help: "Mapa de campo del registro al nombre de columna.",
+        help: "Pulsa «+ Agregar» y mapea campo del registro → columna destino (ej. id → customer_id).",
       },
       {
         key: "conflict_columns",
@@ -204,6 +214,7 @@ export const PROCESSOR_CATALOG: ProcessorDef[] = [
         kind: "connectionRef",
         connectionKind: "database",
         required: true,
+        help: "Alias de un perfil en Conexiones.",
       },
       { key: "table", label: "Tabla", kind: "text", required: true, placeholder: "public.customers" },
       {
@@ -220,6 +231,7 @@ export const PROCESSOR_CATALOG: ProcessorDef[] = [
         label: "Columnas (origen → destino)",
         kind: "keyValue",
         required: true,
+        help: "Pulsa «+ Agregar» y mapea campo del registro → columna destino.",
       },
       {
         key: "conflict_columns",
@@ -247,8 +259,9 @@ export const PROCESSOR_CATALOG: ProcessorDef[] = [
         key: "connection",
         label: "Conexión MongoDB",
         kind: "connectionRef",
-        connectionKind: "database",
+        connectionKind: "mongodb",
         required: true,
+        help: "Alias de un perfil MongoDB en Conexiones.",
       },
       {
         key: "collection",
@@ -299,13 +312,65 @@ export const PROCESSOR_CATALOG: ProcessorDef[] = [
         kind: "connectionRef",
         connectionKind: "kafka",
         required: true,
+        help: "Nombre de una conexión Kafka definida en Configuración del flujo.",
       },
-      { key: "topic", label: "Topic", kind: "text", required: true },
+      { key: "topic", label: "Topic", kind: "text", required: true, placeholder: "events.customers" },
       { key: "key_field", label: "Campo de clave (registros)", kind: "text" },
       { key: "key_attribute", label: "Atributo de clave (codificado)", kind: "text" },
       { key: "queue_timeout_ms", label: "Timeout de cola (ms)", kind: "number" },
     ],
     defaultConfig: { connection: "", topic: "", queue_timeout_ms: 5000 },
+  },
+  {
+    type: "consume_kafka",
+    label: "Consumir Kafka",
+    category: "source",
+    description:
+      "Lee mensajes con auto-commit desactivado y confirma el offset tras emitir el paquete.",
+    fields: [
+      {
+        key: "connection",
+        label: "Conexión",
+        kind: "connectionRef",
+        connectionKind: "kafka",
+        required: true,
+        help: "Nombre de una conexión Kafka definida en Configuración del flujo.",
+      },
+      { key: "topic", label: "Topic", kind: "text", required: true, placeholder: "events.customers" },
+      {
+        key: "group_id",
+        label: "Grupo de consumidores",
+        kind: "text",
+        required: true,
+        placeholder: "jaiva-readers",
+      },
+      {
+        key: "auto_offset_reset",
+        label: "Offset inicial",
+        kind: "select",
+        options: ["earliest", "latest"],
+        help: "Solo aplica cuando el grupo aún no tiene offsets comprometidos.",
+      },
+      { key: "max_poll_messages", label: "Máx. mensajes por ciclo", kind: "number" },
+      { key: "max_poll_ms", label: "Timeout de poll (ms)", kind: "number" },
+      { key: "max_idle_ms", label: "Idle máximo (ms)", kind: "number" },
+      {
+        key: "decode",
+        label: "Decodificación",
+        kind: "select",
+        options: ["json", "bytes"],
+      },
+    ],
+    defaultConfig: {
+      connection: "",
+      topic: "",
+      group_id: "",
+      auto_offset_reset: "earliest",
+      max_poll_messages: 100,
+      max_poll_ms: 1000,
+      max_idle_ms: 2000,
+      decode: "json",
+    },
   },
   {
     type: "rename_fields",

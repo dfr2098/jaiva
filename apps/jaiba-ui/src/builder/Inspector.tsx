@@ -1,4 +1,4 @@
-import { CATALOG_BY_TYPE, CATEGORY_TAG } from "./catalog";
+import { CATALOG_BY_TYPE, CATEGORY_TAG, type FieldDef } from "./catalog";
 import { FieldEditor } from "./fields";
 import {
   EXECUTION_MODES,
@@ -11,9 +11,7 @@ import {
 
 interface InspectorProps {
   node: ProcessorNode | null;
-  databaseConnectionNames: string[];
-  postgresConnectionNames: string[];
-  kafkaConnectionNames: string[];
+  connectionNamesFor: (field: FieldDef) => string[];
   onChangeProcessorId: (id: string) => void;
   onChangeConfig: (key: string, value: unknown) => void;
   onChangeRetry: (retry: RetrySettings) => void;
@@ -24,9 +22,7 @@ interface InspectorProps {
 
 export function Inspector({
   node,
-  databaseConnectionNames,
-  postgresConnectionNames,
-  kafkaConnectionNames,
+  connectionNamesFor,
   onChangeProcessorId,
   onChangeConfig,
   onChangeRetry,
@@ -77,13 +73,7 @@ export function Inspector({
               key={field.key}
               field={field}
               value={node.data.config[field.key]}
-              connectionNames={
-                field.connectionKind === "kafka"
-                  ? kafkaConnectionNames
-                  : field.connectionKind === "postgres"
-                    ? postgresConnectionNames
-                  : databaseConnectionNames
-              }
+              connectionNames={connectionNamesFor(field)}
               onChange={(value) => onChangeConfig(field.key, value)}
             />
           ))}

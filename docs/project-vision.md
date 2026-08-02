@@ -66,7 +66,7 @@ flowchart TB
     SIM --> SDK
     SDK --> PLUGINS["Plugins oficiales / procesos / WASM"]
     CM --> SECRETS["SecretStore<br/>Vault · Kubernetes · entorno"]
-    PLUGINS --> SYSTEMS["Oracle · PostgreSQL · SQL Server<br/>MySQL · Kafka · OPC-UA · REST"]
+    PLUGINS --> SYSTEMS["Oracle · PostgreSQL · SQL Server<br/>MySQL · MongoDB · Kafka · OPC-UA · REST"]
 ```
 
 ## Camino de un flujo

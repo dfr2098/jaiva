@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 jaiba-plugin-sdk = { path = "../jaiba-plugin-sdk" }
 aes-gcm.workspace = true
+argon2.workspace = true
 async-trait.workspace = true
 base64 = "0.21"
 getrandom = "0.2"
@@ -18,3 +19,4 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+zeroize = { version = "1", features = ["derive"] }

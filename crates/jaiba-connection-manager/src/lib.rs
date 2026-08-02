@@ -24,7 +24,7 @@ use uuid::Uuid;
 mod secure;
 
 pub use secure::{
-    EncryptedFileSecretStore, FileAuditSink, FileProfileRepository, SecureStoreError, master_key_id,
+    EncryptedFileSecretStore, FileAuditSink, FileProfileRepository, SecureStoreError,
 };
 
 #[derive(Debug, Error)]

@@ -126,6 +126,30 @@ fn build_url(
     endpoint: &ConnectionEndpoint,
     secret: &ConnectionSecret,
 ) -> Result<String, FlowError> {
+    // MongoDB: si el perfil se guardó con URI completa (Atlas/SRV/replicaSet),
+    // úsala tal cual aplicando solo usuario/contraseña actuales del secreto.
+    if scheme == "mongodb" {
+        if let Some(stored) = secret
+            .options
+            .get("connection_url")
+            .map(String::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            let mut url = Url::parse(stored).map_err(|error| {
+                FlowError::Configuration(format!("URL MongoDB guardada inválida: {error}"))
+            })?;
+            url.set_username(&secret.username).map_err(|_| {
+                FlowError::Configuration("no se pudo fijar el usuario en la URL MongoDB".to_owned())
+            })?;
+            url.set_password(Some(&secret.password)).map_err(|_| {
+                FlowError::Configuration(
+                    "no se pudo fijar la contraseña en la URL MongoDB".to_owned(),
+                )
+            })?;
+            return Ok(url.to_string());
+        }
+    }
+
     let mut url = Url::parse(&format!("{scheme}://{}:{}", endpoint.host, endpoint.port))
         .map_err(|error| FlowError::Configuration(format!("URL de conexión inválida: {error}")))?;
     url.set_username(&secret.username).map_err(|_| {
@@ -145,6 +169,17 @@ fn build_url(
         "postgres" => {
             url.query_pairs_mut()
                 .append_pair("sslmode", if endpoint.ssl { "require" } else { "disable" });
+        }
+        "sqlserver" => {
+            // Tiberius valida certificados por defecto; solo opt-in a confiar
+            // en certificados no verificados cuando SSL está desactivado.
+            if endpoint.ssl {
+                url.query_pairs_mut().append_pair("sslmode", "require");
+            } else {
+                url.query_pairs_mut()
+                    .append_pair("sslmode", "disable")
+                    .append_pair("TrustServerCertificate", "true");
+            }
         }
         "mysql" if endpoint.ssl => {
             url.query_pairs_mut().append_pair("ssl-mode", "REQUIRED");
@@ -283,5 +318,32 @@ mod tests {
         assert!(url.contains("maxPoolSize=7"));
         assert!(url.contains("serverSelectionTimeoutMS=5000"));
         assert!(!url.contains("p@ss/word"));
+    }
+
+    #[test]
+    fn prefers_stored_mongodb_connection_url() {
+        let mongodb = endpoint();
+        let mut options = BTreeMap::new();
+        options.insert(
+            "connection_url".to_owned(),
+            "mongodb+srv://old:oldpass@cluster.example.net/appdb?retryWrites=true&w=majority"
+                .to_owned(),
+        );
+        let url = build_url(
+            "mongodb",
+            &mongodb,
+            &ConnectionSecret {
+                username: "app".to_owned(),
+                password: "s3cret".to_owned(),
+                options,
+            },
+        )
+        .expect("build MongoDB URL from stored URI");
+
+        assert!(url.starts_with("mongodb+srv://app:"));
+        assert!(url.contains("@cluster.example.net/appdb"));
+        assert!(url.contains("retryWrites=true"));
+        assert!(!url.contains("oldpass"));
+        assert!(!url.contains("db.internal"));
     }
 }

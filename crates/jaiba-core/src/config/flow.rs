@@ -12,11 +12,100 @@ pub struct FlowConfig {
     pub database_connections: HashMap<String, DatabaseConnectionConfig>,
     #[serde(default)]
     pub kafka_connections: HashMap<String, KafkaConnectionConfig>,
+    /// Ejecución continua (intervalo, cron o webhook). Ausente = una sola pasada.
+    #[serde(default)]
+    pub schedule: Option<ScheduleConfig>,
     #[serde(default)]
     pub engine: EngineConfig,
     pub processors: Vec<ProcessorConfig>,
     #[serde(default)]
     pub connections: Vec<ConnectionConfig>,
+}
+
+/// Calendario / disparador de ejecuciones repetidas del flujo.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduleConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub trigger: ScheduleTrigger,
+    /// Zona IANA (p. ej. `America/Mexico_City`). Obligatoria para cron.
+    #[serde(default)]
+    pub timezone: Option<String>,
+    #[serde(default)]
+    pub overlap: OverlapPolicy,
+    #[serde(default)]
+    pub catch_up: CatchUpPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ScheduleTrigger {
+    Interval {
+        every_seconds: u64,
+    },
+    /// Expresión cron de 6 campos (seg min hora día mes dow), p. ej. `0 0 2 * * *`.
+    Cron {
+        expression: String,
+    },
+    /// Disparo solo vía `POST /api/v1/flows/{id}/trigger`.
+    Webhook {},
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlapPolicy {
+    /// Si aún corre, omitir este disparo.
+    #[default]
+    Skip,
+    /// Esperar a que termine y entonces arrancar.
+    Queue,
+    /// Drenar/detener la ejecución actual y arrancar de nuevo.
+    Replace,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatchUpPolicy {
+    /// No recuperar disparos perdidos tras reinicio.
+    #[default]
+    None,
+    /// Como máximo un disparo inmediato si se perdió la ventana.
+    One,
+}
+
+impl ScheduleConfig {
+    /// Valida intervalo, expresión cron y zona horaria.
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.enabled {
+            return Ok(());
+        }
+        match &self.trigger {
+            ScheduleTrigger::Interval { every_seconds } => {
+                if *every_seconds == 0 {
+                    return Err("schedule.interval.every_seconds must be greater than zero".into());
+                }
+            }
+            ScheduleTrigger::Cron { expression } => {
+                let trimmed = expression.trim();
+                if trimmed.is_empty() {
+                    return Err("schedule.cron.expression cannot be empty".into());
+                }
+                trimmed
+                    .parse::<cron::Schedule>()
+                    .map_err(|error| format!("invalid cron expression: {error}"))?;
+                let tz = self
+                    .timezone
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("UTC");
+                tz.parse::<chrono_tz::Tz>()
+                    .map_err(|_| format!("unknown timezone '{tz}'"))?;
+            }
+            ScheduleTrigger::Webhook {} => {}
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

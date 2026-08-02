@@ -1,9 +1,14 @@
 import { useState } from "react";
+import type { FlowRecord } from "../types";
 
 interface TopMenuProps {
   engineOnline: boolean;
   downloadDisabled: boolean;
   saveState: "saved" | "saving" | "unsaved";
+  flowId: string;
+  registeredFlows: FlowRecord[];
+  onSelectFlow: (flowId: string) => void;
+  onNewDraft: () => void;
   onViewYaml: () => void;
   onDownload: () => void;
   onImport: () => void;
@@ -18,6 +23,10 @@ export function TopMenu({
   engineOnline,
   downloadDisabled,
   saveState,
+  flowId,
+  registeredFlows,
+  onSelectFlow,
+  onNewDraft,
   onViewYaml,
   onDownload,
   onImport,
@@ -34,8 +43,42 @@ export function TopMenu({
     action();
   };
 
+  const knownIds = new Set(registeredFlows.map((flow) => flow.id));
+  const options = [...registeredFlows].sort((left, right) =>
+    left.id.localeCompare(right.id),
+  );
+
   return (
     <div className="ide-menubar">
+      <label className="flow-switcher">
+        <span>Flujo</span>
+        <select
+          value={knownIds.has(flowId) ? flowId : ""}
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value === "__new__") {
+              onNewDraft();
+              return;
+            }
+            if (value) onSelectFlow(value);
+          }}
+          title="Cambiar entre flujos del registro"
+        >
+          {!knownIds.has(flowId) ? (
+            <option value="">
+              {flowId ? `${flowId} (local)` : "Borrador local"}
+            </option>
+          ) : null}
+          {options.map((flow) => (
+            <option key={flow.id} value={flow.id}>
+              {flow.id}
+              {flow.active_version != null ? ` · v${flow.active_version}` : ""}
+            </option>
+          ))}
+          <option value="__new__">＋ Nuevo borrador local</option>
+        </select>
+      </label>
+
       <div className="menu-group">
         <button
           type="button"
@@ -88,7 +131,11 @@ export function TopMenu({
         {engineOnline ? "Motor en línea" : "Motor desconectado"}
       </span>
       <span className={`draft-state ${saveState}`}>
-        {saveState === "saved" ? "Borrador guardado" : saveState === "saving" ? "Guardando…" : "Cambios pendientes"}
+        {saveState === "saved"
+          ? "Borrador guardado"
+          : saveState === "saving"
+            ? "Guardando…"
+            : "Cambios pendientes"}
       </span>
     </div>
   );

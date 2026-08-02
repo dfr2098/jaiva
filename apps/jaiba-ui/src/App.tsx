@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { jaivaApi } from "./api";
 import {
   CrabMark,
@@ -11,7 +11,7 @@ import {
   RuntimeDetails,
   Status,
 } from "./components";
-import type { FlowAction, FlowSnapshot } from "./types";
+import type { FlowAction, FlowRecord, FlowSnapshot } from "./types";
 
 const FlowBuilder = lazy(() =>
   import("./builder/FlowBuilder").then((module) => ({ default: module.FlowBuilder })),
@@ -27,8 +27,25 @@ type AppView = "monitor" | "builder" | "connections";
 const formatNumber = (value = 0) =>
   new Intl.NumberFormat("es-MX").format(value);
 
+function pickFlow(
+  flows: FlowSnapshot[],
+  selectedId: string | null,
+  fallback: FlowSnapshot | null,
+): FlowSnapshot | null {
+  if (selectedId) {
+    const match = flows.find((item) => item.flow_id === selectedId);
+    if (match) return match;
+  }
+  if (fallback && flows.some((item) => item.flow_id === fallback.flow_id)) {
+    return fallback;
+  }
+  return flows[0] ?? fallback;
+}
+
 export default function App() {
-  const [flow, setFlow] = useState<FlowSnapshot | null>(null);
+  const [flows, setFlows] = useState<FlowSnapshot[]>([]);
+  const [registry, setRegistry] = useState<FlowRecord[]>([]);
+  const [selectedFlowId, setSelectedFlowId] = useState<string | null>(null);
   const [online, setOnline] = useState(false);
   const [message, setMessage] = useState("Conectando con el motor");
   const [error, setError] = useState<string | null>(null);
@@ -36,12 +53,47 @@ export default function App() {
   const [view, setView] = useState<AppView>("monitor");
   const [transport, setTransport] = useState<"socket" | "polling">("polling");
 
+  const flow = useMemo(
+    () => pickFlow(flows, selectedFlowId, null),
+    [flows, selectedFlowId],
+  );
+
   const refresh = useCallback(async () => {
     try {
       await jaivaApi.health();
-      setFlow(await jaivaApi.runtime());
+      const [primary, records] = await Promise.all([
+        jaivaApi.runtime(),
+        jaivaApi.listFlows().catch(() => [] as FlowRecord[]),
+      ]);
+      const runtimeById = new Map<string, FlowSnapshot>();
+      if (primary) runtimeById.set(primary.flow_id, primary);
+      await Promise.all(
+        records.map(async (record) => {
+          try {
+            const detail = await jaivaApi.getFlow(record.id);
+            if (detail.runtime) runtimeById.set(detail.id, detail.runtime);
+          } catch {
+            // Flow may exist in registry without a live supervisor.
+          }
+        }),
+      );
+      const next = [...runtimeById.values()].sort((left, right) =>
+        left.flow_id.localeCompare(right.flow_id),
+      );
+      setFlows(next);
+      setRegistry(records);
+      setSelectedFlowId((current) => {
+        if (current && (runtimeById.has(current) || records.some((r) => r.id === current))) {
+          return current;
+        }
+        return next[0]?.flow_id ?? records[0]?.id ?? null;
+      });
       setOnline(true);
-      setMessage("Motor Jaiba disponible");
+      setMessage(
+        next.length > 1
+          ? `${next.length} flujos en runtime`
+          : "Motor Jaiba disponible",
+      );
       setError(null);
     } catch (requestError) {
       setOnline(false);
@@ -59,9 +111,25 @@ export default function App() {
     void refresh();
     const socket = jaivaApi.runtimeSocket((event) => {
       if (event.kind !== "runtime_snapshot") return;
-      setFlow(event.flow);
+      const next =
+        event.flows && event.flows.length > 0
+          ? [...event.flows].sort((left, right) =>
+              left.flow_id.localeCompare(right.flow_id),
+            )
+          : event.flow
+            ? [event.flow]
+            : [];
+      setFlows(next);
+      setSelectedFlowId((current) => {
+        if (current && next.some((item) => item.flow_id === current)) return current;
+        return next[0]?.flow_id ?? current;
+      });
       setOnline(true);
-      setMessage("Motor Jaiba · tiempo real");
+      setMessage(
+        next.length > 1
+          ? `${next.length} flujos · tiempo real`
+          : "Motor Jaiba · tiempo real",
+      );
       setError(null);
     });
     socket.addEventListener("open", () => {
@@ -89,7 +157,14 @@ export default function App() {
     setBusy(action);
     setError(null);
     try {
-      setFlow(await jaivaApi.mutate(flow.flow_id, action));
+      const snapshot = await jaivaApi.mutate(flow.flow_id, action);
+      setFlows((current) => {
+        const others = current.filter((item) => item.flow_id !== snapshot.flow_id);
+        if (action === "stop") return others;
+        return [...others, snapshot].sort((left, right) =>
+          left.flow_id.localeCompare(right.flow_id),
+        );
+      });
       setMessage(`Acción ${action} aceptada`);
       window.setTimeout(() => void refresh(), 350);
     } catch (requestError) {
@@ -104,6 +179,27 @@ export default function App() {
   };
 
   const metrics = flow?.metrics;
+  const flowOptions = useMemo(() => {
+    const ids = new Set<string>();
+    const options: { id: string; label: string }[] = [];
+    for (const item of flows) {
+      ids.add(item.flow_id);
+      options.push({
+        id: item.flow_id,
+        label: `${item.flow_id} · ${item.control.state}`,
+      });
+    }
+    for (const record of registry) {
+      if (ids.has(record.id)) continue;
+      options.push({
+        id: record.id,
+        label: `${record.id} · registro${
+          record.active_version != null ? ` v${record.active_version}` : ""
+        }`,
+      });
+    }
+    return options.sort((left, right) => left.id.localeCompare(right.id));
+  }, [flows, registry]);
 
   return (
     <div className="app-shell">
@@ -158,22 +254,44 @@ export default function App() {
       <main>
         <section className="hero">
           <div>
-            <p className="eyebrow">CONTROL PLANE · FASE 8.1</p>
+            <p className="eyebrow">CONTROL PLANE · FASE 5</p>
             <h1>
               La fuerza del motor.
               <br />
               <em>La claridad del flujo.</em>
             </h1>
             <p className="hero-copy">
-              Jaiba UI es un cliente opcional inspirado en los tonos de la
-              jaiba: caparazón verde petróleo, pinzas azules, óxido y arena.
-              Jaiba continúa trabajando aunque esta interfaz esté detenida.
+              Supervisa varios flujos a la vez: elige cuál observar, controla su
+              ciclo de vida y revisa provenance o dead-letter por flujo.
             </p>
           </div>
           <aside className="hero-state">
-            <span>Estado del flujo</span>
+            <span>Flujo seleccionado</span>
+            <label className="monitor-flow-switcher">
+              <select
+                value={selectedFlowId ?? ""}
+                onChange={(event) =>
+                  setSelectedFlowId(event.target.value || null)
+                }
+                disabled={flowOptions.length === 0}
+              >
+                {flowOptions.length === 0 ? (
+                  <option value="">Sin flujos</option>
+                ) : (
+                  flowOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))
+                )}
+              </select>
+            </label>
             <LifecycleBadge state={flow?.control?.state} />
-            <small>{flow?.flow_id ?? "Esperando un flujo"}</small>
+            <small>
+              {flow
+                ? `${flows.length} en runtime · ${registry.length} en registro`
+                : "Esperando un flujo"}
+            </small>
           </aside>
         </section>
 

@@ -6,8 +6,8 @@ Este documento describe el runtime. La arquitectura completa de la plataforma
 se encuentra en [`project-vision.md`](project-vision.md).
 
 Jaiba es un motor independiente de integración y movimiento de datos escrito en
-Rust. DMA puede utilizarlo mediante flujos y plugins, pero el núcleo no conoce
-tablas ni reglas de DMA.
+Rust. Otros sistemas pueden utilizarlo mediante flujos y plugins; el núcleo no
+conoce tablas ni reglas de negocio ajenas.
 
 ## Componentes
 
@@ -24,6 +24,7 @@ flowchart LR
     CONNECTIONS --> PG[(PostgreSQL)]
     CONNECTIONS --> MYSQL[(MySQL)]
     CONNECTIONS --> ORACLE[(Oracle)]
+    CONNECTIONS --> MONGO[(MongoDB)]
     CONNECTIONS --> MSSQL[(SQL Server)]
     CONNECTIONS --> KAFKA[(Kafka)]
 

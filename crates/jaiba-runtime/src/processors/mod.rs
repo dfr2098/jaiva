@@ -5,6 +5,8 @@ mod log_records;
 #[cfg(feature = "mongodb-driver")]
 mod mongodb_support;
 #[cfg(feature = "kafka-driver")]
+mod consume_kafka;
+#[cfg(feature = "kafka-driver")]
 mod publish_kafka;
 mod put_database;
 #[cfg(feature = "mongodb-driver")]
@@ -25,6 +27,8 @@ use checkpoint::{LoadCheckpoint, SaveCheckpoint};
 use encode::Encode;
 use generate_records::GenerateRecords;
 use log_records::LogRecords;
+#[cfg(feature = "kafka-driver")]
+use consume_kafka::ConsumeKafka;
 #[cfg(feature = "kafka-driver")]
 use publish_kafka::PublishKafka;
 use put_database::PutDatabase;
@@ -50,6 +54,10 @@ pub fn default_registry() -> ProcessorRegistry {
     #[cfg(feature = "kafka-driver")]
     registry.register("publish_kafka", |config| {
         Ok(Arc::new(PublishKafka::from_config(config)?))
+    });
+    #[cfg(feature = "kafka-driver")]
+    registry.register("consume_kafka", |config| {
+        Ok(Arc::new(ConsumeKafka::from_config(config)?))
     });
     registry.register("query_postgres", |config| {
         Ok(Arc::new(QueryPostgres::from_config(config)?))

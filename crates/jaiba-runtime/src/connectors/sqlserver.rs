@@ -46,8 +46,11 @@ impl SqlServerWriter {
         config.port(url.port().unwrap_or(1433));
         config.database(database);
         config.authentication(AuthMethod::sql_server(url.username(), password));
-        // Local containers normally use a self-signed certificate.
-        config.trust_cert();
+        // Solo aceptar certificados no verificados cuando se pide explícitamente
+        // (sslmode=disable o TrustServerCertificate=true). Por defecto se valida.
+        if sqlserver_trust_cert(&url) {
+            config.trust_cert();
+        }
         Ok(Self { config })
     }
 
@@ -225,10 +228,36 @@ fn connector_error(error: impl std::fmt::Display) -> FlowError {
     FlowError::DatabaseConnector(error.to_string())
 }
 
+/// Opt-in explícito a aceptar certificados no verificados.
+fn sqlserver_trust_cert(url: &Url) -> bool {
+    url.query_pairs().any(|(key, value)| {
+        let key = key.to_ascii_lowercase();
+        let value = value.to_ascii_lowercase();
+        match key.as_str() {
+            "trustservercertificate" => matches!(value.as_str(), "true" | "1" | "yes"),
+            "sslmode" => value == "disable",
+            _ => false,
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn trusts_certificate_only_when_opted_in() {
+        assert!(!sqlserver_trust_cert(
+            &Url::parse("sqlserver://sa:p@localhost:1433/db?sslmode=require").unwrap()
+        ));
+        assert!(sqlserver_trust_cert(
+            &Url::parse("sqlserver://sa:p@localhost:1433/db?sslmode=disable").unwrap()
+        ));
+        assert!(sqlserver_trust_cert(
+            &Url::parse("sqlserver://sa:p@localhost:1433/db?TrustServerCertificate=true").unwrap()
+        ));
+    }
 
     #[test]
     fn generates_concurrency_safe_upsert() {

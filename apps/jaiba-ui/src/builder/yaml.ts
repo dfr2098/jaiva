@@ -3,13 +3,17 @@ import { CATALOG_BY_TYPE } from "./catalog";
 import {
   ENGINE_DEFAULTS,
   RETRY_DEFAULTS,
+  SCHEDULE_DEFAULTS,
   SCHEDULING_DEFAULTS,
   SIMULATION_DEFAULTS,
+  type CatchUpPolicy,
   type DatabaseConnection,
   type ConnectionEdge,
   type FlowMeta,
   type KafkaConnection,
+  type OverlapPolicy,
   type ProcessorNode,
+  type ScheduleTriggerType,
 } from "./model";
 
 type Yaml = Record<string, unknown>;
@@ -151,6 +155,31 @@ export function buildFlowObject(
     );
   }
 
+  if (meta.schedule.enabled) {
+    const schedule: Yaml = {
+      enabled: true,
+      overlap: meta.schedule.overlap,
+      catch_up: meta.schedule.catchUp,
+    };
+    if (meta.schedule.triggerType === "interval") {
+      schedule.trigger = {
+        type: "interval",
+        every_seconds: meta.schedule.everySeconds,
+      };
+    } else if (meta.schedule.triggerType === "cron") {
+      schedule.trigger = {
+        type: "cron",
+        expression: meta.schedule.cronExpression,
+      };
+      if (meta.schedule.timezone.trim()) {
+        schedule.timezone = meta.schedule.timezone.trim();
+      }
+    } else {
+      schedule.trigger = { type: "webhook" };
+    }
+    flow.schedule = schedule;
+  }
+
   const engine = engineBlock(meta);
   if (engine) flow.engine = engine;
 
@@ -242,18 +271,48 @@ function longestPath(nodes: ProcessorNode[], edges: ConnectionEdge[]): number {
   return Math.max(0, ...nodes.map((node) => visit(node.id)));
 }
 
+export interface ValidateFlowOptions {
+  /** Alias conocidos del Connection Manager (se resuelven en runtime). */
+  knownDatabaseAliases?: string[];
+  knownKafkaAliases?: string[];
+}
+
 export function validateFlow(
   meta: FlowMeta,
   nodes: ProcessorNode[],
   edges: ConnectionEdge[],
+  options: ValidateFlowOptions = {},
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
+  const knownDatabaseAliases = new Set(
+    (options.knownDatabaseAliases ?? []).map((name) => name.trim()).filter(Boolean),
+  );
+  const knownKafkaAliases = new Set(
+    (options.knownKafkaAliases ?? []).map((name) => name.trim()).filter(Boolean),
+  );
 
   if (!meta.id.trim()) {
     issues.push({ level: "error", message: "El flujo necesita un identificador." });
   }
   if (nodes.length === 0) {
     issues.push({ level: "error", message: "Agrega al menos un procesador." });
+  }
+  if (meta.schedule.enabled) {
+    if (meta.schedule.triggerType === "interval" && meta.schedule.everySeconds < 1) {
+      issues.push({
+        level: "error",
+        message: "La agenda por intervalo necesita every_seconds ≥ 1.",
+      });
+    }
+    if (
+      meta.schedule.triggerType === "cron" &&
+      !meta.schedule.cronExpression.trim()
+    ) {
+      issues.push({
+        level: "error",
+        message: "La agenda cron necesita una expresión.",
+      });
+    }
   }
   if (meta.engine.queue_capacity < 1 || meta.engine.max_concurrency < 1) {
     issues.push({ level: "error", message: "Las capacidades del motor deben ser mayores que cero." });
@@ -359,29 +418,54 @@ export function validateFlow(
 
     const connection = String(node.data.config.connection ?? "").trim();
     const connectionField = def.fields.find((field) => field.key === "connection");
+    const kind = connectionField?.connectionKind;
+    const localDb = databaseNames.includes(connection);
+    const aliasDb = knownDatabaseAliases.has(connection);
+    const localKafka = kafkaNames.includes(connection);
+    const aliasKafka = knownKafkaAliases.has(connection);
+
     if (
       connection &&
-      (connectionField?.connectionKind === "database" ||
-        connectionField?.connectionKind === "postgres") &&
-      !databaseNames.includes(connection)
+      kind &&
+      kind !== "kafka" &&
+      !localDb &&
+      !aliasDb
     ) {
-      issues.push({ level: "error", message: `'${id}' referencia una conexión de base de datos inexistente: '${connection}'.` });
+      issues.push({
+        level: "error",
+        message: `'${id}' referencia una conexión inexistente: '${connection}'. Créala en Conexiones o en Configuración del flujo.`,
+      });
     }
     if (
       connection &&
-      connectionField?.connectionKind === "postgres" &&
+      kind === "postgres" &&
+      !aliasDb &&
       !meta.databaseConnections.some(
         (candidate) => candidate.name === connection && candidate.type === "postgres",
       )
     ) {
-      issues.push({ level: "error", message: `'${id}' necesita una conexión PostgreSQL: '${connection}'.` });
+      // Si el alias viene del Connection Manager, el tipo se valida en runtime.
+      if (localDb) {
+        issues.push({
+          level: "error",
+          message: `'${id}' necesita una conexión PostgreSQL: '${connection}'.`,
+        });
+      }
     }
-    if (
-      connection &&
-      connectionField?.connectionKind === "kafka" &&
-      !kafkaNames.includes(connection)
-    ) {
-      issues.push({ level: "error", message: `'${id}' referencia una conexión Kafka inexistente: '${connection}'.` });
+    if (connection && kind === "oracle" && localDb && !aliasDb) {
+      const local = meta.databaseConnections.find((candidate) => candidate.name === connection);
+      if (local && local.type && local.type !== "oracle") {
+        issues.push({
+          level: "error",
+          message: `'${id}' necesita una conexión Oracle: '${connection}'.`,
+        });
+      }
+    }
+    if (connection && kind === "kafka" && !localKafka && !aliasKafka) {
+      issues.push({
+        level: "error",
+        message: `'${id}' referencia una conexión Kafka inexistente: '${connection}'. Defínela en Configuración del flujo.`,
+      });
     }
 
     if (
@@ -491,6 +575,18 @@ export function parseFlowYaml(content: string): ImportedFlow {
       client_id: stringOr(value.client_id, "jaiva"),
     };
   });
+  const scheduleRoot = object(root.schedule);
+  const trigger = object(scheduleRoot.trigger);
+  const triggerType = (["interval", "cron", "webhook"].includes(stringOr(trigger.type))
+    ? stringOr(trigger.type)
+    : SCHEDULE_DEFAULTS.triggerType) as ScheduleTriggerType;
+  const overlap = (["skip", "queue", "replace"].includes(stringOr(scheduleRoot.overlap))
+    ? stringOr(scheduleRoot.overlap)
+    : SCHEDULE_DEFAULTS.overlap) as OverlapPolicy;
+  const catchUp = (["none", "one"].includes(stringOr(scheduleRoot.catch_up))
+    ? stringOr(scheduleRoot.catch_up)
+    : SCHEDULE_DEFAULTS.catchUp) as CatchUpPolicy;
+
   const meta: FlowMeta = {
     id: stringOr(root.id, "flujo"),
     parameters: Object.entries(parameters).map(([name, value]) => ({
@@ -499,6 +595,15 @@ export function parseFlowYaml(content: string): ImportedFlow {
     })),
     databaseConnections,
     kafkaConnections,
+    schedule: {
+      enabled: Boolean(scheduleRoot.enabled),
+      triggerType,
+      everySeconds: numberOr(trigger.every_seconds, SCHEDULE_DEFAULTS.everySeconds),
+      cronExpression: stringOr(trigger.expression, SCHEDULE_DEFAULTS.cronExpression),
+      timezone: stringOr(scheduleRoot.timezone, SCHEDULE_DEFAULTS.timezone),
+      overlap,
+      catchUp,
+    },
     engine: {
       queue_capacity: numberOr(engine.queue_capacity, ENGINE_DEFAULTS.queue_capacity),
       max_concurrency: numberOr(engine.max_concurrency, ENGINE_DEFAULTS.max_concurrency),

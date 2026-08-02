@@ -290,9 +290,9 @@ impl FlowRegistry {
         id: &str,
         version: u32,
     ) -> Result<FlowRecord, RegistryError> {
-        if self.running.read().await.contains_key(id) {
-            let running_version = self.running.read().await.get(id).map(|r| r.version);
-            if running_version == Some(version) {
+        {
+            let running = self.running.read().await;
+            if running.get(id).map(|entry| entry.version) == Some(version) {
                 return Err(RegistryError::InvalidState(
                     "no se puede archivar la versión en ejecución; detén el flujo primero"
                         .to_owned(),
@@ -374,33 +374,6 @@ impl FlowRegistry {
         self.activate(id, target, start, resolver, true).await
     }
 
-    pub async fn rollback_source(&self, id: &str) -> Result<String, RegistryError> {
-        let guard = self.records.read().await;
-        let record = guard
-            .get(id)
-            .ok_or_else(|| RegistryError::NotFound(format!("flujo '{id}' no encontrado")))?;
-        let current = record.active_version;
-        record
-            .versions
-            .iter()
-            .filter(|version| {
-                version.deployed_at.is_some()
-                    && Some(version.version) != current
-                    && matches!(
-                        version.state,
-                        FlowVersionState::Archived | FlowVersionState::Deployed
-                    )
-            })
-            .max_by_key(|version| version.version)
-            .map(|version| version.source.clone())
-            .ok_or_else(|| {
-                RegistryError::InvalidState(
-                    "no hay una versión previa desplegada para hacer rollback".to_owned(),
-                )
-            })
-    }
-
-    #[allow(clippy::too_many_arguments)]
     async fn activate(
         &self,
         id: &str,
@@ -437,7 +410,9 @@ impl FlowRegistry {
         // 2. Validar + preparar procesadores (build en seco).
         let config = parse_and_validate(&source).map_err(RegistryError::Validation)?;
 
-        // 3. Comprobar recursos: límite global de flujos concurrentes.
+        // 3. Comprobar recursos: el cupo cuenta flujos en `running`.
+        //    Con start=true se sustituye o se añade una entrada; con start=false
+        //    se elimina la entrada (si existía) y no se inserta otra.
         if start {
             let running = self.running.read().await;
             let already_running = running.contains_key(id);
@@ -459,81 +434,117 @@ impl FlowRegistry {
             None
         };
 
-        // 5. Drenar la versión anterior en ejecución (si la hay).
-        let previous = self.running.write().await.remove(id);
-        if let Some(previous) = previous.as_ref()
-            && let Err(error) = previous.supervisor.stop_gracefully().await
-        {
-            // No pudimos drenar: reinsertamos y abortamos sin tocar el estado.
-            self.running
-                .write()
-                .await
-                .insert(id.to_owned(), previous_into_running(previous));
-            return Err(RegistryError::Internal(error));
-        }
-
-        // 6. Activar la nueva versión.
         let metrics = FlowMetrics::default();
-        let supervisor = FlowSupervisor::new(config.clone(), metrics.clone())
+        let supervisor = FlowSupervisor::new(config, metrics.clone())
             .with_connection_resolver(resolver.clone());
-        if start && let Err(error) = supervisor.start().await {
-            // Restaurar la versión anterior en caso de fallo de activación.
-            if let Some(previous) = previous
-                && let Ok(previous_config) = parse_and_validate(&previous.source)
-            {
-                let restored = FlowSupervisor::new(previous_config, previous.metrics.clone())
-                    .with_connection_resolver(resolver);
-                let _ = restored.start().await;
-                self.running.write().await.insert(
-                    id.to_owned(),
-                    RunningFlow {
-                        version: previous.version,
-                        source: previous.source,
-                        supervisor: restored,
-                        metrics: previous.metrics,
-                        repository: previous.repository,
-                    },
-                );
-                tracing::error!(flow_id = %id, %error, "activación fallida; versión anterior restaurada");
-            }
-            return Err(RegistryError::Internal(error));
-        }
 
-        self.running.write().await.insert(
-            id.to_owned(),
-            RunningFlow {
-                version,
-                source: source.clone(),
-                supervisor: supervisor.clone(),
-                metrics,
-                repository,
-            },
-        );
+        if start {
+            // 5. Drenar la versión anterior en ejecución (si la hay).
+            let previous = self.running.write().await.remove(id);
+            if let Some(previous) = previous.as_ref()
+                && let Err(error) = previous.supervisor.stop_gracefully().await
+            {
+                self.running
+                    .write()
+                    .await
+                    .insert(id.to_owned(), previous_into_running(previous));
+                return Err(RegistryError::Internal(error));
+            }
+
+            // 6. Activar la nueva versión; si falla, restaurar siempre la anterior.
+            if let Err(error) = supervisor.start().await {
+                if let Some(previous) = previous {
+                    restore_previous(self, id, previous, resolver).await;
+                    tracing::error!(
+                        flow_id = %id,
+                        %error,
+                        "activación fallida; versión anterior restaurada en el mapa runtime"
+                    );
+                }
+                return Err(RegistryError::Internal(error));
+            }
+
+            self.running.write().await.insert(
+                id.to_owned(),
+                RunningFlow {
+                    version,
+                    source: source.clone(),
+                    supervisor: supervisor.clone(),
+                    metrics,
+                    repository,
+                },
+            );
+        } else {
+            // Despliegue sin arranque: actualiza el registro y detiene cualquier
+            // instancia en ejecución. No se insertan supervisores parados en
+            // `running` (evita evadir JAIBA_MAX_FLOWS y reportar fantasmas).
+            if let Some(previous) = self.running.write().await.remove(id)
+                && let Err(error) = previous.supervisor.stop_gracefully().await
+            {
+                self.running
+                    .write()
+                    .await
+                    .insert(id.to_owned(), previous_into_running(&previous));
+                return Err(RegistryError::Internal(error));
+            }
+        }
 
         // 7. Actualizar estados: la nueva es DEPLOYED, la anterior ARCHIVED.
         {
             let now = now();
             let mut guard = self.records.write().await;
-            if let Some(record) = guard.get_mut(id) {
-                let previous_active = record.active_version;
-                if let Some(previous_active) = previous_active
-                    && previous_active != version
-                    && let Some(entry) = record.version_mut(previous_active)
-                {
-                    entry.state = FlowVersionState::Archived;
-                    entry.archived_at = Some(now);
-                }
-                if let Some(entry) = record.version_mut(version) {
-                    entry.state = FlowVersionState::Deployed;
-                    entry.deployed_at = Some(now);
-                }
-                record.active_version = Some(version);
-                record.updated_at = now;
+            let record = guard.get_mut(id).ok_or_else(|| {
+                RegistryError::Internal(FlowError::Server(format!(
+                    "registro del flujo '{id}' desapareció durante el despliegue"
+                )))
+            })?;
+            let previous_active = record.active_version;
+            if let Some(previous_active) = previous_active
+                && previous_active != version
+                && let Some(entry) = record.version_mut(previous_active)
+            {
+                entry.state = FlowVersionState::Archived;
+                entry.archived_at = Some(now);
             }
+            if let Some(entry) = record.version_mut(version) {
+                entry.state = FlowVersionState::Deployed;
+                entry.deployed_at = Some(now);
+            }
+            record.active_version = Some(version);
+            record.updated_at = now;
         }
-        self.persist().await?;
+        if let Err(error) = self.persist().await {
+            tracing::error!(
+                flow_id = %id,
+                error = %error.message(),
+                "despliegue activo pero no se pudo persistir el registro"
+            );
+        }
 
         Ok(supervisor.snapshot())
+    }
+
+    /// Detiene el flujo y lo saca del mapa `running` para liberar cupo y permitir archivar.
+    pub async fn stop_and_unload(
+        &self,
+        id: &str,
+    ) -> Result<SupervisedFlowSnapshot, RegistryError> {
+        let previous = self
+            .running
+            .write()
+            .await
+            .remove(id)
+            .ok_or_else(|| RegistryError::NotFound(format!("flujo '{id}' no está en ejecución")))?;
+        match previous.supervisor.stop_gracefully().await {
+            Ok(()) => Ok(previous.supervisor.snapshot()),
+            Err(error) => {
+                self.running
+                    .write()
+                    .await
+                    .insert(id.to_owned(), previous_into_running(&previous));
+                Err(RegistryError::Internal(error))
+            }
+        }
     }
 
     async fn version_source(&self, id: &str, version: u32) -> Result<String, RegistryError> {
@@ -694,6 +705,48 @@ fn previous_into_running(previous: &RunningFlow) -> RunningFlow {
     }
 }
 
+/// Reinserta la versión anterior en `running` tras un fallo de activación.
+/// Siempre deja una entrada en el mapa, aunque el re-arranque falle.
+async fn restore_previous(
+    registry: &FlowRegistry,
+    id: &str,
+    previous: RunningFlow,
+    resolver: Option<Arc<dyn ConnectionResolver>>,
+) {
+    let supervisor = match parse_and_validate(&previous.source) {
+        Ok(config) => {
+            let restored =
+                FlowSupervisor::new(config, previous.metrics.clone()).with_connection_resolver(resolver);
+            if let Err(error) = restored.start().await {
+                tracing::error!(
+                    flow_id = %id,
+                    %error,
+                    "no se pudo rearrancar la versión anterior; queda registrada detenida"
+                );
+            }
+            restored
+        }
+        Err(error) => {
+            tracing::error!(
+                flow_id = %id,
+                %error,
+                "YAML de la versión anterior ya no valida; se reinserta el supervisor detenido"
+            );
+            previous.supervisor.clone()
+        }
+    };
+    registry.running.write().await.insert(
+        id.to_owned(),
+        RunningFlow {
+            version: previous.version,
+            source: previous.source,
+            supervisor,
+            metrics: previous.metrics,
+            repository: previous.repository,
+        },
+    );
+}
+
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -837,5 +890,31 @@ connections:
         registry.rollback(&id, false, None).await.unwrap();
         let record = registry.get_record(&id).await.unwrap();
         assert_eq!(record.active_version, Some(v1));
+    }
+
+    #[tokio::test]
+    async fn deploy_without_start_does_not_occupy_running_slot() {
+        let registry = FlowRegistry::new(None, 1);
+        let (id, version) = registry.create_draft(FLOW, None).await.unwrap();
+        registry.validate_version(&id, version).await.unwrap();
+        registry
+            .deploy_version(&id, version, false, None)
+            .await
+            .unwrap();
+        assert!(registry.supervisor(&id).await.is_none());
+        assert_eq!(registry.snapshots().await.len(), 0);
+
+        // Con start=false el cupo no se consume: otro flujo sí puede arrancar.
+        let other = FLOW.replace("registry-test", "otro-flujo");
+        let (other_id, other_version) = registry.create_draft(&other, None).await.unwrap();
+        registry
+            .validate_version(&other_id, other_version)
+            .await
+            .unwrap();
+        registry
+            .deploy_version(&other_id, other_version, true, None)
+            .await
+            .unwrap();
+        assert!(registry.supervisor(&other_id).await.is_some());
     }
 }

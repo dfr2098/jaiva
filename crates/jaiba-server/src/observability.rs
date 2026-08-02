@@ -22,7 +22,7 @@ use tokio::{net::TcpListener, time::interval};
 
 use jaiba_connection_manager::{
     AuditSink, ConnectionManager, EncryptedFileSecretStore, FileAuditSink, FileProfileRepository,
-    InMemorySecretStore, ProfileRepository, SecretStore, master_key_id,
+    InMemorySecretStore, ProfileRepository, SecretStore,
 };
 use jaiba_core::config::{AdminAuthentication, FlowConfig};
 use jaiba_runtime::{
@@ -39,12 +39,14 @@ use crate::connection_api::{
     test_connection, update_connection,
 };
 use crate::flow_registry::{FlowRecord, FlowRegistry, RegistryError};
+use crate::schedule_store::ScheduleStore;
+use crate::scheduler::FlowScheduler;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
     registry: Arc<FlowRegistry>,
+    scheduler: Arc<FlowScheduler>,
     admin: Arc<RwLock<AdminAccess>>,
-    address: SocketAddr,
     pub(crate) connection_manager: Arc<ConnectionManager>,
     pub(crate) connection_secrets: Arc<dyn SecretStore>,
 }
@@ -117,8 +119,8 @@ type ConnectionStores = (
 /// Construye el almacén de secretos y la persistencia de conexiones según el
 /// entorno.
 ///
-/// - `JAIBA_MASTER_KEY`: clave maestra para cifrar secretos (AES-256-GCM). Si
-///   está presente, los perfiles y secretos se persisten y auditan en disco.
+/// - `JAIBA_MASTER_KEY`: passphrase para derivar (Argon2id) la clave AES-256-GCM.
+///   Si está presente, los perfiles y secretos se persisten y auditan en disco.
 /// - `JAIBA_DATA_DIR`: carpeta de datos (por defecto `data`).
 ///
 /// Sin clave maestra se usa un almacén en memoria (solo desarrollo).
@@ -136,7 +138,7 @@ fn build_connection_stores() -> Result<ConnectionStores, FlowError> {
                 })?;
             tracing::info!(
                 target: "jaiba.connections",
-                key_id = %master_key_id(&master_key),
+                key_id = %store.fingerprint(),
                 data_dir = %base.display(),
                 "persistencia segura de conexiones activada"
             );
@@ -222,7 +224,7 @@ impl ObservabilityServer {
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(16);
-        let registry = Arc::new(FlowRegistry::new(data_dir, max_flows));
+        let registry = Arc::new(FlowRegistry::new(data_dir.clone(), max_flows));
         match registry.load().await {
             Ok(count) if count > 0 => {
                 tracing::info!(target: "jaiba.flows", restored = count, "registro de flujos restaurado");
@@ -230,51 +232,32 @@ impl ObservabilityServer {
             Ok(_) => {}
             Err(error) => tracing::error!(%error, "no se pudo cargar el registro de flujos"),
         }
+        let scheduler = FlowScheduler::new(registry.clone(), ScheduleStore::open(data_dir));
 
-        let (admin_enabled, admin_authentication, admin_token, body_limit) =
-            if let (Some(supervisor), Some(source)) =
-                (self.supervisor.as_ref(), self.source.as_ref())
-            {
-                let config = supervisor.config();
-                validate_admin_exposure(
-                    config.engine.admin.enabled,
-                    config.engine.admin.authentication,
-                    address,
-                )?;
-                let token = if config.engine.admin.enabled
-                    && config.engine.admin.authentication == AdminAuthentication::Bearer
-                {
-                    resolve_admin_token(&config.engine.admin.token_env)
-                } else {
-                    None
-                };
-                let repository = if config.engine.repository.enabled {
-                    Some(LocalPacketRepository::open(&config.engine.repository).await?)
-                } else {
-                    None
-                };
-                let admin = (
-                    config.engine.admin.enabled,
-                    config.engine.admin.authentication,
-                    token,
-                    config.engine.admin.max_request_body_bytes,
-                );
-                registry
-                    .seed_running(source, supervisor.clone(), self.metrics.clone(), repository)
-                    .await
-                    .map_err(|error| FlowError::Server(error.message()))?;
-                admin
+        // El gate administrativo se fija al arranque (env + semilla del flujo
+        // inicial) y NUNCA se reescribe al desplegar otro flujo.
+        let seed_config = self.supervisor.as_ref().map(FlowSupervisor::config);
+        let (admin, body_limit) = resolve_server_admin(address, seed_config)?;
+        if let (Some(supervisor), Some(source)) =
+            (self.supervisor.as_ref(), self.source.as_ref())
+        {
+            let config = supervisor.config();
+            let flow_id = config.id.clone();
+            let repository = if config.engine.repository.enabled {
+                Some(LocalPacketRepository::open(&config.engine.repository).await?)
             } else {
-                (false, AdminAuthentication::Bearer, None, 1024 * 1024)
+                None
             };
+            registry
+                .seed_running(source, supervisor.clone(), self.metrics.clone(), repository)
+                .await
+                .map_err(|error| FlowError::Server(error.message()))?;
+            scheduler.arm(&flow_id).await;
+        }
         let state = AppState {
             registry,
-            admin: Arc::new(RwLock::new(AdminAccess {
-                enabled: admin_enabled,
-                authentication: admin_authentication,
-                token: admin_token,
-            })),
-            address,
+            scheduler,
+            admin: Arc::new(RwLock::new(admin)),
             connection_manager,
             connection_secrets,
         };
@@ -305,6 +288,7 @@ impl ObservabilityServer {
             )
             .route("/api/v1/flows/{id}/rollback", post(rollback_flow))
             .route("/api/v1/flows/{id}/start", post(start_flow))
+            .route("/api/v1/flows/{id}/trigger", post(trigger_flow))
             .route("/api/v1/flows/{id}/pause", post(pause_flow))
             .route("/api/v1/flows/{id}/resume", post(resume_flow))
             .route("/api/v1/flows/{id}/drain", post(drain_flow))
@@ -464,10 +448,6 @@ async fn deploy_flow(
             config.id
         )));
     }
-    let next_admin = match admin_access_for(&config, state.address) {
-        Ok(admin) => admin,
-        Err(error) => return configuration_error(error),
-    };
     let version = match state.registry.create_draft(&body, None).await {
         Ok((_, version)) => version,
         Err(error) => return registry_error(error),
@@ -485,8 +465,8 @@ async fn deploy_flow(
         .await
     {
         Ok(snapshot) => {
-            *state.admin.write().expect("admin lock poisoned") = next_admin;
             tracing::warn!(audit_action = "flow_deploy", flow_id = %id, version, started = query.start, "administrative action");
+            sync_schedule(&state, &id, query.start).await;
             Json(snapshot).into_response()
         }
         Err(error) => registry_error(error),
@@ -521,18 +501,6 @@ async fn deploy_version(
     if let Err(response) = authorize(&state, &headers) {
         return response;
     }
-    let source = match state.registry.export_version(&id, version).await {
-        Some(source) => source,
-        None => return not_found("flow version was not found"),
-    };
-    let config = match parse_and_validate(&source) {
-        Ok(config) => config,
-        Err(error) => return configuration_error(error),
-    };
-    let next_admin = match admin_access_for(&config, state.address) {
-        Ok(admin) => admin,
-        Err(error) => return configuration_error(error),
-    };
     let resolver = match build_resolver().await {
         Ok(resolver) => resolver,
         Err(error) => return configuration_error(error),
@@ -543,8 +511,8 @@ async fn deploy_version(
         .await
     {
         Ok(snapshot) => {
-            *state.admin.write().expect("admin lock poisoned") = next_admin;
             tracing::warn!(audit_action = "flow_deploy", flow_id = %id, version, started = query.start, "administrative action");
+            sync_schedule(&state, &id, query.start).await;
             Json(snapshot).into_response()
         }
         Err(error) => registry_error(error),
@@ -561,26 +529,14 @@ async fn rollback_flow(
     if let Err(response) = authorize(&state, &headers) {
         return response;
     }
-    let source = match state.registry.rollback_source(&id).await {
-        Ok(source) => source,
-        Err(error) => return registry_error(error),
-    };
-    let config = match parse_and_validate(&source) {
-        Ok(config) => config,
-        Err(error) => return configuration_error(error),
-    };
-    let next_admin = match admin_access_for(&config, state.address) {
-        Ok(admin) => admin,
-        Err(error) => return configuration_error(error),
-    };
     let resolver = match build_resolver().await {
         Ok(resolver) => resolver,
         Err(error) => return configuration_error(error),
     };
     match state.registry.rollback(&id, query.start, resolver).await {
         Ok(snapshot) => {
-            *state.admin.write().expect("admin lock poisoned") = next_admin;
             tracing::warn!(audit_action = "flow_rollback", flow_id = %id, started = query.start, "administrative action");
+            sync_schedule(&state, &id, query.start).await;
             Json(snapshot).into_response()
         }
         Err(error) => registry_error(error),
@@ -679,10 +635,43 @@ async fn start_flow(
     match supervisor.start().await {
         Ok(true) => {
             tracing::warn!(audit_action = "start", flow_id = %id, "administrative action");
+            state.scheduler.arm(&id).await;
             Json(supervisor.snapshot()).into_response()
         }
         Ok(false) => conflict("operation is not valid in the current flow state"),
         Err(error) => internal(error),
+    }
+}
+
+/// Disparo manual / webhook de una ejecución (respeta overlap del schedule).
+async fn trigger_flow(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(response) = authorize(&state, &headers) {
+        return response;
+    }
+    match state.scheduler.trigger(&id).await {
+        Ok(true) => {
+            tracing::warn!(audit_action = "trigger", flow_id = %id, "administrative action");
+            let snapshot = state
+                .registry
+                .supervisor(&id)
+                .await
+                .map(|supervisor| supervisor.snapshot());
+            match snapshot {
+                Some(snapshot) => Json(snapshot).into_response(),
+                None => not_found("flow is not running"),
+            }
+        }
+        Ok(false) => conflict("trigger skipped because the flow is still running"),
+        Err(error) => match error {
+            FlowError::Configuration(message) if message.contains("no está cargado") => {
+                not_found(&message)
+            }
+            other => internal(other),
+        },
     }
 }
 
@@ -694,15 +683,21 @@ async fn stop_flow(
     if let Err(response) = authorize(&state, &headers) {
         return response;
     }
-    let Some(supervisor) = state.registry.supervisor(&id).await else {
-        return not_found("flow is not running");
-    };
-    match supervisor.stop_gracefully().await {
-        Ok(()) => {
+    state.scheduler.disarm(&id).await;
+    match state.registry.stop_and_unload(&id).await {
+        Ok(snapshot) => {
             tracing::warn!(audit_action = "stop", flow_id = %id, "administrative action");
-            Json(supervisor.snapshot()).into_response()
+            Json(snapshot).into_response()
         }
-        Err(error) => internal(error),
+        Err(error) => registry_error(error),
+    }
+}
+
+async fn sync_schedule(state: &AppState, id: &str, started: bool) {
+    if started {
+        state.scheduler.arm(id).await;
+    } else {
+        state.scheduler.disarm(id).await;
     }
 }
 
@@ -859,33 +854,106 @@ async fn build_resolver() -> Result<Option<Arc<dyn ConnectionResolver>>, FlowErr
         .map(|resolver| Arc::new(resolver) as Arc<dyn ConnectionResolver>))
 }
 
-/// Valida la exposición de admin y resuelve el token para un flujo concreto.
-#[allow(clippy::result_large_err)]
-fn admin_access_for(config: &FlowConfig, address: SocketAddr) -> Result<AdminAccess, FlowError> {
-    validate_admin_exposure(
-        config.engine.admin.enabled,
-        config.engine.admin.authentication,
-        address,
-    )?;
-    let token = if config.engine.admin.enabled
-        && config.engine.admin.authentication == AdminAuthentication::Bearer
+/// Resuelve el gate administrativo del **proceso** al arranque.
+///
+/// Orden de precedencia: variables de entorno → configuración del flujo semilla
+/// (solo al arrancar con `jaiba serve FLOW.yaml`) → defaults seguros.
+/// Un despliegue posterior **nunca** puede cambiar esta política.
+fn resolve_server_admin(
+    address: SocketAddr,
+    seed: Option<&FlowConfig>,
+) -> Result<(AdminAccess, usize), FlowError> {
+    let enabled = parse_env_bool("JAIBA_ADMIN_ENABLED")
+        .or_else(|| seed.map(|config| config.engine.admin.enabled))
+        .unwrap_or(true);
+    let authentication = match env::var("JAIBA_ADMIN_AUTH")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
     {
-        match resolve_admin_token(&config.engine.admin.token_env) {
+        Some("none") => AdminAuthentication::None,
+        Some("bearer") => AdminAuthentication::Bearer,
+        Some(other) => {
+            return Err(FlowError::Configuration(format!(
+                "JAIBA_ADMIN_AUTH inválida '{other}'; use 'bearer' o 'none'"
+            )));
+        }
+        None => seed
+            .map(|config| config.engine.admin.authentication)
+            .unwrap_or(AdminAuthentication::Bearer),
+    };
+    validate_admin_exposure(enabled, authentication, address)?;
+
+    let token_env = env::var("JAIBA_ADMIN_TOKEN_ENV")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| seed.map(|config| config.engine.admin.token_env.clone()))
+        .unwrap_or_else(|| "JAIBA_ADMIN_TOKEN".to_owned());
+    // Lista blanca: un YAML no puede apuntar el Bearer a PATH u otras variables.
+    const ALLOWED_TOKEN_ENVS: &[&str] = &["JAIBA_ADMIN_TOKEN", "JAIVA_ADMIN_TOKEN"];
+    let token_env = if ALLOWED_TOKEN_ENVS.contains(&token_env.as_str()) {
+        token_env
+    } else {
+        tracing::warn!(
+            requested = %token_env,
+            "JAIBA_ADMIN_TOKEN_ENV no está en la lista blanca; usando JAIBA_ADMIN_TOKEN"
+        );
+        "JAIBA_ADMIN_TOKEN".to_owned()
+    };
+
+    let token = if enabled && authentication == AdminAuthentication::Bearer {
+        match resolve_admin_token(&token_env) {
             Some(token) => Some(token),
+            None if address.ip().is_loopback() => {
+                tracing::warn!(
+                    "API administrativa Bearer sin token en loopback; se permite acceso sin autenticar. Configure {token_env} en producción."
+                );
+                None
+            }
             None => {
                 return Err(FlowError::Configuration(format!(
-                    "administrative token environment variable '{}' is missing",
-                    config.engine.admin.token_env
+                    "variable de entorno '{token_env}' requerida para la API administrativa"
                 )));
             }
         }
     } else {
         None
     };
-    Ok(AdminAccess {
-        enabled: config.engine.admin.enabled,
-        authentication: config.engine.admin.authentication,
-        token,
+
+    // En loopback, si Bearer quedó sin token, tratar como None para no bloquear
+    // el modo servidor puro durante desarrollo local.
+    let authentication = if enabled
+        && authentication == AdminAuthentication::Bearer
+        && token.is_none()
+        && address.ip().is_loopback()
+    {
+        AdminAuthentication::None
+    } else {
+        authentication
+    };
+
+    let body_limit = env::var("JAIBA_ADMIN_MAX_BODY_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .or_else(|| seed.map(|config| config.engine.admin.max_request_body_bytes))
+        .unwrap_or(1024 * 1024)
+        .max(1);
+
+    Ok((
+        AdminAccess {
+            enabled,
+            authentication,
+            token,
+        },
+        body_limit,
+    ))
+}
+
+fn parse_env_bool(name: &str) -> Option<bool> {
+    env::var(name).ok().and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
     })
 }
 
@@ -930,6 +998,11 @@ pub(crate) fn parse_and_validate(body: &str) -> Result<FlowConfig, FlowError> {
         return Err(FlowError::Configuration(
             "flow id cannot be empty".to_owned(),
         ));
+    }
+    if let Some(schedule) = &config.schedule
+        && let Err(error) = schedule.validate()
+    {
+        return Err(FlowError::Configuration(error));
     }
     if !(1..=90).contains(&config.engine.memory.maximum_percent) {
         return Err(FlowError::Configuration(
@@ -1009,7 +1082,9 @@ pub(crate) fn parse_and_validate(body: &str) -> Result<FlowConfig, FlowError> {
                     processor.id
                 )));
             }
-            ("publish_kafka", Some(name)) if !config.kafka_connections.contains_key(name) => {
+            ("publish_kafka", Some(name)) | ("consume_kafka", Some(name))
+                if !config.kafka_connections.contains_key(name) =>
+            {
                 return Err(FlowError::Configuration(format!(
                     "processor '{}' references unknown Kafka connection '{name}'",
                     processor.id

@@ -19,6 +19,9 @@ jaiba-plugin-sdk = { path = "../jaiba-plugin-sdk" }
 jaiba-runtime = { path = "../jaiba-runtime" }
 async-trait.workspace = true
 axum.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+cron.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

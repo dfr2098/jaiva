@@ -22,27 +22,33 @@ export function MetadataExplorer({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadObjects = useCallback(async () => {
+  const loadObjects = useCallback(async (signal?: { cancelled: boolean }) => {
     setLoading(true);
     try {
       const result = await jaivaApi.connectionMetadata(connection.id);
+      if (signal?.cancelled) return;
       setObjects(result.filter((object) => object.kind !== "schema"));
       setSelectedIndex("");
       setDescription(null);
       setError(null);
     } catch (reason) {
+      if (signal?.cancelled) return;
       setError(
         reason instanceof Error
           ? reason.message
           : "No se pudieron cargar los metadatos",
       );
     } finally {
-      setLoading(false);
+      if (!signal?.cancelled) setLoading(false);
     }
   }, [connection.id]);
 
   useEffect(() => {
-    void loadObjects();
+    const signal = { cancelled: false };
+    void loadObjects(signal);
+    return () => {
+      signal.cancelled = true;
+    };
   }, [loadObjects]);
 
   const selectObject = async (index: string) => {

@@ -23,8 +23,14 @@ const LOG_PREFIX: &str = "jaiva.log";
 ///
 /// The returned guard must live until process shutdown so buffered lines flush.
 pub fn initialize(config: &LoggingConfig) -> Result<Option<WorkerGuard>, FlowError> {
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("jaiva_flow=info"));
+    // Sin RUST_LOG: mostrar arranque/API del control plane. Los crates se
+    // renombraron desde `jaiva_flow`; un filtro solo a ese target deja la
+    // consola en silencio y parece que `serve` se quedó colgado.
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(
+            "jaiba_cli=info,jaiba_server=info,jaiba_runtime=info,jaiba_connection_manager=info,jaiba=info",
+        )
+    });
     let console = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
     if !config.enabled {
         tracing_subscriber::registry()

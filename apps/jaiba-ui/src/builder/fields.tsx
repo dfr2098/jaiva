@@ -90,23 +90,41 @@ function FieldControl({ field, value, connectionNames, onChange }: FieldEditorPr
           ))}
         </select>
       );
-    case "connectionRef":
+    case "connectionRef": {
+      const current = asString(value);
+      const names = [...connectionNames];
+      if (current && !names.includes(current)) names.unshift(current);
+      if (names.length === 0) {
+        return (
+          <>
+            <input
+              className="builder-input"
+              value={current}
+              placeholder="alias del perfil (p. ej. postgres_dma)"
+              onChange={(event) => onChange(event.target.value)}
+            />
+            <small className="builder-help">
+              No hay perfiles cargados. Crea uno en Conexiones o escribe el alias
+              manualmente.
+            </small>
+          </>
+        );
+      }
       return (
-        <>
-          <input
-            className="builder-input"
-            list={`connections-${field.key}`}
-            value={asString(value)}
-            placeholder="nombre de la conexión"
-            onChange={(event) => onChange(event.target.value)}
-          />
-          <datalist id={`connections-${field.key}`}>
-            {connectionNames.map((name) => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
-        </>
+        <select
+          className="builder-input"
+          value={current}
+          onChange={(event) => onChange(event.target.value)}
+        >
+          <option value="">— Elegir conexión —</option>
+          {names.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
       );
+    }
     case "keyValue":
       return <KeyValueEditor value={asRecord(value)} onChange={onChange} />;
     case "stringList":

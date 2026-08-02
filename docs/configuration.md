@@ -131,16 +131,55 @@ Las contraseñas no deben escribirse en YAML.
 
 ```yaml
 kafka_connections:
-  dma:
+  bus:
     brokers_env: KAFKA_BROKERS
     client_id: jaiva-publisher
     security_protocol: PLAINTEXT
     message_timeout_ms: 30000
 ```
 
-Kafka se compila mediante `--features kafka-driver`. La primera versión admite
-el listener `PLAINTEXT`; los brokers siempre proceden de una variable de
-entorno.
+Kafka se compila mediante `--features kafka-driver`. Solo admite
+`PLAINTEXT` por ahora; los brokers siempre proceden de una variable de
+entorno. Detalle de `publish_kafka` / `consume_kafka` en
+[priority-4-3-kafka.md](priority-4-3-kafka.md).
+
+## Ejecución continua (`schedule`)
+
+Opcional. Si se omite, el flujo corre una sola pasada.
+
+```yaml
+schedule:
+  enabled: true
+  trigger:
+    type: interval
+    every_seconds: 60
+  overlap: skip          # skip | queue | replace
+  catch_up: none         # none | one
+```
+
+Otros disparadores:
+
+```yaml
+# Cron (6 campos: seg min hora día mes dow) + zona IANA
+schedule:
+  enabled: true
+  timezone: America/Mexico_City
+  trigger:
+    type: cron
+    expression: "0 0 2 * * *"
+  overlap: skip
+  catch_up: one
+
+# Solo disparo manual: POST /api/v1/flows/{id}/trigger
+schedule:
+  enabled: true
+  trigger:
+    type: webhook
+```
+
+La agenda se arma al desplegar/iniciar el flujo y se desarma al detenerlo.
+`overlap: skip` omite un disparo si aún corre una ejecución; `catch_up: one`
+permite un disparo inmediato tras reinicio si se perdió la ventana.
 
 MySQL y MariaDB usan el mismo formato:
 
@@ -183,6 +222,25 @@ La URL usa `sqlserver://usuario:contraseña@host:1433/base`. El ejemplo está en
 `examples/sqlserver-write.yaml`. La conexión TDS usa TLS y acepta el certificado
 autofirmado habitual del contenedor local; en producción deberá configurarse
 validación estricta del certificado.
+
+MongoDB se habilita con `--features mongodb-driver`:
+
+```yaml
+database_connections:
+  source:
+    type: mongodb
+    url_env: MONGODB_URL
+    max_connections: 4
+```
+
+`MONGODB_URL` tiene la forma
+`mongodb://usuario:contraseña@host:27017/base?authSource=admin` (también
+`mongodb+srv://` para Atlas). Ejemplo: `examples/mongodb-copy.yaml`.
+
+En el Connection Manager (UI/API) un perfil Mongo puede crearse con campos
+sueltos o con el campo `url` (misma familia de URI). Ver
+[connection-manager.md](connection-manager.md). Los flujos en ejecución pueden
+usar el **alias** del perfil (`connection: mi_mongo`) en lugar de `url_env`.
 
 ## Procesadores
 

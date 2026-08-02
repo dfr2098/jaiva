@@ -251,6 +251,46 @@ Estado comprobado el 29 de julio de 2026 contra SQL Server 2022:
 Limitación vigente: el descriptor SQL Server todavía no devuelve llaves ni
 índices, y el constructor visual SQL permanece deshabilitado.
 
+### Fase 8 — suite con entorno de pruebas
+
+Tras `consume_kafka`, la suite de integración/fallos/rendimiento contra Postgres,
+Kafka, MongoDB y SQL Server del entorno de pruebas se ejecuta con:
+
+```bash
+export JAIBA_TEST_POSTGRES_PASSWORD='...'
+export JAIBA_TEST_MONGODB_PASSWORD='...'
+export JAIBA_TEST_SQLSERVER_PASSWORD='...'
+./scripts/phase8-integration.sh
+```
+
+Realiza: smoke publish/consume Kafka (incluido el procesador `consume_kafka`),
+throughput de 100 mensajes, fallo controlado de broker, retry→DLQ→requeue, el
+flujo Postgres del Connection Manager, MongoDB (metadatos +
+`query_mongodb`→`put_mongodb`) y SQL Server (diagnóstico + metadatos). Detalle en
+[priority-8-integration-tests.md](priority-8-integration-tests.md).
+
+Estado comprobado el 1 de agosto de 2026: harness verde con Postgres `:55432`,
+Kafka `:29092`, MongoDB `:27018` y SQL Server `:11433`.
+
+### MongoDB — URL de conexión en Connection Manager
+
+Además de host/puerto/usuario, `POST/PUT /api/v1/connections` acepta `url` para
+`connection_type: mongodb` (`mongodb://` o `mongodb+srv://`). La URI se guarda
+en `ConnectionSecret.options["connection_url"]` y tiene prioridad al conectar
+(plugin y `ProfileConnectionResolver`). La UI muestra el campo **URL de
+conexión** y rellena los campos al pegar.
+
+Pruebas:
+
+```bash
+cargo test -p jaiba-server --features mongodb-driver mongo_url_unit_tests
+cargo test -p jaiba-server --features mongodb-driver \
+  mongodb_real_connection_from_url -- --nocapture
+cargo test -p jaiba-runtime prefers_stored_mongodb_connection_url
+```
+
+Documentación de usuario: [connection-manager.md](connection-manager.md).
+
 ### Integración real con Kafka
 
 La prueba `kafka_real_publish_is_acknowledged_and_consumable` requiere la

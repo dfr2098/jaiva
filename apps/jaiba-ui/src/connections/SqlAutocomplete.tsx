@@ -41,7 +41,7 @@ export function SqlAutocomplete({ connection }: { connection: DatabaseConnection
   const describedKeys = useRef<Set<string>>(new Set());
   const inflightKeys = useRef<Set<string>>(new Set());
 
-  const loadMetadata = useCallback(async () => {
+  const loadMetadata = useCallback(async (signal?: { cancelled: boolean }) => {
     setLoading(true);
     setMetadataError(null);
     describedKeys.current.clear();
@@ -49,19 +49,25 @@ export function SqlAutocomplete({ connection }: { connection: DatabaseConnection
     setDescriptions([]);
     try {
       const nextObjects = await jaivaApi.connectionMetadata(connection.id);
+      if (signal?.cancelled) return;
       setObjects(nextObjects);
     } catch (reason) {
+      if (signal?.cancelled) return;
       setMetadataError(reason instanceof Error ? reason.message : "No se pudieron explorar metadatos");
       setObjects([]);
     } finally {
-      setLoading(false);
+      if (!signal?.cancelled) setLoading(false);
     }
   }, [connection.id]);
 
   useEffect(() => {
     setSql("");
     setOpen(false);
-    void loadMetadata();
+    const signal = { cancelled: false };
+    void loadMetadata(signal);
+    return () => {
+      signal.cancelled = true;
+    };
   }, [loadMetadata]);
 
   // Describe bajo demanda las tablas/vistas referenciadas en la consulta actual.

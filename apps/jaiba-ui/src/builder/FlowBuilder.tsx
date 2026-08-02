@@ -22,14 +22,25 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { jaivaApi } from "../api";
-import type { FlowAction, FlowLifecycle, FlowSnapshot } from "../types";
+import type {
+  DatabaseConnection as ManagedConnection,
+  FlowAction,
+  FlowLifecycle,
+  FlowRecord,
+  FlowSnapshot,
+} from "../types";
 import {
   CATALOG_BY_TYPE,
   CATEGORY_LABEL,
   CATEGORY_TAG,
   PROCESSOR_CATALOG,
   UPCOMING_COMPONENTS,
+  type FieldDef,
 } from "./catalog";
+import {
+  connectionNamesForKind,
+  managedDatabaseAliases,
+} from "./connectionOptions";
 import {
   BottomPanel,
   type BottomTab,
@@ -37,6 +48,10 @@ import {
   type LogChannel,
   type LogEntry,
 } from "./BottomPanel";
+import {
+  FlowRegistryPanel,
+  type VersionBusy,
+} from "./FlowRegistryPanel";
 import { Inspector } from "./Inspector";
 import { Modal } from "./Modal";
 import { SettingsPanel } from "./SettingsPanel";
@@ -44,6 +59,7 @@ import { TopMenu } from "./TopMenu";
 import {
   createProcessorNode,
   defaultFlowMeta,
+  SCHEDULE_DEFAULTS,
   SIMULATION_DEFAULTS,
   type ConnectionEdge,
   type FlowMeta,
@@ -58,6 +74,7 @@ import { takePendingQueryNode } from "./pendingQueryNode";
 
 const DRAG_TYPE = "application/jaiba-processor";
 const DRAFT_KEY = "jaiba.visual.builder.v1";
+const DRAFT_CURRENT_KEY = "jaiba.visual.builder.current";
 const LEGACY_DRAFT_KEY = "jaiva.visual.builder.v1";
 const RUN_ACTIONS: FlowAction[] = ["start", "pause", "resume", "drain", "stop"];
 const ACTION_LABEL: Record<FlowAction, string> = {
@@ -83,30 +100,63 @@ interface StoredDraft {
   edges: ConnectionEdge[];
 }
 
-function loadDraft(): StoredDraft | null {
+function draftKeyFor(flowId: string): string {
+  return `${DRAFT_KEY}:${flowId}`;
+}
+
+function normalizeDraft(value: StoredDraft): StoredDraft {
+  return {
+    ...value,
+    meta: {
+      ...defaultFlowMeta(),
+      ...value.meta,
+      schedule: { ...SCHEDULE_DEFAULTS, ...value.meta.schedule },
+      engine: { ...value.meta.engine },
+    },
+    nodes: value.nodes.map((node) => ({
+      ...node,
+      data: {
+        ...node.data,
+        simulation: node.data.simulation ?? {
+          ...SIMULATION_DEFAULTS,
+          options: {},
+        },
+      },
+    })),
+  };
+}
+
+function readDraftRaw(key: string): StoredDraft | null {
   try {
-    const raw =
-      window.localStorage.getItem(DRAFT_KEY) ??
-      window.localStorage.getItem(LEGACY_DRAFT_KEY);
+    const raw = window.localStorage.getItem(key);
     if (!raw) return null;
     const value = JSON.parse(raw) as StoredDraft;
     if (value.version !== 1) return null;
-    return {
-      ...value,
-      nodes: value.nodes.map((node) => ({
-        ...node,
-        data: {
-          ...node.data,
-          simulation: node.data.simulation ?? {
-            ...SIMULATION_DEFAULTS,
-            options: {},
-          },
-        },
-      })),
-    };
+    return normalizeDraft(value);
   } catch {
     return null;
   }
+}
+
+function loadDraft(flowId?: string): StoredDraft | null {
+  if (flowId) {
+    return readDraftRaw(draftKeyFor(flowId));
+  }
+  const current = window.localStorage.getItem(DRAFT_CURRENT_KEY);
+  if (current) {
+    const scoped = readDraftRaw(draftKeyFor(current));
+    if (scoped) return scoped;
+  }
+  return (
+    readDraftRaw(DRAFT_KEY) ?? readDraftRaw(LEGACY_DRAFT_KEY)
+  );
+}
+
+function writeDraft(draft: StoredDraft): void {
+  const serialized = JSON.stringify(draft);
+  window.localStorage.setItem(draftKeyFor(draft.meta.id), serialized);
+  window.localStorage.setItem(DRAFT_CURRENT_KEY, draft.meta.id);
+  window.localStorage.setItem(DRAFT_KEY, serialized);
 }
 
 function ProcessorNodeView({ data, selected }: NodeProps<ProcessorNode>) {
@@ -158,9 +208,13 @@ function FlowBuilderInner() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [engineOnline, setEngineOnline] = useState(false);
   const [engineFlow, setEngineFlow] = useState<FlowSnapshot | null>(null);
+  const [registeredFlows, setRegisteredFlows] = useState<FlowRecord[]>([]);
+  const [flowRecord, setFlowRecord] = useState<FlowRecord | null>(null);
+  const [managedConnections, setManagedConnections] = useState<ManagedConnection[]>([]);
   const [modal, setModal] = useState<"yaml" | "run" | null>(null);
   const [runBusy, setRunBusy] = useState<FlowAction | null>(null);
   const [deployBusy, setDeployBusy] = useState<"validate" | "deploy" | "start" | null>(null);
+  const [versionBusy, setVersionBusy] = useState<VersionBusy>(null);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "unsaved">(
     initialDraft.current ? "saved" : "unsaved",
   );
@@ -184,21 +238,15 @@ function FlowBuilderInner() {
     [],
   );
 
-  const databaseConnectionNames = useMemo(
-    () => meta.databaseConnections.map((connection) => connection.name).filter(Boolean),
-    [meta.databaseConnections],
-  );
-  const kafkaConnectionNames = useMemo(
-    () => meta.kafkaConnections.map((connection) => connection.name).filter(Boolean),
-    [meta.kafkaConnections],
-  );
-  const postgresConnectionNames = useMemo(
-    () =>
-      meta.databaseConnections
-        .filter((connection) => connection.type === "postgres")
-        .map((connection) => connection.name)
-        .filter(Boolean),
-    [meta.databaseConnections],
+  const connectionNamesFor = useCallback(
+    (field: FieldDef) =>
+      connectionNamesForKind(
+        field.connectionKind,
+        meta.databaseConnections,
+        meta.kafkaConnections,
+        managedConnections,
+      ),
+    [meta.databaseConnections, meta.kafkaConnections, managedConnections],
   );
 
   const selectedNode = useMemo(
@@ -210,7 +258,13 @@ function FlowBuilderInner() {
     [edges, selectedEdgeId],
   );
 
-  const issues = useMemo(() => validateFlow(meta, nodes, edges), [meta, nodes, edges]);
+  const issues = useMemo(
+    () =>
+      validateFlow(meta, nodes, edges, {
+        knownDatabaseAliases: managedDatabaseAliases(managedConnections),
+      }),
+    [meta, nodes, edges, managedConnections],
+  );
   const errorCount = issues.filter((issue) => issue.level === "error").length;
 
   const yaml = useMemo(() => {
@@ -223,9 +277,30 @@ function FlowBuilderInner() {
 
   const persistDraft = useCallback(() => {
     const draft: StoredDraft = { version: 1, meta, nodes, edges };
-    window.localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    writeDraft(draft);
     setSaveState("saved");
   }, [meta, nodes, edges]);
+
+  const applyImported = useCallback(
+    (imported: { meta: FlowMeta; nodes: ProcessorNode[]; edges: ConnectionEdge[] }, note: string) => {
+      setMeta(imported.meta);
+      setNodes(imported.nodes);
+      setEdges(imported.edges);
+      setSelectedNodeId(null);
+      setSelectedEdgeId(null);
+      setDrawer("none");
+      writeDraft({
+        version: 1,
+        meta: imported.meta,
+        nodes: imported.nodes,
+        edges: imported.edges,
+      });
+      setSaveState("saved");
+      window.requestAnimationFrame(() => fitView({ padding: 0.2 }));
+      addLog("evento", "info", note);
+    },
+    [setNodes, setEdges, fitView, addLog],
+  );
 
   useEffect(() => {
     setSaveState("saving");
@@ -249,26 +324,60 @@ function FlowBuilderInner() {
     };
   }, [nodes, edges, meta]);
 
-  // Engine health and served-flow polling. Runtime control never assumes that
-  // the draft ID is already loaded by the independent Rust process.
+  // Engine health, registry list and runtime for the draft flow id.
   const prevOnline = useRef<boolean | null>(null);
+  const refreshRegistry = useCallback(async () => {
+    try {
+      const flows = await jaivaApi.listFlows();
+      setRegisteredFlows(flows);
+      const current = flows.find((flow) => flow.id === meta.id) ?? null;
+      setFlowRecord(current);
+      return current;
+    } catch {
+      setRegisteredFlows([]);
+      setFlowRecord(null);
+      return null;
+    }
+  }, [meta.id]);
+
   useEffect(() => {
     let active = true;
     const check = async () => {
       let online = false;
       try {
         await jaivaApi.health();
-        const runtime = await jaivaApi.runtime();
-        if (active) setEngineFlow(runtime);
         online = true;
+        const [runtime, view, flows, connections] = await Promise.all([
+          jaivaApi.runtime().catch(() => null),
+          jaivaApi.getFlow(meta.id).catch(() => null),
+          jaivaApi.listFlows().catch(() => [] as FlowRecord[]),
+          jaivaApi.connections().catch(() => [] as ManagedConnection[]),
+        ]);
+        if (!active) return;
+        setRegisteredFlows(flows);
+        setFlowRecord(flows.find((flow) => flow.id === meta.id) ?? null);
+        setManagedConnections(connections);
+        const matched =
+          view?.runtime ??
+          (runtime?.flow_id === meta.id ? runtime : null);
+        setEngineFlow(matched);
       } catch {
         online = false;
-        if (active) setEngineFlow(null);
+        if (active) {
+          setEngineFlow(null);
+          setRegisteredFlows([]);
+          setFlowRecord(null);
+          setManagedConnections([]);
+        }
       }
       if (!active) return;
       setEngineOnline(online);
       if (prevOnline.current !== online) {
-        addLog("console", online ? "info" : "warn", online ? "Motor Jaiba conectado." : "Motor Jaiba desconectado.");
+        addLog(
+          "console",
+          online ? "info" : "warn",
+          online ? "Motor Jaiba conectado." : "Motor Jaiba desconectado.",
+        );
         prevOnline.current = online;
       }
     };
@@ -278,7 +387,7 @@ function FlowBuilderInner() {
       active = false;
       window.clearInterval(timer);
     };
-  }, [addLog]);
+  }, [addLog, meta.id]);
 
   const handleNodesChange = useCallback(
     (changes: NodeChange<ProcessorNode>[]) => onNodesChange(changes),
@@ -513,6 +622,61 @@ function FlowBuilderInner() {
     [meta.id, engineFlow, addLog],
   );
 
+  const selectRegisteredFlow = useCallback(
+    async (flowId: string) => {
+      if (flowId === meta.id) return;
+      persistDraft();
+      const local = loadDraft(flowId);
+      if (local) {
+        applyImported(local, `Borrador local '${flowId}' restaurado.`);
+        return;
+      }
+      try {
+        const view = await jaivaApi.getFlow(flowId);
+        const version =
+          view.active_version ??
+          [...view.versions].sort((left, right) => right.version - left.version)[0]
+            ?.version;
+        if (version == null) {
+          applyImported(
+            {
+              meta: { ...defaultFlowMeta(), id: flowId },
+              nodes: [],
+              edges: [],
+            },
+            `Flujo '${flowId}' sin versiones; lienzo vacío.`,
+          );
+          return;
+        }
+        const source = await jaivaApi.exportVersion(flowId, version);
+        const imported = parseFlowYaml(source);
+        applyImported(
+          imported,
+          `Flujo '${flowId}' v${version} cargado desde el registro.`,
+        );
+      } catch (error) {
+        addLog(
+          "console",
+          "error",
+          `No se pudo abrir '${flowId}': ${error instanceof Error ? error.message : error}`,
+        );
+      }
+    },
+    [meta.id, persistDraft, applyImported, addLog],
+  );
+
+  const newLocalDraft = useCallback(() => {
+    persistDraft();
+    const next = {
+      ...defaultFlowMeta(),
+      id: `flujo_${Date.now().toString(36)}`,
+    };
+    applyImported(
+      { meta: next, nodes: [], edges: [] },
+      `Nuevo borrador local '${next.id}'.`,
+    );
+  }, [persistDraft, applyImported]);
+
   const validateInEngine = useCallback(async () => {
     setDeployBusy("validate");
     try {
@@ -538,6 +702,7 @@ function FlowBuilderInner() {
         await jaivaApi.validateFlow(yaml);
         const snapshot = await jaivaApi.deployFlow(meta.id, yaml, start);
         setEngineFlow(snapshot);
+        await refreshRegistry();
         addLog(
           "console",
           "info",
@@ -551,7 +716,147 @@ function FlowBuilderInner() {
         setDeployBusy(null);
       }
     },
-    [meta.id, yaml, addLog],
+    [meta.id, yaml, addLog, refreshRegistry],
+  );
+
+  const saveDraftToRegistry = useCallback(async () => {
+    setVersionBusy({ action: "save-draft" });
+    try {
+      const created = await jaivaApi.createFlow(yaml);
+      await refreshRegistry();
+      addLog(
+        "console",
+        "info",
+        `Borrador '${created.flow_id}' v${created.version} guardado en el registro.`,
+      );
+    } catch (error) {
+      addLog(
+        "console",
+        "error",
+        `No se pudo guardar el borrador: ${error instanceof Error ? error.message : error}`,
+      );
+    } finally {
+      setVersionBusy(null);
+    }
+  }, [yaml, refreshRegistry, addLog]);
+
+  const loadRegistryVersion = useCallback(
+    async (version: number) => {
+      setVersionBusy({ version, action: "load" });
+      try {
+        const source = await jaivaApi.exportVersion(meta.id, version);
+        const imported = parseFlowYaml(source);
+        applyImported(
+          imported,
+          `Versión v${version} de '${meta.id}' cargada en el lienzo.`,
+        );
+      } catch (error) {
+        addLog(
+          "console",
+          "error",
+          `No se pudo abrir v${version}: ${error instanceof Error ? error.message : error}`,
+        );
+      } finally {
+        setVersionBusy(null);
+      }
+    },
+    [meta.id, applyImported, addLog],
+  );
+
+  const validateRegistryVersion = useCallback(
+    async (version: number) => {
+      setVersionBusy({ version, action: "validate" });
+      try {
+        const record = await jaivaApi.validateVersion(meta.id, version);
+        setFlowRecord(record);
+        setRegisteredFlows((current) =>
+          current.map((flow) => (flow.id === record.id ? record : flow)),
+        );
+        addLog("console", "info", `Versión v${version} validada.`);
+      } catch (error) {
+        addLog(
+          "console",
+          "error",
+          `Validación v${version} falló: ${error instanceof Error ? error.message : error}`,
+        );
+      } finally {
+        setVersionBusy(null);
+      }
+    },
+    [meta.id, addLog],
+  );
+
+  const deployRegistryVersion = useCallback(
+    async (version: number, start: boolean) => {
+      setVersionBusy({ version, action: start ? "start" : "deploy" });
+      try {
+        const snapshot = await jaivaApi.deployVersion(meta.id, version, start);
+        setEngineFlow(snapshot);
+        await refreshRegistry();
+        addLog(
+          "console",
+          "info",
+          `Versión v${version} desplegada${start ? " e iniciada" : ""}.`,
+        );
+      } catch (error) {
+        addLog(
+          "console",
+          "error",
+          `Despliegue v${version} falló: ${error instanceof Error ? error.message : error}`,
+        );
+      } finally {
+        setVersionBusy(null);
+      }
+    },
+    [meta.id, refreshRegistry, addLog],
+  );
+
+  const archiveRegistryVersion = useCallback(
+    async (version: number) => {
+      setVersionBusy({ version, action: "archive" });
+      try {
+        const record = await jaivaApi.archiveVersion(meta.id, version);
+        setFlowRecord(record);
+        setRegisteredFlows((current) =>
+          current.map((flow) => (flow.id === record.id ? record : flow)),
+        );
+        addLog("console", "info", `Versión v${version} archivada.`);
+      } catch (error) {
+        addLog(
+          "console",
+          "error",
+          `Archivar v${version} falló: ${error instanceof Error ? error.message : error}`,
+        );
+      } finally {
+        setVersionBusy(null);
+      }
+    },
+    [meta.id, addLog],
+  );
+
+  const rollbackRegisteredFlow = useCallback(
+    async (start: boolean) => {
+      setVersionBusy({ action: start ? "rollback-start" : "rollback" });
+      try {
+        const snapshot = await jaivaApi.rollbackFlow(meta.id, start);
+        setEngineFlow(snapshot);
+        await refreshRegistry();
+        addLog(
+          "console",
+          "info",
+          `Rollback de '${meta.id}' completado${start ? " e iniciado" : ""}.`,
+        );
+      } catch (error) {
+        addLog(
+          "console",
+          "error",
+          `Rollback falló: ${error instanceof Error ? error.message : error}`,
+        );
+      } finally {
+        setVersionBusy(null);
+      }
+    },
+    [meta.id, refreshRegistry, addLog],
   );
 
   const runCommand = `cargo run -- serve ${meta.id || "flujo"}.yaml`;
@@ -579,12 +884,19 @@ function FlowBuilderInner() {
         engineOnline={engineOnline}
         downloadDisabled={errorCount > 0}
         saveState={saveState}
+        flowId={meta.id}
+        registeredFlows={registeredFlows}
+        onSelectFlow={(id) => void selectRegisteredFlow(id)}
+        onNewDraft={newLocalDraft}
         onViewYaml={() => setModal("yaml")}
         onDownload={download}
         onImport={() => importInput.current?.click()}
         onSave={persistDraft}
         onClear={clearCanvas}
-        onRun={() => setModal("run")}
+        onRun={() => {
+          void refreshRegistry();
+          setModal("run");
+        }}
         onShowLogs={showLogs}
         onOpenSettings={openSettings}
       />
@@ -692,9 +1004,7 @@ function FlowBuilderInner() {
               ) : (
                 <Inspector
                   node={selectedNode}
-                  databaseConnectionNames={databaseConnectionNames}
-                  postgresConnectionNames={postgresConnectionNames}
-                  kafkaConnectionNames={kafkaConnectionNames}
+                  connectionNamesFor={connectionNamesFor}
                   onChangeProcessorId={(id) =>
                     updateSelectedNode((data) => ({ ...data, processorId: id }))
                   }
@@ -782,21 +1092,26 @@ function FlowBuilderInner() {
             <div className="run-divider" />
 
             <div className="run-api-head">
-              <span>Validar y publicar en el motor</span>
+              <span>Validar y publicar este flujo</span>
               <span className={`engine-pill small ${engineOnline ? "online" : "offline"}`}>
                 <i />
                 {engineOnline ? "en línea" : "desconectado"}
               </span>
             </div>
             <p className="run-hint">
-              Publicar reemplaza de forma coordinada el flujo activo de esta instancia. El YAML
-              se valida antes de detenerlo.
+              Publicar crea una nueva versión en el registro, la valida y la despliega de forma
+              coordinada. Otros flujos en ejecución no se detienen.
             </p>
             <div className="run-actions deploy-actions">
               <button
                 type="button"
                 className="button"
-                disabled={!engineOnline || errorCount > 0 || deployBusy !== null}
+                disabled={
+                  !engineOnline ||
+                  errorCount > 0 ||
+                  deployBusy !== null ||
+                  versionBusy !== null
+                }
                 onClick={() => void validateInEngine()}
               >
                 {deployBusy === "validate" ? "Validando…" : "Validar con Rust"}
@@ -804,7 +1119,12 @@ function FlowBuilderInner() {
               <button
                 type="button"
                 className="button"
-                disabled={!engineOnline || errorCount > 0 || deployBusy !== null}
+                disabled={
+                  !engineOnline ||
+                  errorCount > 0 ||
+                  deployBusy !== null ||
+                  versionBusy !== null
+                }
                 onClick={() => void deployToEngine(false)}
               >
                 {deployBusy === "deploy" ? "Publicando…" : "Publicar detenido"}
@@ -812,7 +1132,12 @@ function FlowBuilderInner() {
               <button
                 type="button"
                 className="button primary"
-                disabled={!engineOnline || errorCount > 0 || deployBusy !== null}
+                disabled={
+                  !engineOnline ||
+                  errorCount > 0 ||
+                  deployBusy !== null ||
+                  versionBusy !== null
+                }
                 onClick={() => void deployToEngine(true)}
               >
                 {deployBusy === "start" ? "Publicando…" : "Publicar e iniciar"}
@@ -821,14 +1146,34 @@ function FlowBuilderInner() {
 
             <div className="run-divider" />
 
+            <FlowRegistryPanel
+              flowId={meta.id}
+              record={flowRecord}
+              busy={versionBusy}
+              onRefresh={() => void refreshRegistry()}
+              onSaveDraft={() => void saveDraftToRegistry()}
+              onRollback={(start) => void rollbackRegisteredFlow(start)}
+              onLoadVersion={(version) => void loadRegistryVersion(version)}
+              onValidateVersion={(version) => void validateRegistryVersion(version)}
+              onDeployVersion={(version, start) =>
+                void deployRegistryVersion(version, start)
+              }
+              onArchiveVersion={(version) => void archiveRegistryVersion(version)}
+            />
+
+            <div className="run-divider" />
+
             <div className="run-api-head">
-              <span>Control del flujo publicado</span>
-              <code>{engineFlow?.flow_id ?? "ninguno"}</code>
+              <span>Control en runtime</span>
+              <code>
+                {engineFlow?.flow_id ?? "no cargado"}
+                {engineFlow ? ` · ${engineFlow.control.state}` : ""}
+              </code>
             </div>
             {engineFlow?.flow_id !== meta.id ? (
               <p className="run-warning">
-                El borrador <code>{meta.id}</code> no coincide con el flujo cargado en el motor.
-                Publícalo antes de usar sus controles.
+                El borrador <code>{meta.id}</code> no está en ejecución. Publícalo con
+                «Publicar e iniciar» o despliega una versión existente.
               </p>
             ) : null}
             <div className="run-actions">
@@ -841,6 +1186,7 @@ function FlowBuilderInner() {
                     !engineOnline ||
                     engineFlow?.flow_id !== meta.id ||
                     runBusy !== null ||
+                    versionBusy !== null ||
                     !VALID_ACTIONS[engineFlow?.control.state ?? "STOPPED"].includes(action)
                   }
                   onClick={() => void runAction(action)}

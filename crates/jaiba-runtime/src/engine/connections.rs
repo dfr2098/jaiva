@@ -3,7 +3,7 @@ use std::{collections::HashMap, fmt, sync::Arc};
 #[cfg(feature = "mongodb-driver")]
 use mongodb::Client as MongoClient;
 #[cfg(feature = "kafka-driver")]
-use rdkafka::{ClientConfig, producer::FutureProducer};
+use rdkafka::{ClientConfig, consumer::StreamConsumer, producer::FutureProducer};
 use sqlx::{MySqlPool, PgPool, mysql::MySqlPoolOptions, postgres::PgPoolOptions};
 
 #[cfg(feature = "oracle-driver")]
@@ -27,7 +27,67 @@ pub struct ConnectionManager {
     oracle: Arc<HashMap<String, OracleWriter>>,
     writers: Arc<HashMap<String, Arc<dyn DatabaseWriter>>>,
     #[cfg(feature = "kafka-driver")]
-    kafka: Arc<HashMap<String, FutureProducer>>,
+    kafka: Arc<HashMap<String, KafkaEndpoint>>,
+}
+
+/// Endpoint Kafka compartido: productor idempotente + fábrica de consumidores.
+///
+/// El productor vive todo el flujo; cada `consume_kafka` crea un consumidor
+/// efímero con auto-commit desactivado.
+#[cfg(feature = "kafka-driver")]
+#[derive(Clone)]
+pub struct KafkaEndpoint {
+    brokers: String,
+    client_id: String,
+    security_protocol: String,
+    producer: FutureProducer,
+}
+
+#[cfg(feature = "kafka-driver")]
+impl KafkaEndpoint {
+    pub fn producer(&self) -> &FutureProducer {
+        &self.producer
+    }
+
+    /// Crea un `StreamConsumer` con offsets manuales (`enable.auto.commit=false`).
+    ///
+    /// `broker.address.family=v4` evita que librdkafka resuelva `localhost` a
+    /// `::1` cuando el broker solo escucha en IPv4.
+    pub fn create_consumer(
+        &self,
+        group_id: &str,
+        auto_offset_reset: &str,
+    ) -> Result<StreamConsumer, FlowError> {
+        if group_id.trim().is_empty() {
+            return Err(FlowError::Configuration(
+                "Kafka consumer group_id cannot be empty".to_owned(),
+            ));
+        }
+        let reset = match auto_offset_reset {
+            "earliest" | "latest" => auto_offset_reset,
+            other => {
+                return Err(FlowError::Configuration(format!(
+                    "unsupported auto_offset_reset '{other}' (use earliest|latest)"
+                )));
+            }
+        };
+        let mut client = ClientConfig::new();
+        client
+            .set("bootstrap.servers", &self.brokers)
+            .set(
+                "client.id",
+                format!("{}-consumer-{}", self.client_id, group_id),
+            )
+            .set("group.id", group_id)
+            .set("security.protocol", &self.security_protocol)
+            .set("enable.auto.commit", "false")
+            .set("auto.offset.reset", reset)
+            .set("enable.partition.eof", "false")
+            .set("broker.address.family", "v4");
+        client
+            .create()
+            .map_err(|error| FlowError::Configuration(error.to_string()))
+    }
 }
 
 impl ConnectionManager {
@@ -110,7 +170,7 @@ impl ConnectionManager {
                 || definition.sasl_password_env.is_some()
             {
                 return Err(FlowError::Configuration(
-                    "Kafka phase 4.3.1 currently supports only PLAINTEXT; TLS/SASL is planned for the hardened connector"
+                    "Kafka currently supports only PLAINTEXT; TLS/SASL will follow in a hardened connector"
                         .to_owned(),
                 ));
             }
@@ -122,9 +182,11 @@ impl ConnectionManager {
             })?;
             let mut client = ClientConfig::new();
             client
-                .set("bootstrap.servers", brokers)
+                .set("bootstrap.servers", &brokers)
                 .set("client.id", &definition.client_id)
                 .set("security.protocol", &definition.security_protocol)
+                // IPv4: evita localhost → ::1 cuando el broker solo escucha en 127.0.0.1.
+                .set("broker.address.family", "v4")
                 .set("enable.idempotence", "true")
                 .set("acks", "all")
                 .set(
@@ -134,7 +196,15 @@ impl ConnectionManager {
             let producer = client
                 .create()
                 .map_err(|error| FlowError::Configuration(error.to_string()))?;
-            kafka.insert(name.clone(), producer);
+            kafka.insert(
+                name.clone(),
+                KafkaEndpoint {
+                    brokers,
+                    client_id: definition.client_id.clone(),
+                    security_protocol: definition.security_protocol.clone(),
+                    producer,
+                },
+            );
         }
         #[cfg(not(feature = "kafka-driver"))]
         if !kafka_definitions.is_empty() {
@@ -187,6 +257,11 @@ impl ConnectionManager {
 
     #[cfg(feature = "kafka-driver")]
     pub fn kafka(&self, name: &str) -> Result<&FutureProducer, FlowError> {
+        Ok(self.kafka_endpoint(name)?.producer())
+    }
+
+    #[cfg(feature = "kafka-driver")]
+    pub fn kafka_endpoint(&self, name: &str) -> Result<&KafkaEndpoint, FlowError> {
         self.kafka.get(name).ok_or_else(|| {
             FlowError::Configuration(format!("Kafka connection '{name}' does not exist"))
         })

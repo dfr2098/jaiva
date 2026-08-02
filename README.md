@@ -6,6 +6,8 @@ un núcleo DAG, un runtime desacoplado, plugins y una UI sin lógica de negocio.
 
 ## Documentación
 
+Índice completo: [docs/README.md](docs/README.md)
+
 - [Arquitectura](docs/architecture.md)
 - [Visión y límites del proyecto](docs/project-vision.md)
 - [Ruta de modularización](docs/modular-roadmap.md)
@@ -13,6 +15,8 @@ un núcleo DAG, un runtime desacoplado, plugins y una UI sin lógica de negocio.
 - [Configuración](docs/configuration.md)
 - [Procesadores](docs/processors.md)
 - [Operación y observabilidad](docs/operations.md)
+- [Administrador de conexiones](docs/connection-manager.md) (MongoDB por URL, SQL Server, …)
+- [Fase 8: pruebas de integración](docs/priority-8-integration-tests.md) (Postgres, Kafka, Mongo, SQL Server)
 - [Diseño de escritura multi-base](docs/priority-4-database-writes.md)
 - [Fase 7: control y endurecimiento operativo](docs/priority-7-control-plane.md)
 - [Fase 7.8: ejecución paralela por procesador](docs/priority-7-8-parallel-workers.md)
@@ -44,7 +48,7 @@ flowchart LR
         OBS["Métricas · Provenance<br/>Dead-letter"]
     end
 
-    SYSTEMS[("PostgreSQL · MySQL · Oracle<br/>SQL Server · Kafka · archivos")]
+    SYSTEMS[("PostgreSQL · MySQL · Oracle · MongoDB<br/>SQL Server · Kafka · archivos")]
 
     USER --> CMUI
     USER --> DESIGNER

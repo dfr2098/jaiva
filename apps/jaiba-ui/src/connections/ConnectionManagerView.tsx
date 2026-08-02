@@ -19,11 +19,47 @@ const EMPTY: DatabaseConnectionInput = {
   database: "",
   username: "",
   password: "",
+  url: "",
   ssl: false,
   pool_min: 1,
   pool_max: 10,
   timeout_ms: 10_000,
 };
+
+/** Rellena host/puerto/base/usuario/contraseña a partir de una URI MongoDB. */
+function applyMongoConnectionUrl(
+  form: DatabaseConnectionInput,
+  raw: string,
+): DatabaseConnectionInput {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { ...form, url: "" };
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "mongodb:" && parsed.protocol !== "mongodb+srv:") {
+      return { ...form, url: trimmed };
+    }
+    const database = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+    const tls = parsed.searchParams.get("tls") ?? parsed.searchParams.get("ssl");
+    const ssl =
+      parsed.protocol === "mongodb+srv:" || tls === "true" || tls === "1";
+    return {
+      ...form,
+      url: trimmed,
+      host: parsed.hostname || form.host,
+      port: parsed.port ? Number(parsed.port) : form.port || 27017,
+      database: database || form.database,
+      username: decodeURIComponent(parsed.username || form.username),
+      password: parsed.password
+        ? decodeURIComponent(parsed.password)
+        : form.password,
+      ssl,
+    };
+  } catch {
+    return { ...form, url: trimmed };
+  }
+}
 
 const marks: Record<string, string> = {
   postgres: "PG",
@@ -144,9 +180,15 @@ export function ConnectionManagerView({
     setBusy("save");
     setError(null);
     try {
+      const payload: DatabaseConnectionInput = {
+        ...form,
+        url: form.connection_type === "mongodb" && form.url?.trim()
+          ? form.url.trim()
+          : undefined,
+      };
       const saved = editing
-        ? await jaivaApi.updateConnection(editing, form)
-        : await jaivaApi.createConnection(form);
+        ? await jaivaApi.updateConnection(editing, payload)
+        : await jaivaApi.createConnection(payload);
       setForm(EMPTY);
       setModal(null);
       await refresh();
@@ -451,14 +493,28 @@ function ConnectionForm({
     key: K,
     value: DatabaseConnectionInput[K],
   ) => onChange({ ...form, [key]: value });
+  const isMongo = form.connection_type === "mongodb";
+  const hasMongoUrl = Boolean(form.url?.trim());
   return (
     <form className="connection-form" onSubmit={(event) => event.preventDefault()}>
       <label className="wide">Nombre del perfil<input required value={form.name} onChange={(event) => field("name", event.target.value)} /></label>
-      <label>Host<input required value={form.host} onChange={(event) => field("host", event.target.value)} /></label>
-      <label>Puerto<input required min={1} max={65535} type="number" value={form.port} onChange={(event) => field("port", Number(event.target.value))} /></label>
+      {isMongo ? (
+        <label className="wide">
+          URL de conexión
+          <textarea
+            rows={3}
+            value={form.url ?? ""}
+            placeholder="mongodb://usuario:clave@host:27017/base?authSource=admin"
+            onChange={(event) => onChange(applyMongoConnectionUrl(form, event.target.value))}
+          />
+          <small>Opcional. Al pegar una URI se rellenan host, puerto, base y credenciales. También admite mongodb+srv://.</small>
+        </label>
+      ) : null}
+      <label>Host<input required={!hasMongoUrl} value={form.host} onChange={(event) => field("host", event.target.value)} /></label>
+      <label>Puerto<input required={!hasMongoUrl} min={1} max={65535} type="number" value={form.port} onChange={(event) => field("port", Number(event.target.value))} /></label>
       <label>Base / servicio<input value={form.database} onChange={(event) => field("database", event.target.value)} /></label>
-      <label>Usuario<input required autoComplete="username" value={form.username} onChange={(event) => field("username", event.target.value)} /></label>
-      <label className="wide">Contraseña<input required={!editing} autoComplete="new-password" type="password" value={form.password ?? ""} placeholder={editing ? "Vacío conserva la contraseña actual" : ""} onChange={(event) => field("password", event.target.value)} /></label>
+      <label>Usuario<input required={!hasMongoUrl} autoComplete="username" value={form.username} onChange={(event) => field("username", event.target.value)} /></label>
+      <label className="wide">Contraseña<input required={!editing && !hasMongoUrl} autoComplete="new-password" type="password" value={form.password ?? ""} placeholder={editing ? "Vacío conserva la contraseña actual" : hasMongoUrl ? "Vacío usa la de la URL" : ""} onChange={(event) => field("password", event.target.value)} /></label>
       <label>Pool mínimo<input min={0} type="number" value={form.pool_min} onChange={(event) => field("pool_min", Number(event.target.value))} /></label>
       <label>Pool máximo<input min={1} type="number" value={form.pool_max} onChange={(event) => field("pool_max", Number(event.target.value))} /></label>
       <label>Timeout (ms)<input min={250} type="number" value={form.timeout_ms} onChange={(event) => field("timeout_ms", Number(event.target.value))} /></label>

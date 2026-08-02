@@ -41,6 +41,9 @@ struct MetricsInner {
     kafka_messages_published: AtomicU64,
     kafka_bytes_published: AtomicU64,
     kafka_publish_errors: AtomicU64,
+    kafka_messages_consumed: AtomicU64,
+    kafka_bytes_consumed: AtomicU64,
+    kafka_consume_errors: AtomicU64,
     circuit_rejections: AtomicU64,
     circuits_open: AtomicU64,
     available_parallelism: AtomicU64,
@@ -107,6 +110,9 @@ pub struct FlowSummary {
     pub kafka_messages_published: u64,
     pub kafka_bytes_published: u64,
     pub kafka_publish_errors: u64,
+    pub kafka_messages_consumed: u64,
+    pub kafka_bytes_consumed: u64,
+    pub kafka_consume_errors: u64,
     pub circuit_rejections: u64,
     pub circuits_open: u64,
     pub available_parallelism: u64,
@@ -270,6 +276,21 @@ impl FlowMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn kafka_consumed(&self, messages: u64, bytes: u64) {
+        self.inner
+            .kafka_messages_consumed
+            .fetch_add(messages, Ordering::Relaxed);
+        self.inner
+            .kafka_bytes_consumed
+            .fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    pub fn kafka_consume_error(&self) {
+        self.inner
+            .kafka_consume_errors
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn circuit_rejected(&self) {
         self.inner
             .circuit_rejections
@@ -377,6 +398,9 @@ impl FlowMetrics {
             kafka_messages_published: self.inner.kafka_messages_published.load(Ordering::Relaxed),
             kafka_bytes_published: self.inner.kafka_bytes_published.load(Ordering::Relaxed),
             kafka_publish_errors: self.inner.kafka_publish_errors.load(Ordering::Relaxed),
+            kafka_messages_consumed: self.inner.kafka_messages_consumed.load(Ordering::Relaxed),
+            kafka_bytes_consumed: self.inner.kafka_bytes_consumed.load(Ordering::Relaxed),
+            kafka_consume_errors: self.inner.kafka_consume_errors.load(Ordering::Relaxed),
             circuit_rejections: self.inner.circuit_rejections.load(Ordering::Relaxed),
             circuits_open: self.inner.circuits_open.load(Ordering::Relaxed),
             available_parallelism: self.inner.available_parallelism.load(Ordering::Relaxed),
@@ -496,6 +520,15 @@ impl FlowMetrics {
              # HELP jaiva_kafka_publish_errors_total Kafka publish attempts that failed.\n\
              # TYPE jaiva_kafka_publish_errors_total counter\n\
              jaiva_kafka_publish_errors_total {}\n\
+             # HELP jaiva_kafka_messages_consumed_total Kafka messages committed by consumers.\n\
+             # TYPE jaiva_kafka_messages_consumed_total counter\n\
+             jaiva_kafka_messages_consumed_total {}\n\
+             # HELP jaiva_kafka_bytes_consumed_total Kafka payload bytes consumed.\n\
+             # TYPE jaiva_kafka_bytes_consumed_total counter\n\
+             jaiva_kafka_bytes_consumed_total {}\n\
+             # HELP jaiva_kafka_consume_errors_total Kafka consume attempts that failed.\n\
+             # TYPE jaiva_kafka_consume_errors_total counter\n\
+             jaiva_kafka_consume_errors_total {}\n\
              # HELP jaiva_circuit_breaker_rejections_total Operations rejected by open circuits.\n\
              # TYPE jaiva_circuit_breaker_rejections_total counter\n\
              jaiva_circuit_breaker_rejections_total {}\n\
@@ -533,6 +566,9 @@ impl FlowMetrics {
             snapshot.kafka_messages_published,
             snapshot.kafka_bytes_published,
             snapshot.kafka_publish_errors,
+            snapshot.kafka_messages_consumed,
+            snapshot.kafka_bytes_consumed,
+            snapshot.kafka_consume_errors,
             snapshot.circuit_rejections,
             snapshot.circuits_open,
             snapshot.available_parallelism,
@@ -647,6 +683,8 @@ mod tests {
         metrics.database_rollback();
         metrics.kafka_published(7, 512);
         metrics.kafka_publish_error();
+        metrics.kafka_consumed(3, 128);
+        metrics.kafka_consume_error();
         metrics.circuit_rejected();
         metrics.set_circuits_open(2);
         metrics.set_worker_limits(16, 8, 4);
@@ -681,6 +719,8 @@ mod tests {
         assert!(output.contains("jaiva_kafka_messages_published_total 7"));
         assert!(output.contains("jaiva_kafka_bytes_published_total 512"));
         assert!(output.contains("jaiva_kafka_publish_errors_total 1"));
+        assert!(output.contains("jaiva_kafka_messages_consumed_total 3"));
+        assert!(output.contains("jaiva_kafka_consume_errors_total 1"));
         assert!(output.contains("jaiva_circuit_breaker_rejections_total 1"));
         assert!(output.contains("jaiva_circuit_breakers_open 2"));
         assert!(output.contains("jaiva_available_parallelism 16"));

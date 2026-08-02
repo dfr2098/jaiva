@@ -22,6 +22,19 @@ La importación ocurre desde `src/components.tsx`, por lo que Vite agrega un has
 al nombre del recurso compilado. Para cambiar el tamaño visible se debe ajustar
 `.crab-mark` en `src/styles.css`, sin alterar los píxeles del archivo original.
 
+## Conexiones en la UI
+
+El módulo **Conexiones** crea perfiles reutilizables. Para MongoDB puede usar
+host/puerto o pegar una URI (`mongodb://` / `mongodb+srv://`). Documentación:
+[connection-manager.md](../../docs/connection-manager.md).
+
+Drivers opcionales al arrancar el motor (si no, no aparecen en el catálogo):
+
+```bash
+cargo run --features mongodb-driver,sqlserver-driver,kafka-driver \
+  -- serve examples/visualisa-flow.yaml
+```
+
 ## Iniciar el motor sin login local
 
 Usa `examples/visualisa-flow.yaml`:

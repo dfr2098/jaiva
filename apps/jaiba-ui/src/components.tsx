@@ -296,9 +296,11 @@ export function OperationsConsole({
     setError(null);
     try {
       if (tab === "provenance") {
-        setProvenance(await jaivaApi.provenance(100, packetId.trim() || undefined));
+        setProvenance(
+          await jaivaApi.provenance(flow.flow_id, 100, packetId.trim() || undefined),
+        );
       } else {
-        setDeadLetters(await jaivaApi.deadLetters(100));
+        setDeadLetters(await jaivaApi.deadLetters(flow.flow_id, 100));
       }
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "No fue posible consultar el repositorio.");
@@ -317,7 +319,8 @@ export function OperationsConsole({
     setBusy(true);
     setError(null);
     try {
-      await jaivaApi.replayDeadLetter(queueId);
+      if (!flow) return;
+      await jaivaApi.replayDeadLetter(flow.flow_id, queueId);
       await load();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "No fue posible reencolar el paquete.");

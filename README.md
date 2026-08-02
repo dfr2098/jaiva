@@ -251,7 +251,7 @@ engine:
   max_concurrency: 4
   state_file: .jaiva/state.json
   memory:
-    maximum_percent: 70
+    maximum_percent: 42
   repository:
     enabled: true
     database_path: .jaiva/repository.db
@@ -302,13 +302,13 @@ cualquier configuración de procesador puede referenciar `${env:VARIABLE}`.
 ### Presupuesto de memoria
 
 Jaiva detecta el menor valor entre la memoria física y el límite cgroup del
-contenedor. El 70% se reserva para paquetes; el 30% restante queda disponible
+contenedor. El 42% se reserva para paquetes; el resto queda disponible
 para el sistema operativo, el ejecutable, los drivers y otras estructuras:
 
 ```yaml
 engine:
   memory:
-    maximum_percent: 70
+    maximum_percent: 42
 ```
 
 Cada paquete reserva memoria aproximada antes de entrar al canal. Si no existe
@@ -450,8 +450,21 @@ Para probar una extracción y carga completa Oracle → PostgreSQL:
 bash scripts/test-oracle-to-postgres.sh
 ```
 
-El procedimiento, los usuarios técnicos, el mapeo y el diagnóstico están en
-[`docs/oracle-to-postgres.md`](docs/oracle-to-postgres.md).
+Fan-out multi-DB (1 → N): Oracle → PostgreSQL **y** MongoDB (validado el
+2026-08-02, incluido estrés ~10 000 filas):
+
+```bash
+export LD_LIBRARY_PATH="$HOME/oracle/instantclient_23_26${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export ORACLE_DATABASE_URL='oracle://dma_test:…@127.0.0.1:11521/FREEPDB1'
+export DATABASE_URL='postgres://dma:…@127.0.0.1:55432/dma'
+export MONGODB_URL='mongodb://dma_test:…@127.0.0.1:27018/dma_test?authSource=admin'
+cargo run --features oracle-driver,mongodb-driver \
+  -- examples/multi-db-fanout.yaml
+# Estrés: examples/oracle-fanout-stress.yaml (+ tabla jaiva_oracle_stress)
+```
+
+Runbook completo (Instant Client, tablas, verificación Compass/DBeaver):
+[`docs/oracle-to-postgres.md`](docs/oracle-to-postgres.md#fan-out-multi-db-prueba-oracle--postgresql--mongodb).
 
 ## MongoDB
 
@@ -465,7 +478,7 @@ cargo run --features mongodb-driver -- serve examples/visualisa-flow.yaml
 
 Configure host `127.0.0.1`, puerto `27017`, base `pruebas`, el usuario raíz del
 contenedor y SSL desactivado. Consulte los detalles y el alcance de esta fase en
-[`docs/connection-manager.md`](docs/connection-manager.md#mongodb-primera-fase).
+[`docs/connection-manager.md`](docs/connection-manager.md#mongodb).
 
 Ejecute la carga de ejemplo:
 

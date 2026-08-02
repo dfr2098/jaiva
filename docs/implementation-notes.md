@@ -272,6 +272,21 @@ flujo Postgres del Connection Manager, MongoDB (metadatos +
 Estado comprobado el 1 de agosto de 2026: harness verde con Postgres `:55432`,
 Kafka `:29092`, MongoDB `:27018` y SQL Server `:11433`.
 
+### Fan-out Oracle → PostgreSQL + MongoDB (validado)
+
+El 2 de agosto de 2026 se validó en el entorno de pruebas:
+
+- [`examples/multi-db-fanout.yaml`](../examples/multi-db-fanout.yaml): 2 filas,
+  `failed=0` hacia Postgres y Mongo.
+- [`examples/oracle-fanout-stress.yaml`](../examples/oracle-fanout-stress.yaml):
+  ~10 000 filas, `failed=0` tras crear `public.jaiva_oracle_stress`; comprobado
+  en Compass y DBeaver.
+
+Requisitos prácticos: Instant Client en el host (`LD_LIBRARY_PATH`, p. ej.
+copiado desde `dma_test_oracle_client` a `$HOME/oracle/instantclient_23_26`),
+Oracle `healthy` en `:11521`, tablas destino en Postgres. Runbook en
+[oracle-to-postgres.md](oracle-to-postgres.md#fan-out-multi-db-prueba-oracle--postgresql--mongodb).
+
 ### MongoDB — URL de conexión en Connection Manager
 
 Además de host/puerto/usuario, `POST/PUT /api/v1/connections` acepta `url` para

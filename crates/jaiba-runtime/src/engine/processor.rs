@@ -118,7 +118,7 @@ mod tests {
         let metrics = crate::engine::FlowMetrics::default();
         let memory = MemoryLimiter::detect(
             &crate::config::MemoryConfig {
-                maximum_percent: 70,
+                maximum_percent: 42,
             },
             metrics.clone(),
         )

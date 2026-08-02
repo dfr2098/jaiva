@@ -20,7 +20,7 @@ notas sueltas en el código.
 |---|---|
 | [connection-manager.md](connection-manager.md) | UI/API de perfiles, MongoDB (campos y URL), SQL Server, seguridad |
 | [priority-4-database-writes.md](priority-4-database-writes.md) | Escrituras multi-base |
-| [oracle-to-postgres.md](oracle-to-postgres.md) | Ejemplo Oracle → PostgreSQL |
+| [oracle-to-postgres.md](oracle-to-postgres.md) | Oracle → PostgreSQL; fan-out + estrés a Mongo (validado 2026-08-02) |
 
 ## Kafka, control y paralelismo
 

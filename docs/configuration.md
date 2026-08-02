@@ -21,7 +21,7 @@ engine:
   state_file: .jaiva/state.json
 
   memory:
-    maximum_percent: 70
+    maximum_percent: 42
 
   repository:
     enabled: true
@@ -241,6 +241,10 @@ En el Connection Manager (UI/API) un perfil Mongo puede crearse con campos
 sueltos o con el campo `url` (misma familia de URI). Ver
 [connection-manager.md](connection-manager.md). Los flujos en ejecución pueden
 usar el **alias** del perfil (`connection: mi_mongo`) en lugar de `url_env`.
+
+Ejemplo de fan-out Oracle → PostgreSQL + MongoDB:
+[`examples/multi-db-fanout.yaml`](../examples/multi-db-fanout.yaml)
+(documentado en [oracle-to-postgres.md](oracle-to-postgres.md)).
 
 ## Procesadores
 

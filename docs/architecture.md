@@ -28,7 +28,7 @@ flowchart LR
     CONNECTIONS --> MSSQL[(SQL Server)]
     CONNECTIONS --> KAFKA[(Kafka)]
 
-    SCHEDULER --> MEMORY["MemoryLimiter 70%"]
+    SCHEDULER --> MEMORY["MemoryLimiter 42%"]
     SCHEDULER --> WORKERS["Workers CPU / Blocking"]
     SCHEDULER --> REPOSITORY["PacketRepository"]
     REPOSITORY --> SQLITE[(SQLite WAL)]
@@ -82,7 +82,7 @@ sin orden, en orden completo o con afinidad por una clave de partición.
 ## Memoria
 
 Jaiva detecta el menor valor entre la RAM física y el límite cgroup. De forma
-predeterminada reserva el 70% para paquetes. Las reservas se liberan
+predeterminada reserva el 42% para paquetes. Las reservas se liberan
 automáticamente cuando el paquete deja de estar en cola o en procesamiento.
 
 ## Persistencia

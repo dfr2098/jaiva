@@ -1,0 +1,120 @@
+id: multi-db-fanout
+
+# Prueba del motor: fan-out 1 → N (Oracle → PostgreSQL + MongoDB).
+# Stack conservador. Datos sintéticos (2 filas); upsert idempotente por id.
+#
+# Variables (nunca en YAML):
+#   ORACLE_DATABASE_URL=oracle://usuario:clave@127.0.0.1:1521/FREEPDB1
+#   DATABASE_URL=postgres://usuario:clave@127.0.0.1:55432/dma
+#   MONGODB_URL=mongodb://usuario:clave@127.0.0.1:27018/dma_test?authSource=admin
+#
+# Postgres (una vez):
+#   CREATE TABLE IF NOT EXISTS public.jaiva_oracle_load_test (
+#     id bigint PRIMARY KEY,
+#     name text NOT NULL,
+#     loaded_at text NOT NULL
+#   );
+#
+# Ejecutar:
+#   cargo run --features oracle-driver,mongodb-driver -- examples/multi-db-fanout.yaml
+#
+# Alias histórico: examples/oracle-to-postgres-mongodb.yaml
+database_connections:
+  source:
+    type: oracle
+    url_env: ORACLE_DATABASE_URL
+    max_connections: 1
+  postgres:
+    type: postgres
+    url_env: DATABASE_URL
+    max_connections: 5
+  mongo:
+    type: mongodb
+    url_env: MONGODB_URL
+    max_connections: 5
+
+engine:
+  # Capacidad >= fan-out de success desde read_oracle (2 destinos).
+  queue_capacity: 100
+  max_concurrency: 4
+  memory:
+    maximum_percent: 42
+  repository:
+    enabled: true
+    database_path: .jaiva/repository.db
+    content_path: .jaiva/content
+    abandoned_after_seconds: 0
+    completed_retention_hours: 24
+
+processors:
+  # DUAL: extracción de prueba sin crear tablas en Oracle.
+  - id: read_oracle
+    type: query_oracle
+    config:
+      connection: source
+      query: >-
+        SELECT 1001 AS ID,
+               'Fila 1 desde Oracle' AS NAME,
+               TO_CHAR(SYSTIMESTAMP, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM') AS LOADED_AT
+        FROM DUAL
+        UNION ALL
+        SELECT 1002 AS ID,
+               'Fila 2 desde Oracle' AS NAME,
+               TO_CHAR(SYSTIMESTAMP, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM') AS LOADED_AT
+        FROM DUAL
+      batch_size: 100
+
+  - id: load_postgres
+    type: auto_destination
+    config:
+      connection: postgres
+      table: public.jaiva_oracle_load_test
+      mode: auto
+      batch_size: 100
+      columns:
+        # query_oracle normaliza ID/NAME/LOADED_AT a minúsculas.
+        id: id
+        name: name
+        loaded_at: loaded_at
+      conflict_columns:
+        - id
+    retry:
+      maximum_attempts: 3
+      initial_delay_ms: 250
+      maximum_delay_ms: 5000
+
+  - id: load_mongo
+    type: put_mongodb
+    config:
+      connection: mongo
+      collection: jaiva_oracle_load_test
+      mode: upsert
+      key_fields:
+        - id
+      batch_size: 100
+      ordered: true
+    retry:
+      maximum_attempts: 3
+      initial_delay_ms: 250
+      maximum_delay_ms: 5000
+
+  - id: errors
+    type: log_records
+
+connections:
+  # Fan-out: el mismo lote success va a Postgres y a Mongo.
+  - from: read_oracle
+    relationship: success
+    to: load_postgres
+  - from: read_oracle
+    relationship: success
+    to: load_mongo
+  - from: read_oracle
+    relationship: failure
+    to: errors
+  - from: load_postgres
+    relationship: failure
+    to: errors
+  - from: load_mongo
+    relationship: failure
+    to: errors

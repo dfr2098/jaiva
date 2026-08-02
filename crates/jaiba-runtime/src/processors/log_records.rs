@@ -16,6 +16,15 @@ impl Processor for LogRecords {
         context: &ProcessorContext,
         output: &OutputSender,
     ) -> Result<(), FlowError> {
+        if let Some(message) = packet.attributes.get("error.message") {
+            info!(
+                processor_id = %context.processor_id,
+                packet_id = %packet.id,
+                error_processor = packet.attributes.get("error.processor").map(String::as_str),
+                error = %message,
+                "failure"
+            );
+        }
         match &packet.content {
             PacketContent::Records(records) => {
                 for record in records {

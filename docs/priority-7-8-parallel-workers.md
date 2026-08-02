@@ -120,7 +120,7 @@ Se recomienda comenzar con:
 engine:
   max_concurrency: 16
   memory:
-    maximum_percent: 70
+    maximum_percent: 42
   workers:
     cpu_threads: 8
     blocking_threads: 4

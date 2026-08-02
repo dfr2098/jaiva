@@ -10,7 +10,7 @@ engine:
   queue_capacity: 100
   max_concurrency: 4
   memory:
-    maximum_percent: 70
+    maximum_percent: 42
   repository:
     enabled: true
     database_path: .jaiva/repository.db

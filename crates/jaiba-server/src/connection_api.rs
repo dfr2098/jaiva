@@ -582,6 +582,7 @@ fn materialize_connection(
         }
     }
 
+    #[cfg_attr(not(feature = "mongodb-driver"), allow(unused_mut))]
     let mut options = previous
         .map(|secret| secret.options.clone())
         .unwrap_or_default();
@@ -595,16 +596,12 @@ fn materialize_connection(
         .or_else(|| previous.map(|secret| secret.password.clone()))
         .unwrap_or_default();
     // Si el perfil ya tenía URI (Atlas/SRV), actualizar credenciales en ella.
-    if let Some(stored) = options.get("connection_url").cloned() {
-        #[cfg(feature = "mongodb-driver")]
-        if input.connection_type == ConnectionType::MongoDb {
+    #[cfg(feature = "mongodb-driver")]
+    if input.connection_type == ConnectionType::MongoDb {
+        if let Some(stored) = options.get("connection_url").cloned() {
             let updated = apply_credentials_to_mongo_url(&stored, &username, &password)
                 .map_err(bad_request)?;
             options.insert("connection_url".to_owned(), updated);
-        }
-        #[cfg(not(feature = "mongodb-driver"))]
-        {
-            let _ = stored;
         }
     }
     let database = input
@@ -678,6 +675,7 @@ fn validate_input(input: &ConnectionInput, password_required: bool) -> Result<()
         }
         #[cfg(not(feature = "mongodb-driver"))]
         {
+            let _ = raw;
             return Err(bad_request(
                 "MongoDB requiere compilar con --features mongodb-driver",
             ));

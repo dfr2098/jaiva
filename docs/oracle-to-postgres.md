@@ -79,6 +79,140 @@ registros con esta forma:
 `conflict_columns: [id]`, selecciona `upsert`: una segunda ejecución actualiza
 las filas en lugar de duplicarlas.
 
+## Fan-out multi-DB (prueba): Oracle → PostgreSQL + MongoDB
+
+Ejemplo canónico de prueba del motor **1 → N** (stack conservador):
+
+[`examples/multi-db-fanout.yaml`](../examples/multi-db-fanout.yaml)
+
+Alias histórico (mismo flujo):
+[`examples/oracle-to-postgres-mongodb.yaml`](../examples/oracle-to-postgres-mongodb.yaml)
+
+```mermaid
+flowchart LR
+  Oracle[query_oracle] -->|success| PG[auto_destination Postgres]
+  Oracle -->|success| Mongo[put_mongodb]
+  Oracle -->|failure| Errors[log_records]
+  PG -->|failure| Errors
+  Mongo -->|failure| Errors
+```
+
+### Validación comprobada (2 de agosto de 2026)
+
+En el entorno de pruebas local se validó de punta a punta:
+
+| Flujo | Filas | Resultado |
+|---|---|---|
+| `multi-db-fanout.yaml` (bajo) | 2 (`DUAL`) | `failed=0` → Postgres + Mongo |
+| `oracle-fanout-stress.yaml` | ~10 000 (`CONNECT BY`) | `failed=0` → Postgres + Mongo (+ tap log) |
+
+Comprobado en UI: MongoDB Compass (`dma_test.jaiva_oracle_stress`) y DBeaver
+(`public.jaiva_oracle_stress`, 10 000 filas).
+
+### Instant Client en el host
+
+Jaiba corre en el host (`cargo run`), no dentro del contenedor Oracle. Hace
+falta **Oracle Instant Client** visible para el cargador dinámico.
+
+Si el client vive solo en el contenedor `dma_test_oracle_client`:
+
+```bash
+mkdir -p "$HOME/oracle"
+docker cp dma_test_oracle_client:/opt/oracle/instantclient_23_26 "$HOME/oracle/"
+export LD_LIBRARY_PATH="$HOME/oracle/instantclient_23_26${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+Comprueba: `ls "$LD_LIBRARY_PATH"/libclntsh.so*`. Sin esto, `read_oracle` falla
+(suele ser `DPI-1047`) y el paquete va a `errors`.
+
+### Contenedores y puertos del entorno de pruebas
+
+| Servicio | Contenedor | Host |
+|---|---|---|
+| Oracle | `dma_test_oracle` | `127.0.0.1:11521` → 1521, servicio `FREEPDB1` |
+| PostgreSQL | `dma_postgres` | `127.0.0.1:55432` |
+| MongoDB | `dma_test_mongodb` | `127.0.0.1:27018` |
+
+Oracle debe estar `healthy` antes de correr. En hosts ~16 GiB conviene el modo
+ligero: [`../scripts/jaiva-light-containers.sh`](../scripts/jaiva-light-containers.sh)
+(`oracle` / `fanout` / `status`). Ver también [operations.md](operations.md).
+
+### Ejecución (flujo bajo)
+
+Tablas/colecciones:
+
+```sql
+-- Postgres (una vez)
+CREATE TABLE IF NOT EXISTS public.jaiva_oracle_load_test (
+  id bigint PRIMARY KEY,
+  name text NOT NULL,
+  loaded_at text NOT NULL
+);
+```
+
+Mongo crea `jaiva_oracle_load_test` al escribir.
+
+```bash
+export LD_LIBRARY_PATH="$HOME/oracle/instantclient_23_26${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# Postgres: usuario/clave del .env del entorno (no uses placeholders TU_CLAVE)
+source <(sed -n 's/^POSTGRES_APP_PASSWORD=/export JAIBA_PG_PASS=/p; s/^POSTGRES_APP_USER=/export JAIBA_PG_USER=/p; s/^POSTGRES_DB=/export JAIBA_PG_DB=/p; s/^POSTGRES_PORT=/export JAIBA_PG_PORT=/p' \
+  ~/Escritorio/DMA_CORE/DMA_CORE/.env)
+ENC="$(python3 -c 'import os,urllib.parse; print(urllib.parse.quote(os.environ["JAIBA_PG_PASS"], safe=""))')"
+export DATABASE_URL="postgres://${JAIBA_PG_USER}:${ENC}@127.0.0.1:${JAIBA_PG_PORT:-55432}/${JAIBA_PG_DB:-dma}"
+
+# Oracle / Mongo del compose de pruebas
+export ORACLE_DATABASE_URL='oracle://dma_test:TestOracleUser_2026@127.0.0.1:11521/FREEPDB1'
+export MONGODB_URL='mongodb://dma_test:TestMongoUser_2026!@127.0.0.1:27018/dma_test?authSource=admin'
+
+cd ~/Escritorio/jaiva
+cargo run --features oracle-driver,mongodb-driver -- examples/multi-db-fanout.yaml
+```
+
+Salida esperada: `flow completed … failed=0` y aristas `success` en
+`load_postgres` y `load_mongo`. Una segunda ejecución es idempotente (upsert por
+`id`).
+
+### Estrés (~10 000 filas)
+
+[`examples/oracle-fanout-stress.yaml`](../examples/oracle-fanout-stress.yaml):
+`CONNECT BY LEVEL <= 10000`, fan-out ×3 (Postgres + Mongo + `log_records`),
+lotes de 500, `max_concurrency: 16`, repo `.jaiva/repository-stress.db`.
+
+```sql
+CREATE TABLE IF NOT EXISTS public.jaiva_oracle_stress (
+  id bigint PRIMARY KEY,
+  name text NOT NULL,
+  loaded_at text NOT NULL
+);
+```
+
+```bash
+# mismas variables + LD_LIBRARY_PATH que arriba
+cargo run --features oracle-driver,mongodb-driver -- examples/oracle-fanout-stress.yaml
+```
+
+Sin la tabla Postgres verás `failed>0` y muchos `retried` aunque Mongo cargue
+bien. Con la tabla: `failed=0` y ~10 000 filas/documentos en ambos destinos.
+
+Para aflojar: baja el `LEVEL` (p. ej. 1000). No es un flujo de producción.
+
+### Cómo verificar
+
+```bash
+# Postgres
+docker exec -i dma_postgres psql -U "$JAIBA_PG_USER" -d "$JAIBA_PG_DB" \
+  -c 'SELECT COUNT(*) FROM public.jaiva_oracle_stress;'
+
+# Mongo
+docker exec dma_test_mongodb mongosh --quiet \
+  -u dma_test -p 'TestMongoUser_2026!' --authenticationDatabase admin dma_test \
+  --eval 'db.jaiva_oracle_stress.countDocuments({})'
+```
+
+También: MongoDB Compass → `dma_test.jaiva_oracle_stress`; DBeaver →
+`public.jaiva_oracle_stress`.
+
 ## Adaptación a una tabla real
 
 Cambia la consulta y el mapeo en el YAML:

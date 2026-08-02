@@ -79,6 +79,35 @@ curl -H "Authorization: Bearer $JAIBA_ADMIN_TOKEN" \
 La referencia completa está en
 [Fase 7: control y endurecimiento operativo](priority-7-control-plane.md).
 
+### PC se traba con muchos contenedores
+
+En hosts ~16 GiB, el stack de producto (Angular, backends, Kafka) más Oracle /
+SQL Server suele dejar la RAM sin margen. Usa el modo ligero:
+
+```bash
+# Solo lo necesario para fan-out / Mongo (para Angular, Kafka, backends pesados)
+./scripts/jaiva-light-containers.sh fanout
+
+# Oracle + Postgres + Mongo
+./scripts/jaiva-light-containers.sh oracle
+
+# Ver uso
+./scripts/jaiva-light-containers.sh status
+```
+
+Las DBs de prueba en `compose.test-databases.yml` llevan `mem_limit` (Mongo
+512 MiB, SQL Server 1.5 GiB, Oracle 3 GiB + shm 1 GiB). Tras cambiar límites:
+
+```bash
+cd ../DMA_CORE/DMA_CORE   # ruta de tu entorno
+docker compose -f compose.test-databases.yml up -d --force-recreate
+```
+
+Fan-out Oracle → Postgres + Mongo (validado, incluido estrés 10 000 filas):
+[oracle-to-postgres.md](oracle-to-postgres.md#fan-out-multi-db-prueba-oracle--postgresql--mongodb).
+Requiere Instant Client en el host (`LD_LIBRARY_PATH`, p. ej.
+`$HOME/oracle/instantclient_23_26`).
+
 ### Suite Fase 8 (entorno de pruebas)
 
 Integra Postgres, Kafka, MongoDB y SQL Server ya levantados en el host:

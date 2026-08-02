@@ -1,0 +1,137 @@
+id: oracle-fanout-stress
+
+# ⚠️ EJEMPLO EXAGERADO — solo para probar el motor (colas, fan-out, reintentos, repo).
+# No es un flujo de producción. Genera ~10_000 filas en Oracle (CONNECT BY) y las
+# empuja a PostgreSQL, MongoDB y un tap de log en paralelo (fan-out ×3).
+#
+# Variables:
+#   ORACLE_DATABASE_URL=oracle://usuario:clave@127.0.0.1:1521/FREEPDB1
+#   DATABASE_URL=postgres://usuario:clave@127.0.0.1:55432/dma
+#   MONGODB_URL=mongodb://usuario:clave@127.0.0.1:27018/dma_test?authSource=admin
+#
+# Postgres (tabla de estrés; créala una vez):
+#   CREATE TABLE IF NOT EXISTS public.jaiva_oracle_stress (
+#     id bigint PRIMARY KEY,
+#     name text NOT NULL,
+#     loaded_at text NOT NULL
+#   );
+#
+# Ejecutar:
+#   cargo run --features oracle-driver,mongodb-driver -- examples/oracle-fanout-stress.yaml
+#
+# Para aflojar: baja CONNECT BY LEVEL (p. ej. 1000) o batch_size / max_concurrency.
+# Para apretar: sube LEVEL a 50000 (cuidado con disco/red/memoria).
+database_connections:
+  source:
+    type: oracle
+    url_env: ORACLE_DATABASE_URL
+    max_connections: 1
+  postgres:
+    type: postgres
+    url_env: DATABASE_URL
+    max_connections: 10
+  mongo:
+    type: mongodb
+    url_env: MONGODB_URL
+    max_connections: 10
+
+engine:
+  queue_capacity: 256
+  max_concurrency: 16
+  workers:
+    cpu_threads: 0
+    blocking_threads: 0
+  repository:
+    enabled: true
+    database_path: .jaiva/repository-stress.db
+    content_path: .jaiva/content-stress
+    abandoned_after_seconds: 0
+    completed_retention_hours: 1
+
+processors:
+  - id: read_oracle
+    type: query_oracle
+    config:
+      connection: source
+      # ~10k filas sintéticas; no toca tablas de negocio.
+      query: >-
+        SELECT LEVEL AS ID,
+               'stress-row-' || TO_CHAR(LEVEL) AS NAME,
+               TO_CHAR(SYSTIMESTAMP, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM') AS LOADED_AT
+        FROM DUAL
+        CONNECT BY LEVEL <= 10000
+      batch_size: 500
+    scheduling:
+      concurrent_tasks: 1
+      execution_mode: async_io
+
+  - id: load_postgres
+    type: auto_destination
+    config:
+      connection: postgres
+      table: public.jaiva_oracle_stress
+      mode: auto
+      batch_size: 500
+      columns:
+        id: id
+        name: name
+        loaded_at: loaded_at
+      conflict_columns:
+        - id
+    scheduling:
+      concurrent_tasks: 4
+      maximum_in_flight: 8
+      execution_mode: async_io
+    retry:
+      maximum_attempts: 5
+      initial_delay_ms: 100
+      maximum_delay_ms: 8000
+
+  - id: load_mongo
+    type: put_mongodb
+    config:
+      connection: mongo
+      collection: jaiva_oracle_stress
+      mode: upsert
+      key_fields:
+        - id
+      batch_size: 500
+      ordered: false
+    scheduling:
+      concurrent_tasks: 4
+      maximum_in_flight: 8
+      execution_mode: async_io
+    retry:
+      maximum_attempts: 5
+      initial_delay_ms: 100
+      maximum_delay_ms: 8000
+
+  # Tercer destino: fuerza más fan-out / presión en colas (mucho ruido en log).
+  - id: tap_log
+    type: log_records
+    scheduling:
+      concurrent_tasks: 2
+      execution_mode: cpu
+
+  - id: errors
+    type: log_records
+
+connections:
+  - from: read_oracle
+    relationship: success
+    to: load_postgres
+  - from: read_oracle
+    relationship: success
+    to: load_mongo
+  - from: read_oracle
+    relationship: success
+    to: tap_log
+  - from: read_oracle
+    relationship: failure
+    to: errors
+  - from: load_postgres
+    relationship: failure
+    to: errors
+  - from: load_mongo
+    relationship: failure
+    to: errors

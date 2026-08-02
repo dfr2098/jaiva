@@ -430,7 +430,8 @@ impl Default for MemoryConfig {
 }
 
 fn default_memory_percent() -> u8 {
-    70
+    // ~40% menos que el presupuesto histórico del 70%.
+    42
 }
 
 fn default_queue_capacity() -> usize {

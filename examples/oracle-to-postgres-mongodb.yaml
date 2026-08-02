@@ -1,0 +1,105 @@
+id: oracle-to-postgres-mongodb
+
+# Alias histórico del fan-out multi-DB.
+# Preferir el canónico:
+#   examples/multi-db-fanout.yaml
+#
+#   cargo run --features oracle-driver,mongodb-driver -- examples/multi-db-fanout.yaml
+#
+# Este archivo se mantiene ejecutable por compatibilidad con enlaces antiguos.
+# Variables: ORACLE_DATABASE_URL, DATABASE_URL, MONGODB_URL.
+database_connections:
+  source:
+    type: oracle
+    url_env: ORACLE_DATABASE_URL
+    max_connections: 1
+  postgres:
+    type: postgres
+    url_env: DATABASE_URL
+    max_connections: 5
+  mongo:
+    type: mongodb
+    url_env: MONGODB_URL
+    max_connections: 5
+
+engine:
+  queue_capacity: 100
+  max_concurrency: 4
+  memory:
+    maximum_percent: 42
+  repository:
+    enabled: true
+    database_path: .jaiva/repository.db
+    content_path: .jaiva/content
+    abandoned_after_seconds: 0
+    completed_retention_hours: 24
+
+processors:
+  - id: read_oracle
+    type: query_oracle
+    config:
+      connection: source
+      query: >-
+        SELECT 1001 AS ID,
+               'Fila 1 desde Oracle' AS NAME,
+               TO_CHAR(SYSTIMESTAMP, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM') AS LOADED_AT
+        FROM DUAL
+        UNION ALL
+        SELECT 1002 AS ID,
+               'Fila 2 desde Oracle' AS NAME,
+               TO_CHAR(SYSTIMESTAMP, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM') AS LOADED_AT
+        FROM DUAL
+      batch_size: 100
+
+  - id: load_postgres
+    type: auto_destination
+    config:
+      connection: postgres
+      table: public.jaiva_oracle_load_test
+      mode: auto
+      batch_size: 100
+      columns:
+        id: id
+        name: name
+        loaded_at: loaded_at
+      conflict_columns:
+        - id
+    retry:
+      maximum_attempts: 3
+      initial_delay_ms: 250
+      maximum_delay_ms: 5000
+
+  - id: load_mongo
+    type: put_mongodb
+    config:
+      connection: mongo
+      collection: jaiva_oracle_load_test
+      mode: upsert
+      key_fields:
+        - id
+      batch_size: 100
+      ordered: true
+    retry:
+      maximum_attempts: 3
+      initial_delay_ms: 250
+      maximum_delay_ms: 5000
+
+  - id: errors
+    type: log_records
+
+connections:
+  - from: read_oracle
+    relationship: success
+    to: load_postgres
+  - from: read_oracle
+    relationship: success
+    to: load_mongo
+  - from: read_oracle
+    relationship: failure
+    to: errors
+  - from: load_postgres
+    relationship: failure
+    to: errors
+  - from: load_mongo
+    relationship: failure
+    to: errors

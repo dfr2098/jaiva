@@ -14,6 +14,7 @@ un núcleo DAG, un runtime desacoplado, plugins y una UI sin lógica de negocio.
 - [Bitácora técnica y memoria de implementación](docs/implementation-notes.md)
 - [Configuración](docs/configuration.md)
 - [Procesadores](docs/processors.md)
+- [AI Data Prep (Rust, sin train)](docs/ai-data-prep.md)
 - [Operación y observabilidad](docs/operations.md)
 - [Administrador de conexiones](docs/connection-manager.md) (MongoDB por URL, SQL Server, …)
 - [Fase 8: pruebas de integración](docs/priority-8-integration-tests.md) (Postgres, Kafka, Mongo, SQL Server)

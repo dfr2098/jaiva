@@ -1232,6 +1232,10 @@ main.connections-main {
   border-left-color: var(--sand);
 }
 
+.palette-item.ai_prep {
+  border-left-color: var(--lagoon);
+}
+
 .palette-item.sink {
   border-left-color: var(--rust-light);
 }
@@ -1304,6 +1308,10 @@ main.connections-main {
   border-top-color: var(--sand);
 }
 
+.rf-node.ai_prep {
+  border-top-color: var(--lagoon);
+}
+
 .rf-node.sink {
   border-top-color: var(--rust-light);
 }
@@ -1333,6 +1341,11 @@ main.connections-main {
   color: var(--sand);
 }
 
+.rf-node-tag.ai_prep {
+  background: rgb(115 185 199 / 22%);
+  color: var(--lagoon);
+}
+
 .rf-node-tag.sink {
   background: rgb(208 107 67 / 20%);
   color: var(--rust-light);
@@ -1357,12 +1370,26 @@ main.connections-main {
   pointer-events: none;
 }
 
-.rf-handle-hint.success {
-  top: 36%;
+.rf-node.split-out {
+  min-height: 108px;
+  padding-right: 58px;
+}
+
+.rf-handle-hint.success,
+.rf-handle-hint.train {
+  color: var(--lagoon);
 }
 
 .rf-handle-hint.failure {
-  top: 66%;
+  color: var(--rust-light);
+}
+
+.rf-handle-hint.validation {
+  color: var(--sand);
+}
+
+.rf-handle-hint.test {
+  color: var(--pale-blue);
 }
 
 .react-flow__handle {
@@ -1372,12 +1399,21 @@ main.connections-main {
   border: 1px solid var(--abyss);
 }
 
-.react-flow__handle.handle-success {
+.react-flow__handle.handle-success,
+.react-flow__handle.handle-train {
   background: var(--lagoon);
 }
 
 .react-flow__handle.handle-failure {
   background: var(--rust-light);
+}
+
+.react-flow__handle.handle-validation {
+  background: var(--sand);
+}
+
+.react-flow__handle.handle-test {
+  background: var(--pale-blue);
 }
 
 /* Panel lateral */

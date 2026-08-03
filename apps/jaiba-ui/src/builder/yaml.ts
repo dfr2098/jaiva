@@ -6,6 +6,8 @@ import {
   SCHEDULE_DEFAULTS,
   SCHEDULING_DEFAULTS,
   SIMULATION_DEFAULTS,
+  SPLIT_OUTGOING,
+  parseRelationship,
   type CatchUpPolicy,
   type DatabaseConnection,
   type ConnectionEdge,
@@ -490,6 +492,27 @@ export function validateFlow(
         message: `'${id}' usa upsert MongoDB y necesita campos clave.`,
       });
     }
+
+    if (node.data.type === "ai_split_dataset") {
+      const outgoing = edges.filter((edge) => edge.source === node.id);
+      const rels = new Set(
+        outgoing.map((edge) => edge.data?.relationship ?? "success"),
+      );
+      for (const required of SPLIT_OUTGOING) {
+        if (!rels.has(required)) {
+          issues.push({
+            level: "warning",
+            message: `'${id}' no tiene conexión '${required}'. Cablea el handle ${required} a encode/write.`,
+          });
+        }
+      }
+      if (rels.has("success") || rels.has("failure")) {
+        issues.push({
+          level: "warning",
+          message: `'${id}' usa success/failure; el motor emite train/validation/test, no success.`,
+        });
+      }
+    }
   }
 
   const nodeIds = new Set(nodes.map((node) => node.id));
@@ -703,16 +726,26 @@ export function parseFlowYaml(content: string): ImportedFlow {
     const target = nodeByProcessor.get(stringOr(connection.to));
     if (!source || !target) return [];
     const queue = object(connection.queue);
-    const relationship = connection.relationship === "failure" ? "failure" : "success";
+    const relationship = parseRelationship(connection.relationship, "success");
+    const stroke =
+      relationship === "failure"
+        ? "#c2603f"
+        : relationship === "validation"
+          ? "#c7b887"
+          : relationship === "test"
+            ? "#6aa8c4"
+            : "#2f8f83";
     return [{
       id: `import_edge_${index}`,
       source,
       target,
       sourceHandle: relationship,
       targetHandle: "in",
-      type: "default",
+      type: "smoothstep",
+      animated: relationship !== "failure",
+      label: relationship,
       style: {
-        stroke: relationship === "failure" ? "#c2603f" : "#2f8f83",
+        stroke,
         strokeWidth: 2,
       },
       data: {

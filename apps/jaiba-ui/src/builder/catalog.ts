@@ -1,4 +1,12 @@
-export type ProcessorCategory = "source" | "transform" | "sink";
+export type ProcessorCategory = "source" | "transform" | "ai_prep" | "sink";
+
+/** Mirrors `Relationship` in model.ts (evitar import circular catalog ↔ model). */
+export type OutgoingRelationship =
+  | "success"
+  | "failure"
+  | "train"
+  | "validation"
+  | "test";
 
 export type FieldKind =
   | "text"
@@ -38,6 +46,11 @@ export interface ProcessorDef {
   description: string;
   fields: FieldDef[];
   defaultConfig: Record<string, unknown>;
+  /**
+   * Handles de salida en el lienzo. Por defecto `success` + `failure`.
+   * `ai_split_dataset` usa `train` / `validation` / `test`.
+   */
+  outgoingRelationships?: readonly OutgoingRelationship[];
 }
 
 /**
@@ -388,6 +401,233 @@ export const PROCESSOR_CATALOG: ProcessorDef[] = [
     defaultConfig: { fields: {} },
   },
   {
+    type: "ai_select_fields",
+    label: "AI: seleccionar campos",
+    category: "ai_prep",
+    description: "Keep/drop de columnas sobre registros JSON.",
+    fields: [
+      { key: "keep", label: "Keep", kind: "stringList" },
+      { key: "drop", label: "Drop", kind: "stringList" },
+    ],
+    defaultConfig: { keep: [], drop: [] },
+  },
+  {
+    type: "ai_drop_nulls",
+    label: "AI: drop nulls",
+    category: "ai_prep",
+    description: "Elimina filas con null/vacío en los campos dados.",
+    fields: [
+      { key: "fields", label: "Campos", kind: "stringList", required: true },
+    ],
+    defaultConfig: { fields: [] },
+  },
+  {
+    type: "ai_fill_missing",
+    label: "AI: fill missing",
+    category: "ai_prep",
+    description: "Rellena nulos: previous, constant, mean o median.",
+    fields: [
+      { key: "fields", label: "Campos", kind: "stringList", required: true },
+      {
+        key: "strategy",
+        label: "Estrategia",
+        kind: "select",
+        options: ["previous", "constant", "mean", "median"],
+      },
+      { key: "constant", label: "Constante", kind: "text" },
+      { key: "cumulative", label: "Stats acumulados", kind: "boolean" },
+    ],
+    defaultConfig: { fields: [], strategy: "previous", cumulative: false },
+  },
+  {
+    type: "ai_remove_duplicates",
+    label: "AI: dedupe",
+    category: "ai_prep",
+    description: "Elimina duplicados por clave(s); window opcional.",
+    fields: [
+      { key: "key_fields", label: "Claves", kind: "stringList", required: true },
+      { key: "window", label: "Ventana", kind: "number", placeholder: "opcional" },
+    ],
+    defaultConfig: { key_fields: [] },
+  },
+  {
+    type: "ai_filter_range",
+    label: "AI: filter range",
+    category: "ai_prep",
+    description: "Filtra outliers por min/max o IQR.",
+    fields: [
+      { key: "field", label: "Campo", kind: "text", required: true },
+      {
+        key: "mode",
+        label: "Modo",
+        kind: "select",
+        options: ["min_max", "iqr"],
+      },
+      { key: "min", label: "Mín", kind: "number" },
+      { key: "max", label: "Máx", kind: "number" },
+      { key: "iqr_multiplier", label: "IQR k", kind: "number" },
+    ],
+    defaultConfig: { field: "", mode: "min_max", iqr_multiplier: 1.5 },
+  },
+  {
+    type: "ai_cast_types",
+    label: "AI: cast types",
+    category: "ai_prep",
+    description: "Cast a number/string/bool/timestamp.",
+    fields: [
+      {
+        key: "fields",
+        label: "Campo → tipo",
+        kind: "keyValue",
+        required: true,
+        help: "Valores: number, string, bool, timestamp",
+      },
+      {
+        key: "on_error",
+        label: "On error",
+        kind: "select",
+        options: ["drop", "fail"],
+      },
+    ],
+    defaultConfig: { fields: {}, on_error: "drop" },
+  },
+  {
+    type: "ai_normalize",
+    label: "AI: normalize",
+    category: "ai_prep",
+    description: "min-max o z-score; cumulative opcional entre paquetes.",
+    fields: [
+      { key: "fields", label: "Campos", kind: "stringList", required: true },
+      {
+        key: "method",
+        label: "Método",
+        kind: "select",
+        options: ["min_max", "z_score"],
+      },
+      { key: "cumulative", label: "Stats acumulados", kind: "boolean" },
+    ],
+    defaultConfig: { fields: [], method: "min_max", cumulative: false },
+  },
+  {
+    type: "ai_encode_categories",
+    label: "AI: encode categories",
+    category: "ai_prep",
+    description: "Label encoding con mapa fijo por campo.",
+    fields: [
+      {
+        key: "fields",
+        label: "Mapas (JSON)",
+        kind: "jsonObject",
+        required: true,
+        help: '{"status":{"OK":0,"WARN":1}}',
+      },
+      {
+        key: "on_error",
+        label: "On error",
+        kind: "select",
+        options: ["drop", "fail"],
+      },
+    ],
+    defaultConfig: { fields: {}, on_error: "drop" },
+  },
+  {
+    type: "ai_compute_fields",
+    label: "AI: compute fields",
+    category: "ai_prep",
+    description: "Features aritméticas simples (a + b * 2).",
+    fields: [
+      {
+        key: "fields",
+        label: "Campo → expresión",
+        kind: "keyValue",
+        required: true,
+      },
+      {
+        key: "on_error",
+        label: "On error",
+        kind: "select",
+        options: ["drop", "fail"],
+      },
+    ],
+    defaultConfig: { fields: {}, on_error: "drop" },
+  },
+  {
+    type: "ai_split_dataset",
+    label: "AI: split dataset",
+    category: "ai_prep",
+    description:
+      "Emite por las relaciones train / validation / test (no usa success). Cablea cada handle a encode/write.",
+    fields: [
+      { key: "train", label: "Train", kind: "number" },
+      { key: "validation", label: "Validation", kind: "number" },
+      { key: "test", label: "Test", kind: "number" },
+    ],
+    defaultConfig: { train: 0.7, validation: 0.2, test: 0.1 },
+    outgoingRelationships: ["train", "validation", "test"],
+  },
+  {
+    type: "ai_lookup_join",
+    label: "AI: lookup join",
+    category: "ai_prep",
+    description: "Enriquece por clave con lookup en memoria.",
+    fields: [
+      { key: "key", label: "Clave", kind: "text", required: true },
+      {
+        key: "lookup_records",
+        label: "Lookup records",
+        kind: "jsonArray",
+      },
+      {
+        key: "lookup_path",
+        label: "Lookup path (JSON)",
+        kind: "text",
+        placeholder: "data/lookup.json",
+      },
+      { key: "copy_fields", label: "Campos a copiar", kind: "stringList" },
+    ],
+    defaultConfig: { key: "", lookup_records: [], copy_fields: [] },
+  },
+  {
+    type: "ai_export_manifest",
+    label: "AI: export manifest",
+    category: "ai_prep",
+    description: "Escribe manifest.json para hand-off ML.",
+    fields: [
+      {
+        key: "path",
+        label: "Ruta",
+        kind: "text",
+        required: true,
+        placeholder: "output/ai-prep/manifest.json",
+      },
+      { key: "dataset_name", label: "Dataset", kind: "text" },
+    ],
+    defaultConfig: { path: "output/ai-prep/manifest.json", dataset_name: "dataset" },
+  },
+  {
+    type: "ai_trigger_webhook",
+    label: "AI: trigger webhook",
+    category: "ai_prep",
+    description: "POST/PUT HTTP al job ML externo (sin train in-process).",
+    fields: [
+      { key: "url", label: "URL", kind: "text", required: true },
+      {
+        key: "method",
+        label: "Método",
+        kind: "select",
+        options: ["POST", "PUT", "GET"],
+      },
+      { key: "include_records", label: "Incluir records", kind: "boolean" },
+      { key: "timeout_ms", label: "Timeout ms", kind: "number" },
+    ],
+    defaultConfig: {
+      url: "",
+      method: "POST",
+      include_records: false,
+      timeout_ms: 10000,
+    },
+  },
+  {
     type: "encode_json",
     label: "Codificar JSON",
     category: "transform",
@@ -475,12 +715,14 @@ export const CATALOG_BY_TYPE: Record<string, ProcessorDef> = Object.fromEntries(
 export const CATEGORY_LABEL: Record<ProcessorCategory, string> = {
   source: "Fuentes",
   transform: "Transformaciones",
+  ai_prep: "AI Prep",
   sink: "Destinos",
 };
 
 export const CATEGORY_TAG: Record<ProcessorCategory, string> = {
   source: "Origen",
   transform: "Proceso",
+  ai_prep: "AI Prep",
   sink: "Destino",
 };
 

@@ -12,6 +12,7 @@ notas sueltas en el código.
 | [project-vision.md](project-vision.md) | Alcance y límites del producto |
 | [configuration.md](configuration.md) | YAML de flujos, conexiones y features |
 | [processors.md](processors.md) | Catálogo de procesadores |
+| [ai-data-prep.md](ai-data-prep.md) | Toolkit AI Prep (Rust, sin train in-process) |
 | [operations.md](operations.md) | Servir, features, observabilidad, UI |
 
 ## Conexiones y bases de datos

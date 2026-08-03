@@ -36,3 +36,4 @@ tiberius = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 rdkafka = { workspace = true, optional = true }
 mongodb = { workspace = true, optional = true }
+reqwest.workspace = true

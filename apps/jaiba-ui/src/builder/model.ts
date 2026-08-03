@@ -1,7 +1,34 @@
 import type { Edge, Node } from "@xyflow/react";
 import { CATALOG_BY_TYPE } from "./catalog";
 
-export type Relationship = "success" | "failure";
+/** Relaciones de routing del motor (incluye splits AI Prep). */
+export type Relationship = "success" | "failure" | "train" | "validation" | "test";
+
+export const DEFAULT_OUTGOING: readonly Relationship[] = ["success", "failure"];
+
+export const SPLIT_OUTGOING: readonly Relationship[] = ["train", "validation", "test"];
+
+export const ALL_RELATIONSHIPS: readonly Relationship[] = [
+  "success",
+  "failure",
+  "train",
+  "validation",
+  "test",
+];
+
+export function isRelationship(value: unknown): value is Relationship {
+  return (
+    value === "success" ||
+    value === "failure" ||
+    value === "train" ||
+    value === "validation" ||
+    value === "test"
+  );
+}
+
+export function parseRelationship(value: unknown, fallback: Relationship = "success"): Relationship {
+  return isRelationship(value) ? value : fallback;
+}
 
 export interface RetrySettings {
   maximum_attempts: number;

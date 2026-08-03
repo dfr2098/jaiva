@@ -59,6 +59,9 @@ import { TopMenu } from "./TopMenu";
 import {
   createProcessorNode,
   defaultFlowMeta,
+  DEFAULT_OUTGOING,
+  SPLIT_OUTGOING,
+  parseRelationship,
   SCHEDULE_DEFAULTS,
   SIMULATION_DEFAULTS,
   type ConnectionEdge,
@@ -159,21 +162,52 @@ function writeDraft(draft: StoredDraft): void {
   window.localStorage.setItem(DRAFT_KEY, serialized);
 }
 
+function outgoingFor(type: string): readonly Relationship[] {
+  const listed = CATALOG_BY_TYPE[type]?.outgoingRelationships;
+  return (listed as readonly Relationship[] | undefined) ?? DEFAULT_OUTGOING;
+}
+
+function handleTopPercent(index: number, total: number): string {
+  if (total <= 1) return "50%";
+  const start = 28;
+  const end = 88;
+  return `${start + ((end - start) * index) / (total - 1)}%`;
+}
+
 function ProcessorNodeView({ data, selected }: NodeProps<ProcessorNode>) {
   const def = CATALOG_BY_TYPE[data.type];
   const category = def?.category ?? "transform";
+  const outgoing = outgoingFor(data.type);
+  const splitNode = outgoing.includes("train");
   return (
-    <div className={`rf-node ${category} ${selected ? "selected" : ""}`}>
+    <div
+      className={`rf-node ${category} ${selected ? "selected" : ""} ${splitNode ? "split-out" : ""}`}
+    >
       <Handle type="target" position={Position.Left} id="in" />
       <span className={`rf-node-tag ${category}`}>
         {def ? CATEGORY_TAG[category] : "Proceso"}
       </span>
       <strong className="rf-node-id">{data.processorId}</strong>
       <small className="rf-node-type">{data.type}</small>
-      <Handle type="source" position={Position.Right} id="success" className="handle-success" style={{ top: "42%" }} />
-      <Handle type="source" position={Position.Right} id="failure" className="handle-failure" style={{ top: "72%" }} />
-      <span className="rf-handle-hint success">success</span>
-      <span className="rf-handle-hint failure">failure</span>
+      {outgoing.map((relationship, index) => (
+        <Handle
+          key={relationship}
+          type="source"
+          position={Position.Right}
+          id={relationship}
+          className={`handle-${relationship}`}
+          style={{ top: handleTopPercent(index, outgoing.length) }}
+        />
+      ))}
+      {outgoing.map((relationship, index) => (
+        <span
+          key={`hint-${relationship}`}
+          className={`rf-handle-hint ${relationship}`}
+          style={{ top: `calc(${handleTopPercent(index, outgoing.length)} - 0.55rem)` }}
+        >
+          {relationship}
+        </span>
+      ))}
     </div>
   );
 }
@@ -181,8 +215,18 @@ function ProcessorNodeView({ data, selected }: NodeProps<ProcessorNode>) {
 const nodeTypes: NodeTypes = { processor: ProcessorNodeView };
 
 function edgeStyle(relationship: Relationship) {
+  const stroke =
+    relationship === "failure"
+      ? "#c2603f"
+      : relationship === "train"
+        ? "#2f8f83"
+        : relationship === "validation"
+          ? "#c7b887"
+          : relationship === "test"
+            ? "#6aa8c4"
+            : "#2f8f83";
   return {
-    stroke: relationship === "failure" ? "#c2603f" : "#2f8f83",
+    stroke,
     strokeWidth: 2,
   };
 }
@@ -412,15 +456,15 @@ function FlowBuilderInner() {
 
   const onConnect = useCallback(
     (connection: Connection) => {
-      const relationship: Relationship =
-        connection.sourceHandle === "failure" ? "failure" : "success";
+      const relationship = parseRelationship(connection.sourceHandle, "success");
       setEdges((current: ConnectionEdge[]) =>
         addEdge<ConnectionEdge>(
           {
             ...connection,
+            sourceHandle: relationship,
             id: `edge_${Date.now()}_${Math.round(Math.random() * 1e6)}`,
             type: "smoothstep",
-            animated: relationship === "success",
+            animated: relationship !== "failure",
             label: relationship,
             data: { relationship, queueCapacity: 100 },
             style: edgeStyle(relationship),
@@ -540,7 +584,7 @@ function FlowBuilderInner() {
             ? {
                 ...edge,
                 sourceHandle: relationship,
-                animated: relationship === "success",
+                animated: relationship !== "failure",
                 label: relationship,
                 style: edgeStyle(relationship),
                 data: { relationship, queueCapacity },
@@ -914,7 +958,7 @@ function FlowBuilderInner() {
       <div className="ide-middle">
         <aside className="components">
           <h3>Componentes</h3>
-          {(["source", "transform", "sink"] as const).map((category) => (
+          {(["source", "transform", "ai_prep", "sink"] as const).map((category) => (
             <div className="palette-group" key={category}>
               <span className="palette-group-title">{CATEGORY_LABEL[category]}</span>
               {PROCESSOR_CATALOG.filter((def) => def.category === category).map((def) => (
@@ -998,6 +1042,9 @@ function FlowBuilderInner() {
                 <EdgeInspector
                   relationship={selectedEdge.data?.relationship ?? "success"}
                   queueCapacity={selectedEdge.data?.queueCapacity ?? 100}
+                  allowedRelationships={outgoingFor(
+                    nodes.find((node) => node.id === selectedEdge.source)?.data.type ?? "",
+                  )}
                   onChange={updateSelectedEdge}
                   onDelete={deleteSelectedEdge}
                 />
@@ -1205,14 +1252,22 @@ function FlowBuilderInner() {
 function EdgeInspector({
   relationship,
   queueCapacity,
+  allowedRelationships,
   onChange,
   onDelete,
 }: {
   relationship: Relationship;
   queueCapacity: number;
+  allowedRelationships: readonly Relationship[];
   onChange: (relationship: Relationship, queueCapacity: number) => void;
   onDelete: () => void;
 }) {
+  const options = allowedRelationships.includes(relationship)
+    ? allowedRelationships
+    : [...allowedRelationships, relationship];
+  const isSplit = allowedRelationships.some((item) =>
+    (SPLIT_OUTGOING as readonly string[]).includes(item),
+  );
   return (
     <div className="inspector">
       <div className="inspector-head">
@@ -1222,6 +1277,12 @@ function EdgeInspector({
         </button>
       </div>
       <h3>Relación entre procesadores</h3>
+      {isSplit ? (
+        <p className="inspector-desc">
+          Este origen es un split AI Prep: usa <code>train</code>, <code>validation</code> o{" "}
+          <code>test</code> (no <code>success</code>).
+        </p>
+      ) : null}
       <label className="builder-field">
         <span className="builder-field-label">Relación</span>
         <select
@@ -1229,8 +1290,11 @@ function EdgeInspector({
           value={relationship}
           onChange={(event) => onChange(event.target.value as Relationship, queueCapacity)}
         >
-          <option value="success">success</option>
-          <option value="failure">failure</option>
+          {options.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
         </select>
       </label>
       <label className="builder-field">

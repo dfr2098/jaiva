@@ -1,3 +1,4 @@
+mod ai_prep;
 mod checkpoint;
 mod encode;
 mod generate_records;
@@ -23,6 +24,11 @@ use std::sync::Arc;
 
 use crate::engine::ProcessorRegistry;
 
+use ai_prep::{
+    AiCastTypes, AiComputeFields, AiDropNulls, AiEncodeCategories, AiExportManifest, AiFillMissing,
+    AiFilterRange, AiLookupJoin, AiNormalize, AiRemoveDuplicates, AiSelectFields, AiSplitDataset,
+    AiTriggerWebhook,
+};
 use checkpoint::{LoadCheckpoint, SaveCheckpoint};
 use encode::Encode;
 use generate_records::GenerateRecords;
@@ -49,6 +55,46 @@ pub fn default_registry() -> ProcessorRegistry {
     });
     registry.register("rename_fields", |config| {
         Ok(Arc::new(RenameFields::from_config(config)?))
+    });
+    // AI Data Prep (siempre disponible; ver `ai_prep` y docs/ai-data-prep.md).
+    registry.register("ai_select_fields", |config| {
+        Ok(Arc::new(AiSelectFields::from_config(config)?))
+    });
+    registry.register("ai_drop_nulls", |config| {
+        Ok(Arc::new(AiDropNulls::from_config(config)?))
+    });
+    registry.register("ai_fill_missing", |config| {
+        Ok(Arc::new(AiFillMissing::from_config(config)?))
+    });
+    registry.register("ai_remove_duplicates", |config| {
+        Ok(Arc::new(AiRemoveDuplicates::from_config(config)?))
+    });
+    registry.register("ai_filter_range", |config| {
+        Ok(Arc::new(AiFilterRange::from_config(config)?))
+    });
+    registry.register("ai_cast_types", |config| {
+        Ok(Arc::new(AiCastTypes::from_config(config)?))
+    });
+    registry.register("ai_normalize", |config| {
+        Ok(Arc::new(AiNormalize::from_config(config)?))
+    });
+    registry.register("ai_encode_categories", |config| {
+        Ok(Arc::new(AiEncodeCategories::from_config(config)?))
+    });
+    registry.register("ai_compute_fields", |config| {
+        Ok(Arc::new(AiComputeFields::from_config(config)?))
+    });
+    registry.register("ai_split_dataset", |config| {
+        Ok(Arc::new(AiSplitDataset::from_config(config)?))
+    });
+    registry.register("ai_lookup_join", |config| {
+        Ok(Arc::new(AiLookupJoin::from_config(config)?))
+    });
+    registry.register("ai_export_manifest", |config| {
+        Ok(Arc::new(AiExportManifest::from_config(config)?))
+    });
+    registry.register("ai_trigger_webhook", |config| {
+        Ok(Arc::new(AiTriggerWebhook::from_config(config)?))
     });
     registry.register("log_records", |_| Ok(Arc::new(LogRecords)));
     #[cfg(feature = "kafka-driver")]

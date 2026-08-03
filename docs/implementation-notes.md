@@ -415,6 +415,23 @@ malformado, demasiado grande o con un identificador de respuesta distinto se
 rechaza. WASM Component Model puede agregarse después como transporte adicional
 sin cambiar `ProcessorPlugin` ni los sobres del protocolo.
 
+## AI Data Prep Toolkit (2026-08)
+
+**Problema:** preparar datasets tabulares para plataformas ML externas sin
+embeber Python ni entrenar modelos en el worker.
+
+**Cambio:** módulo `crates/jaiba-runtime/src/processors/ai_prep/` con
+procesadores `ai_*` (limpieza, normalize/encode/features/split, lookup join,
+manifest, webhook HTTP vía `reqwest`). Catálogo UI categoría **AI Prep**.
+Docs: [ai-data-prep.md](ai-data-prep.md). Ejemplo:
+`examples/ai-prep-conveyor.yaml` → CSV train/val/test + `manifest.json`.
+
+**Decisión:** stats por lote en MVP; `cumulative` / `window` para estado entre
+paquetes (Fase B). Sin Parquet ni train in-process.
+
+**Prueba:** `cargo test -p jaiba-runtime --lib processors::ai_prep` y
+`cargo run -- examples/ai-prep-conveyor.yaml`.
+
 ## Trabajo posterior a la fase 9
 
 - procesadores ejecutables de consulta para MySQL, Oracle y SQL Server;

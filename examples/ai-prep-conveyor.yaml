@@ -1,0 +1,228 @@
+# AI Data Prep — conveyor sintético (demo industrial)
+#
+# Flujo:
+#   generate_records (datos sucios)
+#     → select / drop_nulls / cast / fill / dedupe / filter
+#     → lookup_join (planta por line_id)
+#     → encode + normalize + compute_fields
+#     → split (relaciones train | validation | test)
+#     → encode_csv + write_file (+ manifest en train)
+#
+# 100% Rust. Sin Python. Sin entrenamiento in-process.
+# Docs: docs/ai-data-prep.md
+#
+#   cargo run -- examples/ai-prep-conveyor.yaml
+#
+# Salidas: output/ai-prep/{train,validation,test}.csv + manifest.json
+#
+# Nota: ai_split_dataset NO usa relationship "success"; hay que cablear
+# train / validation / test explícitamente (ver connections al final).
+
+id: ai-prep-conveyor
+
+engine:
+  max_concurrency: 24
+  memory:
+    maximum_percent: 42
+  repository:
+    enabled: true
+    database_path: .jaiva/ai-prep-repository.db
+    content_path: .jaiva/ai-prep-content
+    abandoned_after_seconds: 0
+    completed_retention_hours: 24
+
+processors:
+  - id: source
+    type: generate_records
+    config:
+      records:
+        - sensor_id: S-01
+          line_id: L1
+          temperature: "68.2"
+          vibration: 0.42
+          status: OK
+          scrap: ignore_me
+        - sensor_id: null
+          line_id: L1
+          temperature: 70
+          vibration: 0.5
+          status: OK
+        - sensor_id: S-01
+          line_id: L1
+          temperature: null
+          vibration: 0.44
+          status: WARN
+        - sensor_id: S-02
+          line_id: L2
+          temperature: "71.5"
+          vibration: 0.61
+          status: OK
+        - sensor_id: S-03
+          line_id: L1
+          temperature: 240
+          vibration: 0.9
+          status: ERROR
+        - sensor_id: S-04
+          line_id: L2
+          temperature: "65.0"
+          vibration: 0.38
+          status: OK
+        - sensor_id: S-05
+          line_id: L1
+          temperature: "69.1"
+          vibration: 0.55
+          status: WARN
+        - sensor_id: S-06
+          line_id: L2
+          temperature: "72.0"
+          vibration: 0.48
+          status: OK
+        - sensor_id: S-07
+          line_id: L1
+          temperature: "67.4"
+          vibration: 0.41
+          status: OK
+        - sensor_id: S-08
+          line_id: L2
+          temperature: "70.8"
+          vibration: 0.52
+          status: WARN
+
+  - id: select
+    type: ai_select_fields
+    config:
+      keep: [sensor_id, line_id, temperature, vibration, status]
+
+  - id: drop_nulls
+    type: ai_drop_nulls
+    config:
+      fields: [sensor_id]
+
+  - id: cast
+    type: ai_cast_types
+    config:
+      fields:
+        temperature: number
+        vibration: number
+      on_error: drop
+
+  - id: fill
+    type: ai_fill_missing
+    config:
+      fields: [temperature]
+      strategy: mean
+
+  - id: dedupe
+    type: ai_remove_duplicates
+    config:
+      key_fields: [sensor_id]
+
+  - id: filter
+    type: ai_filter_range
+    config:
+      field: temperature
+      mode: min_max
+      min: 0
+      max: 120
+
+  - id: join
+    type: ai_lookup_join
+    config:
+      key: line_id
+      lookup_records:
+        - line_id: L1
+          plant: norte
+        - line_id: L2
+          plant: sur
+      copy_fields: [plant]
+
+  - id: encode_plant
+    type: ai_encode_categories
+    config:
+      fields:
+        plant:
+          norte: 0
+          sur: 1
+        status:
+          OK: 0
+          WARN: 1
+          ERROR: 2
+      on_error: drop
+
+  - id: normalize
+    type: ai_normalize
+    config:
+      fields: [temperature, vibration]
+      method: min_max
+      cumulative: false
+
+  - id: features
+    type: ai_compute_fields
+    config:
+      fields:
+        thermal_load: temperature * vibration + plant
+
+  - id: split
+    type: ai_split_dataset
+    config:
+      train: 0.7
+      validation: 0.2
+      test: 0.1
+
+  - id: encode_train
+    type: encode_csv
+    config:
+      headers: true
+  - id: write_train
+    type: write_file
+    config:
+      path: output/ai-prep/train.csv
+
+  - id: encode_validation
+    type: encode_csv
+    config:
+      headers: true
+  - id: write_validation
+    type: write_file
+    config:
+      path: output/ai-prep/validation.csv
+
+  - id: encode_test
+    type: encode_csv
+    config:
+      headers: true
+  - id: write_test
+    type: write_file
+    config:
+      path: output/ai-prep/test.csv
+
+  - id: manifest
+    type: ai_export_manifest
+    config:
+      path: output/ai-prep/manifest.json
+      dataset_name: conveyor-sensors
+
+connections:
+  - { from: source, relationship: success, to: select }
+  - { from: select, relationship: success, to: drop_nulls }
+  - { from: drop_nulls, relationship: success, to: cast }
+  - { from: cast, relationship: success, to: fill }
+  - { from: fill, relationship: success, to: dedupe }
+  - { from: dedupe, relationship: success, to: filter }
+  - { from: filter, relationship: success, to: join }
+  - { from: join, relationship: success, to: encode_plant }
+  - { from: encode_plant, relationship: success, to: normalize }
+  - { from: normalize, relationship: success, to: features }
+  - { from: features, relationship: success, to: split }
+
+  - { from: split, relationship: train, to: encode_train }
+  - { from: encode_train, relationship: success, to: write_train }
+
+  - { from: split, relationship: validation, to: encode_validation }
+  - { from: encode_validation, relationship: success, to: write_validation }
+
+  - { from: split, relationship: test, to: encode_test }
+  - { from: encode_test, relationship: success, to: write_test }
+
+  # Manifest sobre el paquete train (mismo esquema; paths de split en atributos).
+  - { from: split, relationship: train, to: manifest }

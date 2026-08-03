@@ -71,6 +71,17 @@ config:
     customer_name: name
 ```
 
+## AI Data Prep
+
+Toolkit tabular 100% Rust (limpieza, features, split, hand-off). Ver
+[ai-data-prep.md](ai-data-prep.md) y el ejemplo
+[`examples/ai-prep-conveyor.yaml`](../examples/ai-prep-conveyor.yaml).
+
+Tipos: `ai_select_fields`, `ai_drop_nulls`, `ai_fill_missing`,
+`ai_remove_duplicates`, `ai_filter_range`, `ai_cast_types`, `ai_normalize`,
+`ai_encode_categories`, `ai_compute_fields`, `ai_split_dataset`,
+`ai_lookup_join`, `ai_export_manifest`, `ai_trigger_webhook`.
+
 ## Codificadores
 
 Tipos:

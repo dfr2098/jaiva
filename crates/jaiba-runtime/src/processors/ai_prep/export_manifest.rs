@@ -9,6 +9,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::PathBuf,
+    sync::Mutex,
 };
 
 use async_trait::async_trait;
@@ -30,6 +31,8 @@ pub struct AiExportManifest {
     train_path: Option<String>,
     validation_path: Option<String>,
     test_path: Option<String>,
+    collect_splits: bool,
+    pending: Mutex<BTreeMap<String, BTreeMap<String, Vec<Value>>>>,
 }
 
 #[derive(Deserialize)]
@@ -43,6 +46,8 @@ struct ManifestConfig {
     validation_path: Option<String>,
     #[serde(default)]
     test_path: Option<String>,
+    #[serde(default)]
+    collect_splits: bool,
 }
 
 fn default_dataset_name() -> String {
@@ -53,12 +58,27 @@ impl AiExportManifest {
     pub fn from_config(value: &Value) -> Result<Self, FlowError> {
         let config: ManifestConfig = serde_json::from_value(value.clone())
             .map_err(|error| FlowError::Configuration(error.to_string()))?;
+        if config.collect_splits
+            && [
+                config.train_path.as_ref(),
+                config.validation_path.as_ref(),
+                config.test_path.as_ref(),
+            ]
+            .iter()
+            .any(|path| path.is_none_or(|path| path.trim().is_empty()))
+        {
+            return Err(FlowError::Configuration(
+                "collect_splits requires train_path, validation_path and test_path".to_owned(),
+            ));
+        }
         Ok(Self {
             path: config.path,
             dataset_name: config.dataset_name,
             train_path: config.train_path.filter(|v| !v.trim().is_empty()),
             validation_path: config.validation_path.filter(|v| !v.trim().is_empty()),
             test_path: config.test_path.filter(|v| !v.trim().is_empty()),
+            collect_splits: config.collect_splits,
+            pending: Mutex::new(BTreeMap::new()),
         })
     }
 }
@@ -81,6 +101,95 @@ impl Processor for AiExportManifest {
         })?;
         require_objects(records, &context.processor_id)?;
 
+        if self.collect_splits {
+            let split = packet
+                .attributes
+                .get("ai.split")
+                .filter(|split| matches!(split.as_str(), "train" | "validation" | "test"))
+                .ok_or_else(|| FlowError::Processor {
+                    processor_id: context.processor_id.clone(),
+                    message: "collect_splits requires packet attribute ai.split".to_owned(),
+                })?
+                .clone();
+            let group = packet
+                .attributes
+                .get("ai.split_group")
+                .cloned()
+                .unwrap_or_else(|| packet.id.to_string());
+            let completed = {
+                let mut pending = self.pending.lock().map_err(|_| FlowError::Processor {
+                    processor_id: context.processor_id.clone(),
+                    message: "manifest split collector lock poisoned".to_owned(),
+                })?;
+                let group_splits = pending.entry(group.clone()).or_default();
+                group_splits.insert(split, records.to_vec());
+                if ["train", "validation", "test"]
+                    .iter()
+                    .all(|split| group_splits.contains_key(*split))
+                {
+                    pending.remove(&group)
+                } else {
+                    None
+                }
+            };
+            let Some(splits) = completed else {
+                return Ok(());
+            };
+            return self.write_collected_splits(splits, context, output).await;
+        }
+
+        self.write_manifest(records, packet.attributes.get("ai.split"), None, context)?;
+        output.success(packet).await
+    }
+}
+
+impl AiExportManifest {
+    async fn write_collected_splits(
+        &self,
+        splits: BTreeMap<String, Vec<Value>>,
+        context: &ProcessorContext,
+        output: &OutputSender,
+    ) -> Result<(), FlowError> {
+        let paths = [
+            ("train", self.train_path.as_deref()),
+            ("validation", self.validation_path.as_deref()),
+            ("test", self.test_path.as_deref()),
+        ];
+        for (split, path) in paths {
+            let path = path.ok_or_else(|| {
+                FlowError::Configuration(format!("collect_splits requires {split}_path"))
+            })?;
+            let records = splits.get(split).expect("all required splits collected");
+            let bytes = crate::processors::encode::encode_csv(records, true, b',', context)?;
+            let path = PathBuf::from(path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(path, bytes)?;
+        }
+
+        let mut combined = Vec::new();
+        let mut counts = BTreeMap::new();
+        for split in ["train", "validation", "test"] {
+            let records = splits.get(split).expect("all required splits collected");
+            counts.insert(split.to_owned(), records.len());
+            combined.extend(records.iter().cloned());
+        }
+        self.write_manifest(&combined, None, Some(&counts), context)?;
+        let mut packet = DataPacket::with_records(combined);
+        packet
+            .attributes
+            .insert("ai.split".to_owned(), "all".to_owned());
+        output.success(packet).await
+    }
+
+    fn write_manifest(
+        &self,
+        records: &[Value],
+        split: Option<&String>,
+        split_counts: Option<&BTreeMap<String, usize>>,
+        context: &ProcessorContext,
+    ) -> Result<(), FlowError> {
         let mut columns: BTreeSet<String> = BTreeSet::new();
         let mut dtypes: BTreeMap<String, String> = BTreeMap::new();
         for record in records {
@@ -116,7 +225,8 @@ impl Processor for AiExportManifest {
             "row_count": records.len(),
             "columns": columns.into_iter().collect::<Vec<_>>(),
             "dtypes": dtypes,
-            "split": packet.attributes.get("ai.split"),
+            "split": split,
+            "split_counts": split_counts,
             "splits": if splits.is_empty() { Value::Null } else { Value::Object(splits) },
             "checksum_sha256": checksum,
             "engine": "jaiba",
@@ -134,7 +244,7 @@ impl Processor for AiExportManifest {
             })?,
         )?;
 
-        output.success(packet).await
+        Ok(())
     }
 }
 

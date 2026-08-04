@@ -159,7 +159,7 @@ impl Processor for Encode {
     }
 }
 
-fn encode_csv(
+pub(crate) fn encode_csv(
     records: &[Value],
     headers: bool,
     delimiter: u8,

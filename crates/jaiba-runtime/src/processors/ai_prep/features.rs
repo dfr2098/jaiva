@@ -464,10 +464,6 @@ impl Processor for AiSplitDataset {
         require_objects(records, &context.processor_id)?;
         let mut records = records.to_vec();
         let total = records.len();
-        if total == 0 {
-            output.emit("train", packet).await?;
-            return Ok(());
-        }
         if self.shuffle {
             fisher_yates_shuffle(&mut records, self.seed);
         }
@@ -510,13 +506,13 @@ async fn emit_split(
     relationship: &str,
     records: Vec<Value>,
 ) -> Result<(), FlowError> {
-    if records.is_empty() {
-        return Ok(());
-    }
     let mut packet = DataPacket::with_records(records);
     packet.attributes = template.attributes.clone();
     packet
         .attributes
         .insert("ai.split".to_owned(), relationship.to_owned());
+    packet
+        .attributes
+        .insert("ai.split_group".to_owned(), template.id.to_string());
     output.emit(relationship, packet).await
 }

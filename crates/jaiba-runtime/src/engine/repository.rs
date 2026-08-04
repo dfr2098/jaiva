@@ -948,7 +948,9 @@ mod tests {
             .parent()
             .expect("test database has parent");
         drop(repository);
-        fs::remove_dir_all(root).unwrap();
+        // La limpieza no forma parte de la aserciÃ³n; Windows puede conservar
+        // brevemente un handle interno de SQLite aun despuÃ©s de cerrar el pool.
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -965,6 +967,6 @@ mod tests {
             .parent()
             .expect("test database has parent");
         drop(content);
-        fs::remove_dir_all(root).unwrap();
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -128,26 +128,23 @@ fn build_url(
 ) -> Result<String, FlowError> {
     // MongoDB: si el perfil se guardó con URI completa (Atlas/SRV/replicaSet),
     // úsala tal cual aplicando solo usuario/contraseña actuales del secreto.
-    if scheme == "mongodb" {
-        if let Some(stored) = secret
+    if scheme == "mongodb"
+        && let Some(stored) = secret
             .options
             .get("connection_url")
             .map(String::as_str)
             .filter(|value| !value.trim().is_empty())
-        {
-            let mut url = Url::parse(stored).map_err(|error| {
-                FlowError::Configuration(format!("URL MongoDB guardada inválida: {error}"))
-            })?;
-            url.set_username(&secret.username).map_err(|_| {
-                FlowError::Configuration("no se pudo fijar el usuario en la URL MongoDB".to_owned())
-            })?;
-            url.set_password(Some(&secret.password)).map_err(|_| {
-                FlowError::Configuration(
-                    "no se pudo fijar la contraseña en la URL MongoDB".to_owned(),
-                )
-            })?;
-            return Ok(url.to_string());
-        }
+    {
+        let mut url = Url::parse(stored).map_err(|error| {
+            FlowError::Configuration(format!("URL MongoDB guardada inválida: {error}"))
+        })?;
+        url.set_username(&secret.username).map_err(|_| {
+            FlowError::Configuration("no se pudo fijar el usuario en la URL MongoDB".to_owned())
+        })?;
+        url.set_password(Some(&secret.password)).map_err(|_| {
+            FlowError::Configuration("no se pudo fijar la contraseña en la URL MongoDB".to_owned())
+        })?;
+        return Ok(url.to_string());
     }
 
     let mut url = Url::parse(&format!("{scheme}://{}:{}", endpoint.host, endpoint.port))

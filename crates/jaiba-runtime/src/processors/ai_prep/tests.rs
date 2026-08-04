@@ -20,8 +20,10 @@ use crate::{
     processors::default_registry,
 };
 
+type CapturedPackets = Arc<Mutex<Vec<(String, Vec<Value>)>>>;
+
 struct CaptureSink {
-    packets: Arc<Mutex<Vec<(String, Vec<Value>)>>>,
+    packets: CapturedPackets,
 }
 
 #[async_trait]
@@ -288,6 +290,96 @@ connections:
     assert!(body.contains("train_path"));
     assert!(body.contains("output/train.csv"));
     let _ = fs::remove_file(&manifest_path);
+}
+
+#[tokio::test]
+async fn split_manifest_waits_for_and_writes_every_split() {
+    let manifest_path = temp_path("collected-manifest.json");
+    let train_path = temp_path("train.csv");
+    let validation_path = temp_path("validation.csv");
+    let test_path = temp_path("test.csv");
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = default_registry();
+    let sink = Arc::new(CaptureSink {
+        packets: captured.clone(),
+    });
+    registry.register("capture_sink", move |_| Ok(sink.clone()));
+
+    let yaml = format!(
+        r#"
+id: ai-prep-collected-manifest
+engine:
+  repository:
+    enabled: false
+processors:
+  - id: source
+    type: generate_records
+    config:
+      records:
+        - {{ id: 1, value: 10 }}
+        - {{ id: 2, value: 20 }}
+        - {{ id: 3, value: 30 }}
+        - {{ id: 4, value: 40 }}
+  - id: split
+    type: ai_split_dataset
+    config: {{ train: 0.5, validation: 0.25, test: 0.25 }}
+  - id: manifest
+    type: ai_export_manifest
+    config:
+      path: {}
+      dataset_name: conveyor
+      collect_splits: true
+      train_path: {}
+      validation_path: {}
+      test_path: {}
+  - id: sink
+    type: capture_sink
+connections:
+  - {{ from: source, relationship: success, to: split }}
+  - {{ from: split, relationship: train, to: manifest }}
+  - {{ from: split, relationship: validation, to: manifest }}
+  - {{ from: split, relationship: test, to: manifest }}
+  - {{ from: manifest, relationship: success, to: sink }}
+"#,
+        manifest_path.display(),
+        train_path.display(),
+        validation_path.display(),
+        test_path.display()
+    );
+    let summary = FlowEngine::new(serde_yaml::from_str(&yaml).unwrap())
+        .unwrap()
+        .with_registry(registry)
+        .run()
+        .await
+        .expect("collected manifest flow");
+
+    assert_eq!(summary.failed, 0);
+    for path in [&train_path, &validation_path, &test_path, &manifest_path] {
+        assert!(path.is_file(), "missing output {}", path.display());
+    }
+    let manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    assert_eq!(manifest["row_count"], 4);
+    assert_eq!(manifest["split_counts"]["train"], 2);
+    assert_eq!(manifest["split_counts"]["validation"], 1);
+    assert_eq!(manifest["split_counts"]["test"], 1);
+    let packets = captured.lock().unwrap();
+    assert_eq!(
+        packets.as_slice(),
+        &[(
+            "all".to_owned(),
+            vec![
+                serde_json::json!({"id": 1, "value": 10}),
+                serde_json::json!({"id": 2, "value": 20}),
+                serde_json::json!({"id": 3, "value": 30}),
+                serde_json::json!({"id": 4, "value": 40}),
+            ]
+        )]
+    );
+    drop(packets);
+
+    for path in [manifest_path, train_path, validation_path, test_path] {
+        let _ = fs::remove_file(path);
+    }
 }
 
 #[test]

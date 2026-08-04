@@ -28,18 +28,13 @@ struct PutDatabaseConfig {
     conflict_columns: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum AutomaticWriteMode {
+    #[default]
     Auto,
     Insert,
     Upsert,
-}
-
-impl Default for AutomaticWriteMode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 #[derive(Deserialize)]

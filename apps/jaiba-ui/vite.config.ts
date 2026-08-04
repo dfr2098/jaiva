@@ -41,6 +41,8 @@ export default defineConfig({
     outDir: "dist",
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
     minify: process.env.TAURI_ENV_DEBUG ? false : "esbuild",
-    target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
+    // Vite 8 usa Safari 16.4 en su baseline y esbuild ya no transpila
+    // destructuring para WebKit anterior. Windows conserva WebView2 105.
+    target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari16.4",
   },
 });

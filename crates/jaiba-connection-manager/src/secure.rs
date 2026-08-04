@@ -439,15 +439,28 @@ impl SecretStore for EncryptedFileSecretStore {
         secret: ConnectionSecret,
     ) -> Result<(), ConnectionManagerError> {
         let mut inner = self.inner.write().await;
-        inner.secrets.insert(reference.to_owned(), secret);
-        self.write_file(&inner)?;
+        let previous = inner.secrets.insert(reference.to_owned(), secret);
+        if let Err(error) = self.write_file(&inner) {
+            match previous {
+                Some(previous) => {
+                    inner.secrets.insert(reference.to_owned(), previous);
+                }
+                None => {
+                    inner.secrets.remove(reference);
+                }
+            }
+            return Err(error.into());
+        }
         Ok(())
     }
 
     async fn remove(&self, reference: &str) -> Result<(), ConnectionManagerError> {
         let mut inner = self.inner.write().await;
-        if inner.secrets.remove(reference).is_some() {
-            self.write_file(&inner)?;
+        if let Some(previous) = inner.secrets.remove(reference)
+            && let Err(error) = self.write_file(&inner)
+        {
+            inner.secrets.insert(reference.to_owned(), previous);
+            return Err(error.into());
         }
         Ok(())
     }

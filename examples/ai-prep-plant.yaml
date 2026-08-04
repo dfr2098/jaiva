@@ -130,12 +130,6 @@ processors:
           ERROR: 2
       on_error: drop
 
-  - id: normalize
-    type: ai_normalize
-    config:
-      fields: [temperature, vibration]
-      method: min_max
-
   - id: features
     type: ai_compute_fields
     config:
@@ -151,38 +145,12 @@ processors:
       shuffle: true
       seed: 42
 
-  - id: encode_train
-    type: encode_csv
-    config:
-      headers: true
-  - id: write_train
-    type: write_file
-    config:
-      path: output/ai-prep-plant/train.csv
-
-  - id: encode_validation
-    type: encode_csv
-    config:
-      headers: true
-  - id: write_validation
-    type: write_file
-    config:
-      path: output/ai-prep-plant/validation.csv
-
-  - id: encode_test
-    type: encode_csv
-    config:
-      headers: true
-  - id: write_test
-    type: write_file
-    config:
-      path: output/ai-prep-plant/test.csv
-
   - id: manifest
     type: ai_export_manifest
     config:
       path: output/ai-prep-plant/manifest.json
       dataset_name: plant-sensors
+      collect_splits: true
       train_path: output/ai-prep-plant/train.csv
       validation_path: output/ai-prep-plant/validation.csv
       test_path: output/ai-prep-plant/test.csv
@@ -205,18 +173,12 @@ connections:
   - { from: dedupe, relationship: success, to: filter }
   - { from: filter, relationship: success, to: join }
   - { from: join, relationship: success, to: encode_cats }
-  - { from: encode_cats, relationship: success, to: normalize }
-  - { from: normalize, relationship: success, to: features }
+  # No se normaliza antes del split: hacerlo mezclaría estadísticas de
+  # validation/test con train. El fit/transform se realiza en la plataforma ML.
+  - { from: encode_cats, relationship: success, to: features }
   - { from: features, relationship: success, to: split }
 
-  - { from: split, relationship: train, to: encode_train }
-  - { from: encode_train, relationship: success, to: write_train }
-
-  - { from: split, relationship: validation, to: encode_validation }
-  - { from: encode_validation, relationship: success, to: write_validation }
-
-  - { from: split, relationship: test, to: encode_test }
-  - { from: encode_test, relationship: success, to: write_test }
-
   - { from: split, relationship: train, to: manifest }
+  - { from: split, relationship: validation, to: manifest }
+  - { from: split, relationship: test, to: manifest }
   - { from: manifest, relationship: success, to: notify_ml }

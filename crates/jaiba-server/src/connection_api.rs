@@ -136,7 +136,7 @@ pub(crate) async fn list_metadata(
     Path(id): Path<String>,
     Query(query): Query<MetadataQuery>,
 ) -> Response {
-    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Admin) {
         return response;
     }
     match state
@@ -154,7 +154,7 @@ pub(crate) async fn describe_metadata(
     headers: HeaderMap,
     Path((id, schema, name)): Path<(String, String, String)>,
 ) -> Response {
-    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Admin) {
         return response;
     }
     let object = DatabaseObject {
@@ -174,7 +174,7 @@ pub(crate) async fn compile_query(
     Path(id): Path<String>,
     Json(specification): Json<QuerySpec>,
 ) -> Response {
-    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Admin) {
         return response;
     }
     match state
@@ -263,7 +263,7 @@ pub(crate) async fn list_connections(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Admin) {
         return response;
     }
     let profiles = state.connection_manager.list().await;
@@ -282,7 +282,7 @@ pub(crate) async fn get_connection(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Admin) {
         return response;
     }
     match state.connection_manager.get(&id).await {
@@ -387,17 +387,14 @@ pub(crate) async fn update_connection(
         Ok(value) => value,
         Err(response) => return response,
     };
-    if let Err(error) = state
-        .connection_secrets
-        .store(&profile.secret_ref, secret)
-        .await
-    {
-        return manager_error(error);
-    }
     profile.name = input.name.trim().to_owned();
     profile.connection_type = input.connection_type;
     profile.endpoint = endpoint;
-    if let Err(error) = state.connection_manager.update(profile.clone()).await {
+    if let Err(error) = state
+        .connection_manager
+        .update_with_secret(profile.clone(), secret)
+        .await
+    {
         return manager_error(error);
     }
     tracing::warn!(
@@ -422,7 +419,7 @@ pub(crate) async fn delete_connection(
         Ok(ctx) => ctx,
         Err(response) => return response,
     };
-    match state.connection_manager.delete(&id).await {
+    match state.connection_manager.delete_with_secret(&id).await {
         Ok(profile) => {
             tracing::warn!(
                 audit_action = "connection_delete",
@@ -431,7 +428,6 @@ pub(crate) async fn delete_connection(
                 profile_name = %profile.name,
                 "administrative action"
             );
-            let _ = state.connection_secrets.remove(&profile.secret_ref).await;
             StatusCode::NO_CONTENT.into_response()
         }
         Err(error) => manager_error(error),
@@ -501,7 +497,7 @@ pub(crate) async fn diagnose_connection(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Admin) {
         return response;
     }
     match state.connection_manager.diagnose(&id).await {

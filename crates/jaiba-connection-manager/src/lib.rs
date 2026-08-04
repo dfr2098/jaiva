@@ -283,10 +283,14 @@ impl ConnectionManager {
         Ok(count)
     }
 
-    async fn persist(&self) -> Result<(), ConnectionManagerError> {
+    async fn persist_profiles(
+        &self,
+        profiles: &HashMap<String, ConnectionProfile>,
+    ) -> Result<(), ConnectionManagerError> {
         if let Some(repository) = self.persistence.as_ref() {
-            let profiles = self.list().await;
-            repository.save(&profiles).await?;
+            let mut snapshot: Vec<_> = profiles.values().cloned().collect();
+            snapshot.sort_by(|left, right| left.name.cmp(&right.name));
+            repository.save(&snapshot).await?;
         }
         Ok(())
     }
@@ -397,14 +401,16 @@ impl ConnectionManager {
         }
         let id = profile.id.clone();
         let name = profile.name.clone();
-        profiles.insert(id.clone(), profile);
+        let mut pending = profiles.clone();
+        pending.insert(id.clone(), profile);
+        self.persist_profiles(&pending).await?;
+        *profiles = pending;
         drop(profiles);
         self.status
             .write()
             .await
             .entry(id.clone())
             .or_insert_with(|| ConnectionStatus::unknown(id.clone()));
-        self.persist().await?;
         self.audit(
             if replacing {
                 AuditAction::Updated
@@ -424,15 +430,18 @@ impl ConnectionManager {
     }
 
     pub async fn delete(&self, id: &str) -> Result<ConnectionProfile, ConnectionManagerError> {
-        let profile = self
-            .profiles
-            .write()
-            .await
-            .remove(id)
+        let mut profiles = self.profiles.write().await;
+        let profile = profiles
+            .get(id)
+            .cloned()
             .ok_or_else(|| ConnectionManagerError::NotFound(id.to_owned()))?;
+        let mut pending = profiles.clone();
+        pending.remove(id);
+        self.persist_profiles(&pending).await?;
+        *profiles = pending;
+        drop(profiles);
         self.status.write().await.remove(id);
         self.invalidate_metadata(id).await;
-        self.persist().await?;
         self.audit(AuditAction::Deleted, id, Some(&profile.name), Some("api"))
             .await;
         let _ = self.events.send(ConnectionEvent::ProfileDeleted {
@@ -463,10 +472,74 @@ impl ConnectionManager {
         {
             Ok(profile) => Ok(profile),
             Err(error) => {
-                let _ = self.secrets.remove(&secret_ref).await;
+                if let Err(rollback) = self.secrets.remove(&secret_ref).await {
+                    return Err(ConnectionManagerError::Persistence(format!(
+                        "no se pudo crear el perfil ({error}) ni eliminar el secreto provisional ({rollback})"
+                    )));
+                }
                 Err(error)
             }
         }
+    }
+
+    /// Actualiza perfil y credenciales como una sola operación lógica.
+    pub async fn update_with_secret(
+        &self,
+        profile: ConnectionProfile,
+        secret: ConnectionSecret,
+    ) -> Result<(), ConnectionManagerError> {
+        let previous = self.secrets.resolve(&profile.secret_ref).await?;
+        self.secrets.store(&profile.secret_ref, secret).await?;
+        if let Err(error) = self.update(profile.clone()).await {
+            if let Err(rollback) = self.secrets.store(&profile.secret_ref, previous).await {
+                return Err(ConnectionManagerError::Persistence(format!(
+                    "no se pudo actualizar el perfil ({error}) ni restaurar su secreto ({rollback})"
+                )));
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Elimina perfil y secreto sin publicar una baja parcial.
+    pub async fn delete_with_secret(
+        &self,
+        id: &str,
+    ) -> Result<ConnectionProfile, ConnectionManagerError> {
+        let mut profiles = self.profiles.write().await;
+        let profile = profiles
+            .get(id)
+            .cloned()
+            .ok_or_else(|| ConnectionManagerError::NotFound(id.to_owned()))?;
+        let secret_is_shared = profiles
+            .values()
+            .any(|candidate| candidate.id != id && candidate.secret_ref == profile.secret_ref);
+        if !secret_is_shared {
+            self.secrets.resolve(&profile.secret_ref).await?;
+        }
+
+        let mut pending = profiles.clone();
+        pending.remove(id);
+        self.persist_profiles(&pending).await?;
+        if !secret_is_shared && let Err(error) = self.secrets.remove(&profile.secret_ref).await {
+            if let Err(rollback) = self.persist_profiles(&profiles).await {
+                *profiles = pending;
+                return Err(ConnectionManagerError::Persistence(format!(
+                    "no se pudo eliminar el secreto ({error}) ni revertir la baja ({rollback})"
+                )));
+            }
+            return Err(error);
+        }
+        *profiles = pending;
+        drop(profiles);
+        self.status.write().await.remove(id);
+        self.invalidate_metadata(id).await;
+        self.audit(AuditAction::Deleted, id, Some(&profile.name), Some("api"))
+            .await;
+        let _ = self.events.send(ConnectionEvent::ProfileDeleted {
+            profile_id: id.to_owned(),
+        });
+        Ok(profile)
     }
 
     pub async fn export(&self) -> ConnectionExport {
@@ -694,6 +767,30 @@ mod tests {
     use super::*;
     use jaiba_plugin_sdk::{DatabaseObjectKind, PluginDescriptor};
     use serde_json::json;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Default)]
+    struct ToggleRepository {
+        profiles: RwLock<Vec<ConnectionProfile>>,
+        fail_saves: AtomicBool,
+    }
+
+    #[async_trait]
+    impl ProfileRepository for ToggleRepository {
+        async fn load(&self) -> Result<Vec<ConnectionProfile>, ConnectionManagerError> {
+            Ok(self.profiles.read().await.clone())
+        }
+
+        async fn save(&self, profiles: &[ConnectionProfile]) -> Result<(), ConnectionManagerError> {
+            if self.fail_saves.load(Ordering::SeqCst) {
+                return Err(ConnectionManagerError::Persistence(
+                    "simulated repository failure".to_owned(),
+                ));
+            }
+            *self.profiles.write().await = profiles.to_vec();
+            Ok(())
+        }
+    }
 
     struct SQLiteAdapter;
 
@@ -788,6 +885,14 @@ mod tests {
         }
     }
 
+    fn secret(password: &str) -> ConnectionSecret {
+        ConnectionSecret {
+            username: "dma".to_owned(),
+            password: password.to_owned(),
+            options: Default::default(),
+        }
+    }
+
     #[tokio::test]
     async fn profiles_export_without_credentials() {
         let secrets = Arc::new(InMemorySecretStore::default());
@@ -839,6 +944,62 @@ mod tests {
                 )
                 .await
                 .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_profile_persistence_does_not_publish_partial_state() {
+        let repository = Arc::new(ToggleRepository::default());
+        repository.fail_saves.store(true, Ordering::SeqCst);
+        let manager = ConnectionManager::new(Arc::new(InMemorySecretStore::default()))
+            .with_persistence(repository);
+
+        let result = manager
+            .create(
+                "Oracle",
+                ConnectionType::Oracle,
+                endpoint(),
+                "memory://oracle",
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(ConnectionManagerError::Persistence(_))
+        ));
+        assert!(manager.list().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rejected_profile_update_restores_previous_secret() {
+        let repository = Arc::new(ToggleRepository::default());
+        let secrets = Arc::new(InMemorySecretStore::default());
+        secrets.insert("memory://postgres", secret("old")).await;
+        let manager = ConnectionManager::new(secrets.clone()).with_persistence(repository.clone());
+        let mut profile = manager
+            .create(
+                "PostgreSQL",
+                ConnectionType::Postgres,
+                endpoint(),
+                "memory://postgres",
+            )
+            .await
+            .unwrap();
+
+        repository.fail_saves.store(true, Ordering::SeqCst);
+        profile.name = "PostgreSQL actualizado".to_owned();
+        let result = manager
+            .update_with_secret(profile.clone(), secret("new"))
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(ConnectionManagerError::Persistence(_))
+        ));
+        assert_eq!(manager.get(&profile.id).await.unwrap().name, "PostgreSQL");
+        assert_eq!(
+            secrets.resolve("memory://postgres").await.unwrap().password,
+            "old"
         );
     }
 

@@ -57,19 +57,12 @@ Salidas típicas:
 | Tipo | Rol |
 |---|---|
 | `ai_lookup_join` | Enriquecimiento por clave (`lookup_records` o `lookup_path` JSON) |
-| `ai_export_manifest` | `manifest.json` + opcional `train_path` / `validation_path` / `test_path` |
+| `ai_export_manifest` | `manifest.json`; con `collect_splits` escribe los tres CSV antes del hand-off |
 | `ai_trigger_webhook` | POST/PUT HTTP al job externo; `optional: true` no aborta el flujo |
 
 ## Configuración rápida
 
 ```yaml
-- id: normalize
-  type: ai_normalize
-  config:
-    fields: [temperature, vibration]
-    method: min_max          # o z_score
-    cumulative: false        # true = stats entre paquetes
-
 - id: split
   type: ai_split_dataset
   config:
@@ -79,11 +72,27 @@ Salidas típicas:
     shuffle: true
     seed: 42
 
-# Conexiones del split:
-# - { from: split, relationship: train, to: encode_train }
-# - { from: split, relationship: validation, to: encode_val }
-# - { from: split, relationship: test, to: encode_test }
+- id: manifest
+  type: ai_export_manifest
+  config:
+    path: output/ai-prep/manifest.json
+    dataset_name: conveyor
+    collect_splits: true
+    train_path: output/ai-prep/train.csv
+    validation_path: output/ai-prep/validation.csv
+    test_path: output/ai-prep/test.csv
+
+# Las tres relaciones del split se conectan al mismo nodo manifest. Este emite
+# success una sola vez, cuando los tres CSV y el manifest ya existen.
+# - { from: split, relationship: train, to: manifest }
+# - { from: split, relationship: validation, to: manifest }
+# - { from: split, relationship: test, to: manifest }
 ```
+
+> Para entrenamiento, no normalices antes de `ai_split_dataset`: calcular
+> mínimos, máximos o medias con todo el dataset filtra información de validación
+> y prueba. Ajusta el transformador sólo con `train` y reutiliza esos parámetros
+> sobre `validation` y `test` en la plataforma ML de destino.
 
 ## Errores por fila
 

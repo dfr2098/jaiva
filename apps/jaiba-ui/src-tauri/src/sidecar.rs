@@ -5,7 +5,7 @@
 
 use std::{
     fs,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read, Write},
     net::{SocketAddr, TcpStream, ToSocketAddrs},
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -92,7 +92,7 @@ impl EngineManager {
         let mut status = status_from(&guard);
         if !status.running && status.mode == EngineMode::Local {
             if let Ok(addr) = socket_from_base(&status.api_base) {
-                if port_open(addr) {
+                if engine_healthy(addr) {
                     status.running = true;
                 }
             }
@@ -117,6 +117,7 @@ impl EngineManager {
         {
             let mut guard = self.inner.lock().expect("engine mutex");
             guard.mode = EngineMode::Local;
+            guard.api_base = DEFAULT_API_BASE.to_owned();
             guard.last_error = None;
         }
         self.start_local(app)
@@ -131,10 +132,10 @@ impl EngineManager {
 
         let binary = resolve_jaiba_binary(app)?;
         let flow = resolve_flow_path(app)?;
-        let api_base = resolve_api_base();
+        let api_base = DEFAULT_API_BASE.to_owned();
         let listen = socket_from_base(&api_base)?;
 
-        if port_open(listen) {
+        if engine_healthy(listen) {
             // Ya hay un motor en ese puerto: reutilízalo sin segundo proceso.
             guard.mode = EngineMode::Local;
             guard.api_base = api_base;
@@ -158,6 +159,7 @@ impl EngineManager {
             .arg(&flow)
             .current_dir(&data_dir)
             .env("JAIBA_ADMIN_AUTH", "none")
+            .env("JAIBA_SERVER_ADDR", listen.to_string())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -171,7 +173,7 @@ impl EngineManager {
 
         pipe_child_logs(&mut child);
 
-        match wait_for_port(listen, HEALTH_WAIT) {
+        match wait_for_engine(listen, HEALTH_WAIT) {
             Ok(()) => {
                 guard.mode = EngineMode::Local;
                 guard.child = Some(child);
@@ -372,14 +374,30 @@ fn socket_from_base(api_base: &str) -> Result<SocketAddr, String> {
         .ok_or_else(|| format!("API base sin dirección resoluble: {api_base}"))
 }
 
-fn port_open(addr: SocketAddr) -> bool {
-    TcpStream::connect_timeout(&addr, Duration::from_millis(150)).is_ok()
+fn engine_healthy(addr: SocketAddr) -> bool {
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(250)) else {
+        return false;
+    };
+    let timeout = Some(Duration::from_millis(500));
+    if stream.set_read_timeout(timeout).is_err() || stream.set_write_timeout(timeout).is_err() {
+        return false;
+    }
+    let request = format!(
+        "GET /health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    stream.read_to_string(&mut response).is_ok()
+        && (response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200"))
+        && response.contains("\"service\":\"jaiva\"")
 }
 
-fn wait_for_port(addr: SocketAddr, timeout: Duration) -> Result<(), String> {
+fn wait_for_engine(addr: SocketAddr, timeout: Duration) -> Result<(), String> {
     let started = Instant::now();
     while started.elapsed() < timeout {
-        if port_open(addr) {
+        if engine_healthy(addr) {
             return Ok(());
         }
         thread::sleep(HEALTH_POLL);

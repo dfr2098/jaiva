@@ -485,11 +485,15 @@ async fn create_flow(State(state): State<AppState>, headers: HeaderMap, body: St
         Ok(ctx) => ctx,
         Err(response) => return response,
     };
+    let flow_id = match draft_flow_id(&body) {
+        Ok(flow_id) => flow_id,
+        Err(error) => return configuration_error(error),
+    };
+    if !ctx.allows_project(&flow_id) {
+        return forbidden("flow is outside the caller's project allowlist");
+    }
     match state.registry.create_draft(&body, None).await {
         Ok((flow_id, version)) => {
-            if !ctx.allows_project(&flow_id) {
-                return forbidden("flow is outside the caller's project allowlist");
-            }
             tracing::warn!(
                 audit_action = "flow_create",
                 actor = admin_actor(&ctx),
@@ -501,6 +505,17 @@ async fn create_flow(State(state): State<AppState>, headers: HeaderMap, body: St
         }
         Err(error) => registry_error(error),
     }
+}
+
+fn draft_flow_id(body: &str) -> Result<String, FlowError> {
+    let config: FlowConfig = serde_yaml::from_str(body)?;
+    let id = config.id.trim();
+    if id.is_empty() {
+        return Err(FlowError::Configuration(
+            "flow id cannot be empty".to_owned(),
+        ));
+    }
+    Ok(id.to_owned())
 }
 
 async fn validate_flow(
@@ -1120,6 +1135,9 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
         .and_then(|value| value.strip_prefix("Bearer "))
 }
 
+// Axum handlers use `Response` directly so authorization failures can preserve
+// their status and JSON body without another error-conversion layer.
+#[allow(clippy::result_large_err)]
 fn authenticate(
     admin: &AdminAccess,
     headers: &HeaderMap,
@@ -1519,10 +1537,13 @@ mod tests {
 
     #[test]
     fn bearer_without_token_fails_even_on_loopback() {
-        // Simula ausencia de token: resolve_server_admin no degrada a none.
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap();
         let previous = std::env::var("JAIBA_ADMIN_TOKEN").ok();
+        let previous_legacy = std::env::var("JAIVA_ADMIN_TOKEN").ok();
+        let previous_auth = std::env::var("JAIBA_ADMIN_AUTH").ok();
         let previous_users = std::env::var("JAIBA_ADMIN_USERS_FILE").ok();
-        // SAFETY: test serializes env mutation within this process.
+        // SAFETY: all mutated variables are restored before releasing ENV_LOCK.
         unsafe {
             std::env::remove_var("JAIBA_ADMIN_TOKEN");
             std::env::remove_var("JAIVA_ADMIN_TOKEN");
@@ -1548,7 +1569,27 @@ mod tests {
                 Some(value) => std::env::set_var("JAIBA_ADMIN_USERS_FILE", value),
                 None => std::env::remove_var("JAIBA_ADMIN_USERS_FILE"),
             }
+            match previous_legacy {
+                Some(value) => std::env::set_var("JAIVA_ADMIN_TOKEN", value),
+                None => std::env::remove_var("JAIVA_ADMIN_TOKEN"),
+            }
+            match previous_auth {
+                Some(value) => std::env::set_var("JAIBA_ADMIN_AUTH", value),
+                None => std::env::remove_var("JAIBA_ADMIN_AUTH"),
+            }
         }
+    }
+
+    #[test]
+    fn draft_id_is_available_before_registry_mutation() {
+        let id = draft_flow_id(
+            r#"
+id: project-a
+processors: []
+"#,
+        )
+        .unwrap();
+        assert_eq!(id, "project-a");
     }
 
     #[test]

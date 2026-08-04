@@ -21,8 +21,10 @@ use thiserror::Error;
 use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 
+mod redact;
 mod secure;
 
+pub use redact::redact_sensitive;
 pub use secure::{
     EncryptedFileSecretStore, FileAuditSink, FileProfileRepository, SecureStoreError,
 };
@@ -43,6 +45,29 @@ pub enum ConnectionManagerError {
     Persistence(String),
     #[error(transparent)]
     Plugin(#[from] PluginError),
+}
+
+impl ConnectionManagerError {
+    /// Mensaje seguro para respuestas HTTP / status al cliente.
+    pub fn client_message(&self) -> String {
+        match self {
+            Self::NotFound(id) => format!("connection profile '{id}' was not found"),
+            Self::DuplicateName(name) => {
+                format!("connection profile name '{name}' already exists")
+            }
+            Self::MissingPlugin(kind) => {
+                format!("no plugin is registered for connection type {kind:?}")
+            }
+            Self::SecretUnavailable(_) => "secret is unavailable".to_owned(),
+            Self::MetadataTimeout(ms) => {
+                format!("metadata exploration timed out after {ms} ms")
+            }
+            Self::Persistence(message) => {
+                format!("persistence error: {}", redact_sensitive(message))
+            }
+            Self::Plugin(error) => redact_sensitive(&error.to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +192,7 @@ pub enum AuditAction {
     Updated,
     Deleted,
     KeyRotated,
+    Tested,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -265,7 +291,13 @@ impl ConnectionManager {
         Ok(())
     }
 
-    async fn audit(&self, action: AuditAction, profile_id: &str, profile_name: Option<&str>) {
+    async fn audit(
+        &self,
+        action: AuditAction,
+        profile_id: &str,
+        profile_name: Option<&str>,
+        actor: Option<&str>,
+    ) {
         if let Some(sink) = self.audit.as_ref() {
             sink.record(AuditEntry {
                 timestamp: SystemTime::now()
@@ -275,7 +307,7 @@ impl ConnectionManager {
                 action,
                 profile_id: profile_id.to_owned(),
                 profile_name: profile_name.map(str::to_owned),
-                actor: None,
+                actor: actor.map(str::to_owned),
             })
             .await;
         }
@@ -381,6 +413,7 @@ impl ConnectionManager {
             },
             &id,
             Some(&name),
+            Some("api"),
         )
         .await;
         let _ = self.events.send(ConnectionEvent::ProfileChanged {
@@ -400,7 +433,7 @@ impl ConnectionManager {
         self.status.write().await.remove(id);
         self.invalidate_metadata(id).await;
         self.persist().await?;
-        self.audit(AuditAction::Deleted, id, Some(&profile.name))
+        self.audit(AuditAction::Deleted, id, Some(&profile.name), Some("api"))
             .await;
         let _ = self.events.send(ConnectionEvent::ProfileDeleted {
             profile_id: id.to_owned(),
@@ -408,19 +441,32 @@ impl ConnectionManager {
         Ok(profile)
     }
 
+    /// Duplica el perfil y **clona** el secreto a una nueva `secret_ref`.
+    /// Así borrar un perfil no invalida las credenciales del otro.
     pub async fn duplicate(
         &self,
         id: &str,
         name: impl Into<String>,
     ) -> Result<ConnectionProfile, ConnectionManagerError> {
         let original = self.get(id).await?;
-        self.create(
-            name,
-            original.connection_type,
-            original.endpoint,
-            original.secret_ref,
-        )
-        .await
+        let secret = self.secrets.resolve(&original.secret_ref).await?;
+        let secret_ref = format!("secret://connection/{}", Uuid::new_v4());
+        self.secrets.store(&secret_ref, secret).await?;
+        match self
+            .create(
+                name,
+                original.connection_type,
+                original.endpoint,
+                secret_ref.clone(),
+            )
+            .await
+        {
+            Ok(profile) => Ok(profile),
+            Err(error) => {
+                let _ = self.secrets.remove(&secret_ref).await;
+                Err(error)
+            }
+        }
     }
 
     pub async fn export(&self) -> ConnectionExport {
@@ -470,12 +516,21 @@ impl ConnectionManager {
                     pool_active: result.pool.as_ref().map(|pool| pool.active),
                     pool_maximum: result.pool.as_ref().map(|pool| pool.maximum),
                     tested_at: Some(result.tested_at),
-                    message: result.message.clone(),
+                    message: result.message.as_deref().map(redact_sensitive),
                 };
                 self.publish_status(status).await;
+                self.audit(AuditAction::Tested, id, Some(&profile.name), Some("api"))
+                    .await;
                 Ok(result)
             }
             Err(error) => {
+                let manager_error = ConnectionManagerError::from(error);
+                tracing::warn!(
+                    target: "jaiba.connections",
+                    profile_id = %id,
+                    error = %manager_error,
+                    "connection test failed"
+                );
                 self.publish_status(ConnectionStatus {
                     profile_id: id.to_owned(),
                     availability: Availability::Unavailable,
@@ -489,10 +544,12 @@ impl ConnectionManager {
                             .unwrap_or_default()
                             .as_secs() as i64,
                     ),
-                    message: Some(error.to_string()),
+                    message: Some(manager_error.client_message()),
                 })
                 .await;
-                Err(error.into())
+                self.audit(AuditAction::Tested, id, Some(&profile.name), Some("api"))
+                    .await;
+                Err(manager_error)
             }
         }
     }

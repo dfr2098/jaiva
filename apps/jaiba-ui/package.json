@@ -7,15 +7,22 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "desktop:sidecar": "bash ../../scripts/prepare-desktop-sidecar.sh",
+    "desktop:dev": "npm run desktop:sidecar && env GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri dev",
+    "desktop:build": "bash ../../scripts/prepare-desktop-sidecar.sh release && tauri build",
+    "desktop:run": "env GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 ./src-tauri/target/debug/jaiba-desktop"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
     "@xyflow/react": "^12.11.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.4",

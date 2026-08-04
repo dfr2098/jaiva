@@ -19,6 +19,7 @@ jaiba-plugin-sdk = { path = "../jaiba-plugin-sdk" }
 jaiba-runtime = { path = "../jaiba-runtime" }
 async-trait.workspace = true
 axum.workspace = true
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 chrono.workspace = true
 chrono-tz.workspace = true
 cron.workspace = true

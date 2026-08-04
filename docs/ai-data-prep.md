@@ -11,18 +11,24 @@ SageMaker u otra plataforma externa.
 - Sin Python, notebooks, PyO3, sklearn ni train in-process.
 - Hand-off opcional vía `ai_export_manifest` + `ai_trigger_webhook` (HTTP).
 
-## Ejemplo
+## Ejemplos
 
 ```bash
+# Sintético (sin DB)
 cargo run -- examples/ai-prep-conveyor.yaml
+
+# Planta: Postgres → prep → CSV + manifest (+ webhook opcional)
+# Ver docs/priority-10c-plant-prep.md
+export DATABASE_URL=postgres://...
+cargo run -- examples/ai-prep-plant.yaml
 ```
 
 Salidas típicas:
 
-- `output/ai-prep/train.csv`
+- `output/ai-prep/train.csv` (o `output/ai-prep-plant/…`)
 - `output/ai-prep/validation.csv`
 - `output/ai-prep/test.csv`
-- `output/ai-prep/manifest.json`
+- `output/ai-prep/manifest.json` (incluye `splits.*_path` si se configuran)
 
 ## Procesadores
 
@@ -44,15 +50,15 @@ Salidas típicas:
 | `ai_normalize` | `min_max` o `z_score`; `cumulative: true` acumula stats entre paquetes |
 | `ai_encode_categories` | Label encoding con mapa fijo en YAML |
 | `ai_compute_fields` | Expresiones `+ - * /` sobre números (`a + b * 2`) |
-| `ai_split_dataset` | Emite relaciones `train` / `validation` / `test` (default 0.7/0.2/0.1) |
+| `ai_split_dataset` | Emite `train` / `validation` / `test`; opcional `shuffle` + `seed` |
 
 ### Join y hand-off
 
 | Tipo | Rol |
 |---|---|
 | `ai_lookup_join` | Enriquecimiento por clave (`lookup_records` o `lookup_path` JSON) |
-| `ai_export_manifest` | Escribe `manifest.json` (columnas, dtypes, checksum, split) |
-| `ai_trigger_webhook` | POST/PUT HTTP al job externo (entrenamiento **fuera** de Jaiba) |
+| `ai_export_manifest` | `manifest.json` + opcional `train_path` / `validation_path` / `test_path` |
+| `ai_trigger_webhook` | POST/PUT HTTP al job externo; `optional: true` no aborta el flujo |
 
 ## Configuración rápida
 
@@ -70,6 +76,8 @@ Salidas típicas:
     train: 0.7
     validation: 0.2
     test: 0.1
+    shuffle: true
+    seed: 42
 
 # Conexiones del split:
 # - { from: split, relationship: train, to: encode_train }

@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { jaivaApi } from "./api";
+import { isTauriRuntime, jaivaApi } from "./api";
+import {
+  fetchEngineStatus,
+  setEngineMode,
+  startLocalEngine,
+  stopLocalEngine,
+  type EngineMode,
+  type EngineStatus,
+} from "./desktopEngine";
 import jaibaLogo from "./img/jaiba-logo.png";
 import type {
   DeadLetterEntry,
@@ -46,10 +54,27 @@ export function AdminAccess() {
       "",
   );
   const [saved, setSaved] = useState(token !== "");
+  const [identity, setIdentity] = useState<string | null>(null);
+
+  const refreshWhoAmI = useCallback(async () => {
+    try {
+      const me = await jaivaApi.whoami();
+      setIdentity(`${me.actor} · ${me.role}`);
+    } catch {
+      setIdentity(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (saved) void refreshWhoAmI();
+    else setIdentity(null);
+  }, [saved, refreshWhoAmI]);
 
   return (
     <details className="token-control">
-      <summary title="Credencial administrativa">Acceso</summary>
+      <summary title="Credencial administrativa">
+        {identity ? `Acceso · ${identity}` : "Acceso"}
+      </summary>
       <div className="token-popover">
         <label>
           <span>Bearer token</span>
@@ -72,6 +97,7 @@ export function AdminAccess() {
               if (token) window.sessionStorage.setItem("jaiba.admin.token", token);
               else window.sessionStorage.removeItem("jaiba.admin.token");
               setSaved(token !== "");
+              void refreshWhoAmI();
             }}
             type="button"
           >
@@ -84,13 +110,110 @@ export function AdminAccess() {
               window.sessionStorage.removeItem("jaiva.admin.token");
               setToken("");
               setSaved(false);
+              setIdentity(null);
             }}
             type="button"
           >
             Limpiar
           </button>
         </div>
-        <small>{saved ? "Token activo en sessionStorage." : "Modo sin token."}</small>
+        <small>
+          {identity
+            ? `Sesión: ${identity}`
+            : saved
+              ? "Token activo (whoami no disponible)."
+              : "Modo sin token."}
+        </small>
+      </div>
+    </details>
+  );
+}
+
+/** Control local/remoto del motor (solo desktop Tauri, fase 10A). */
+export function EngineControl({ onChanged }: { onChanged?: () => void }) {
+  const [status, setStatus] = useState<EngineStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    const next = await fetchEngineStatus();
+    setStatus(next);
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    void refresh();
+  }, [refresh]);
+
+  if (!isTauriRuntime()) return null;
+
+  const mode: EngineMode = status?.mode ?? "remote";
+  const summary =
+    mode === "local"
+      ? status?.running
+        ? "Motor · local"
+        : "Motor · local (apagado)"
+      : "Motor · remoto";
+
+  const run = async (action: () => Promise<EngineStatus>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await action();
+      setStatus(next);
+      onChanged?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <details className="token-control engine-control">
+      <summary title="Sidecar local o API remota">{summary}</summary>
+      <div className="token-popover">
+        <label>
+          <span>Modo</span>
+          <select
+            className="builder-input"
+            disabled={busy}
+            value={mode}
+            onChange={(event) => {
+              const next = event.target.value as EngineMode;
+              void run(() => setEngineMode(next));
+            }}
+          >
+            <option value="remote">Remoto (jaiba serve externo)</option>
+            <option value="local">Local (sidecar)</option>
+          </select>
+        </label>
+        <div>
+          <button
+            className="button subtle"
+            disabled={busy || mode !== "local" || Boolean(status?.pid)}
+            onClick={() => void run(() => startLocalEngine())}
+            type="button"
+          >
+            Arrancar
+          </button>
+          <button
+            className="button subtle"
+            disabled={busy || !status?.pid}
+            onClick={() => void run(() => stopLocalEngine())}
+            type="button"
+          >
+            Detener
+          </button>
+        </div>
+        <small>
+          API: {status?.api_base ?? "…"}
+          {status?.pid ? ` · pid ${status.pid}` : ""}
+        </small>
+        {(error || status?.last_error) && (
+          <small className="engine-control-error">{error ?? status?.last_error}</small>
+        )}
       </div>
     </details>
   );

@@ -2530,6 +2530,10 @@ main.connections-main {
   font-size: 0.72rem;
 }
 
+.engine-control-error {
+  color: var(--rust-light) !important;
+}
+
 .token-popover small {
   color: var(--muted);
 }

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-api-base"
+description = "Permite leer la URL base del API administrativo (modo remoto)."
+commands.allow = ["api_base"]

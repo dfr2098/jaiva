@@ -100,10 +100,22 @@ El diseñador almacena solamente nombres de variables de entorno; nunca guarda
 credenciales. La publicación reemplaza el único flujo administrado por la
 instancia de Jaiba, por lo que primero drena el supervisor anterior.
 
-## Aplicación de escritorio futura
+## Aplicación de escritorio (fases 9B + 10A)
 
-El build de Vite en `dist/` puede utilizarse directamente como
-`frontendDist` de Tauri. La evolución prevista es:
+Tauri 2 en `src-tauri/`: modo **remoto** o **local** (sidecar `jaiba serve`).
+
+- 9B: [docs/priority-9b-tauri-desktop.md](../../docs/priority-9b-tauri-desktop.md)
+- 10A: [docs/priority-10a-tauri-sidecar.md](../../docs/priority-10a-tauri-sidecar.md)
+
+```bash
+# Sidecar gestionado por la app (topbar → Motor · local)
+cargo build -p jaiba-cli
+cd apps/jaiba-ui
+npm run desktop:dev
+
+# O modo remoto (como 9B): motor aparte + Motor · remoto
+cargo run -- serve examples/visualisa-flow.yaml
+```
 
 ```text
 React + TypeScript
@@ -112,10 +124,9 @@ React + TypeScript
         │
         └── Desktop: Tauri → WebView del sistema
                               │
-                              └── jaiba como sidecar opcional
+                              ├── Remoto: API http://127.0.0.1:9090
+                              └── Local: sidecar jaiba serve (fase 10A)
 ```
 
-En modo remoto, Tauri se conectará a una instalación Jaiba existente. En modo
-local podrá iniciar `jaiba serve` como sidecar sobre loopback. El contrato
-React seguirá usando la API administrativa y WebSocket; no se importará código
-del motor dentro del frontend.
+El contrato React sigue usando la API administrativa y WebSocket; no se importa
+código del motor dentro del frontend.

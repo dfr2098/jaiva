@@ -373,10 +373,7 @@ mod phase8_kafka_tests {
             _: &ProcessorContext,
             _: &OutputSender,
         ) -> Result<(), FlowError> {
-            self.packets
-                .lock()
-                .expect("capture poisoned")
-                .push(packet);
+            self.packets.lock().expect("capture poisoned").push(packet);
             Ok(())
         }
     }

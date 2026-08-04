@@ -15,6 +15,11 @@ un núcleo DAG, un runtime desacoplado, plugins y una UI sin lógica de negocio.
 - [Configuración](docs/configuration.md)
 - [Procesadores](docs/processors.md)
 - [AI Data Prep (Rust, sin train)](docs/ai-data-prep.md)
+- [Fase 9A: endurecimiento admin](docs/priority-9a-admin-hardening.md)
+- [Fase 9B: desktop Tauri](docs/priority-9b-tauri-desktop.md)
+- [Fase 10A: sidecar Tauri local/remoto](docs/priority-10a-tauri-sidecar.md)
+- [Fase 10B: TLS, roles y proyectos](docs/priority-10b-security.md)
+- [Fase 10C: flujo de planta AI Prep](docs/priority-10c-plant-prep.md)
 - [Operación y observabilidad](docs/operations.md)
 - [Administrador de conexiones](docs/connection-manager.md) (MongoDB por URL, SQL Server, …)
 - [Fase 8: pruebas de integración](docs/priority-8-integration-tests.md) (Postgres, Kafka, Mongo, SQL Server)
@@ -420,13 +425,18 @@ codifique el mensaje correspondiente.
 
 ## Verificación
 
+CI en GitHub Actions: [docs/ci.md](docs/ci.md) (`fmt` + `test` + typecheck UI;
+Fase 8 opcional).
+
 ```bash
-cargo fmt --check
-cargo test
+cargo fmt --all -- --check
+cargo test --workspace --all-targets
 cargo test --features oracle-driver
 cargo test --features sqlserver-driver
 cargo test --features kafka-driver
 cargo test --features mongodb-driver
+# Integración real (entorno de pruebas levantado):
+# ./scripts/phase8-integration.sh
 ```
 
 ## Oracle

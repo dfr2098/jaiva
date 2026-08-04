@@ -31,9 +31,7 @@ mod trigger_webhook;
 mod tests;
 
 pub use export_manifest::AiExportManifest;
-pub use features::{
-    AiComputeFields, AiEncodeCategories, AiNormalize, AiSplitDataset,
-};
+pub use features::{AiComputeFields, AiEncodeCategories, AiNormalize, AiSplitDataset};
 pub use lookup_join::AiLookupJoin;
 pub use transforms::{
     AiCastTypes, AiDropNulls, AiFillMissing, AiFilterRange, AiRemoveDuplicates, AiSelectFields,

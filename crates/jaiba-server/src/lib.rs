@@ -1,5 +1,6 @@
 //! API administrativa, salud, métricas y eventos en tiempo real.
 
+mod auth;
 mod connection_api;
 mod flow_registry;
 mod observability;

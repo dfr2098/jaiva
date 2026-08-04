@@ -98,8 +98,14 @@ cargo test -p jaiba-runtime prefers_stored_mongodb_connection_url
 - MySQL / Oracle en este pase del harness (existen tests opt-in aparte)
 - Pruebas de carga intensiva; solo smoke acotado
 
+## CI
+
+Workflow opcional: `.github/workflows/phase8-integration.yml`
+(`workflow_dispatch` o label `phase8`). Detalle en [ci.md](ci.md).
+
 ## Documentación relacionada
 
+- [ci.md](ci.md) — CI mínimo y Phase 8 en GitHub Actions
 - [connection-manager.md](connection-manager.md) — perfiles Mongo (URL) y SQL Server
 - [operations.md](operations.md) — features al servir
 - [implementation-notes.md](implementation-notes.md) — bitácora de validación

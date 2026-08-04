@@ -7,7 +7,7 @@
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{
     engine::{DataPacket, OutputSender, Processor, ProcessorContext},
@@ -21,6 +21,8 @@ pub struct AiTriggerWebhook {
     headers: Vec<(String, String)>,
     include_records: bool,
     timeout_ms: u64,
+    /// Si true, un fallo HTTP no aborta el flujo (útil en demos / mock ausente).
+    optional: bool,
 }
 
 #[derive(Deserialize)]
@@ -34,6 +36,8 @@ struct WebhookConfig {
     include_records: bool,
     #[serde(default = "default_timeout")]
     timeout_ms: u64,
+    #[serde(default)]
+    optional: bool,
 }
 
 fn default_post() -> String {
@@ -60,6 +64,7 @@ impl AiTriggerWebhook {
             include_records: config.include_records,
             // Evita timeouts absurdamente bajos que fallan por scheduling.
             timeout_ms: config.timeout_ms.max(250),
+            optional: config.optional,
         })
     }
 }
@@ -91,13 +96,26 @@ impl Processor for AiTriggerWebhook {
             })
         };
 
-        let client = reqwest::Client::builder()
+        let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_millis(self.timeout_ms))
             .build()
-            .map_err(|error| FlowError::Processor {
-                processor_id: context.processor_id.clone(),
-                message: error.to_string(),
-            })?;
+        {
+            Ok(client) => client,
+            Err(error) if self.optional => {
+                tracing::warn!(
+                    processor_id = %context.processor_id,
+                    %error,
+                    "optional webhook client build failed; continuing"
+                );
+                return output.success(packet).await;
+            }
+            Err(error) => {
+                return Err(FlowError::Processor {
+                    processor_id: context.processor_id.clone(),
+                    message: error.to_string(),
+                });
+            }
+        };
 
         let mut request = match self.method.as_str() {
             "GET" => client.get(&self.url),
@@ -108,17 +126,32 @@ impl Processor for AiTriggerWebhook {
             request = request.header(key, value);
         }
 
-        let response = request.send().await.map_err(|error| FlowError::Processor {
-            processor_id: context.processor_id.clone(),
-            message: format!("webhook request failed: {error}"),
-        })?;
-        if !response.status().is_success() {
-            return Err(FlowError::Processor {
+        match request.send().await {
+            Ok(response) if response.status().is_success() => output.success(packet).await,
+            Ok(response) if self.optional => {
+                tracing::warn!(
+                    processor_id = %context.processor_id,
+                    status = %response.status(),
+                    "optional webhook returned non-success; continuing"
+                );
+                output.success(packet).await
+            }
+            Ok(response) => Err(FlowError::Processor {
                 processor_id: context.processor_id.clone(),
                 message: format!("webhook returned HTTP {}", response.status()),
-            });
+            }),
+            Err(error) if self.optional => {
+                tracing::warn!(
+                    processor_id = %context.processor_id,
+                    %error,
+                    "optional webhook request failed; continuing"
+                );
+                output.success(packet).await
+            }
+            Err(error) => Err(FlowError::Processor {
+                processor_id: context.processor_id.clone(),
+                message: format!("webhook request failed: {error}"),
+            }),
         }
-
-        output.success(packet).await
     }
 }

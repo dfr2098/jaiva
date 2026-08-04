@@ -1,0 +1,222 @@
+# Fase 10C — Flujo de planta: Postgres → AI Prep → CSV + manifest (+ webhook)
+#
+# Origen: query_postgres con VALUES (no requiere tablas). Sustituye el SELECT
+# por una tabla real de sensores / Oracle cuando quieras datos de planta.
+#
+# Requisitos:
+#   export DATABASE_URL=postgres://usuario:clave@127.0.0.1:5432/jaiba
+#
+# Ejecutar:
+#   cargo run -- examples/ai-prep-plant.yaml
+#
+# Salidas: output/ai-prep-plant/{train,validation,test}.csv + manifest.json
+#
+# Webhook mock (otra terminal, opcional):
+#   python3 scripts/mock-ml-webhook.py
+#   # o JAIBA_ML_WEBHOOK_URL=http://127.0.0.1:8099/hook
+#
+# Oracle (alternativa): cambia read_plant a query_oracle + ORACLE_DATABASE_URL
+# y un SELECT desde DUAL / tabla de sensores (ver multi-db-fanout.yaml).
+
+id: ai-prep-plant
+
+parameters:
+  ml_webhook_url: "http://127.0.0.1:8099/hook"
+
+database_connections:
+  plant:
+    type: postgres
+    url_env: DATABASE_URL
+    max_connections: 4
+
+engine:
+  max_concurrency: 24
+  memory:
+    maximum_percent: 42
+  admin:
+    enabled: true
+    authentication: none
+  repository:
+    enabled: true
+    database_path: .jaiva/ai-prep-plant-repository.db
+    content_path: .jaiba/ai-prep-plant-content
+    abandoned_after_seconds: 0
+    completed_retention_hours: 24
+
+processors:
+  # Lectura de planta (sintético vía SQL; sin CREATE TABLE).
+  - id: read_plant
+    type: query_postgres
+    config:
+      connection: plant
+      batch_size: 500
+      query: |
+        SELECT to_jsonb(row_data) AS data
+        FROM (
+          SELECT * FROM (VALUES
+            ('S-01'::text, 'L1'::text, '68.2'::text, 0.42::float8, 'OK'::text),
+            ('S-02', 'L2', '71.5', 0.61, 'OK'),
+            ('S-03', 'L1', '240', 0.9, 'ERROR'),
+            ('S-04', 'L2', '65.0', 0.38, 'OK'),
+            ('S-05', 'L1', '69.1', 0.55, 'WARN'),
+            ('S-06', 'L2', '72.0', 0.48, 'OK'),
+            ('S-07', 'L1', '67.4', 0.41, 'OK'),
+            ('S-08', 'L2', '70.8', 0.52, 'WARN'),
+            ('S-09', 'L1', '66.0', 0.39, 'OK'),
+            ('S-10', 'L2', '73.2', 0.58, 'WARN'),
+            (NULL, 'L1', '70.0', 0.5, 'OK'),
+            ('S-01', 'L1', '68.2', 0.42, 'OK')
+          ) AS t(sensor_id, line_id, temperature, vibration, status)
+        ) AS row_data
+
+  - id: select
+    type: ai_select_fields
+    config:
+      keep: [sensor_id, line_id, temperature, vibration, status]
+
+  - id: drop_nulls
+    type: ai_drop_nulls
+    config:
+      fields: [sensor_id]
+
+  - id: cast
+    type: ai_cast_types
+    config:
+      fields:
+        temperature: number
+        vibration: number
+      on_error: drop
+
+  - id: fill
+    type: ai_fill_missing
+    config:
+      fields: [temperature]
+      strategy: mean
+
+  - id: dedupe
+    type: ai_remove_duplicates
+    config:
+      key_fields: [sensor_id]
+
+  - id: filter
+    type: ai_filter_range
+    config:
+      field: temperature
+      mode: min_max
+      min: 0
+      max: 120
+
+  - id: join
+    type: ai_lookup_join
+    config:
+      key: line_id
+      lookup_records:
+        - line_id: L1
+          plant: norte
+        - line_id: L2
+          plant: sur
+      copy_fields: [plant]
+
+  - id: encode_cats
+    type: ai_encode_categories
+    config:
+      fields:
+        plant:
+          norte: 0
+          sur: 1
+        status:
+          OK: 0
+          WARN: 1
+          ERROR: 2
+      on_error: drop
+
+  - id: normalize
+    type: ai_normalize
+    config:
+      fields: [temperature, vibration]
+      method: min_max
+
+  - id: features
+    type: ai_compute_fields
+    config:
+      fields:
+        thermal_load: temperature * vibration + plant
+
+  - id: split
+    type: ai_split_dataset
+    config:
+      train: 0.7
+      validation: 0.2
+      test: 0.1
+      shuffle: true
+      seed: 42
+
+  - id: encode_train
+    type: encode_csv
+    config:
+      headers: true
+  - id: write_train
+    type: write_file
+    config:
+      path: output/ai-prep-plant/train.csv
+
+  - id: encode_validation
+    type: encode_csv
+    config:
+      headers: true
+  - id: write_validation
+    type: write_file
+    config:
+      path: output/ai-prep-plant/validation.csv
+
+  - id: encode_test
+    type: encode_csv
+    config:
+      headers: true
+  - id: write_test
+    type: write_file
+    config:
+      path: output/ai-prep-plant/test.csv
+
+  - id: manifest
+    type: ai_export_manifest
+    config:
+      path: output/ai-prep-plant/manifest.json
+      dataset_name: plant-sensors
+      train_path: output/ai-prep-plant/train.csv
+      validation_path: output/ai-prep-plant/validation.csv
+      test_path: output/ai-prep-plant/test.csv
+
+  # Hand-off ML externo (no falla el flujo si el mock no está arriba).
+  - id: notify_ml
+    type: ai_trigger_webhook
+    config:
+      url: ${ml_webhook_url}
+      method: POST
+      optional: true
+      include_records: false
+
+connections:
+  - { from: read_plant, relationship: success, to: select }
+  - { from: select, relationship: success, to: drop_nulls }
+  - { from: drop_nulls, relationship: success, to: cast }
+  - { from: cast, relationship: success, to: fill }
+  - { from: fill, relationship: success, to: dedupe }
+  - { from: dedupe, relationship: success, to: filter }
+  - { from: filter, relationship: success, to: join }
+  - { from: join, relationship: success, to: encode_cats }
+  - { from: encode_cats, relationship: success, to: normalize }
+  - { from: normalize, relationship: success, to: features }
+  - { from: features, relationship: success, to: split }
+
+  - { from: split, relationship: train, to: encode_train }
+  - { from: encode_train, relationship: success, to: write_train }
+
+  - { from: split, relationship: validation, to: encode_validation }
+  - { from: encode_validation, relationship: success, to: write_validation }
+
+  - { from: split, relationship: test, to: encode_test }
+  - { from: encode_test, relationship: success, to: write_test }
+
+  - { from: split, relationship: train, to: manifest }
+  - { from: manifest, relationship: success, to: notify_ml }

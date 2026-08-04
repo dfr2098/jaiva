@@ -268,9 +268,7 @@ impl EncryptedFileSecretStore {
             .decode(salt_b64)
             .map_err(|error| SecureStoreError::Corrupt(error.to_string()))?;
         if salt.len() < 8 {
-            return Err(SecureStoreError::Corrupt(
-                "salt demasiado corta".to_owned(),
-            ));
+            return Err(SecureStoreError::Corrupt("salt demasiado corta".to_owned()));
         }
         let params = file.argon2.unwrap_or_default();
         if file.kdf.as_deref().unwrap_or(KDF_NAME) != KDF_NAME {
@@ -680,7 +678,10 @@ mod tests {
             let file: SecretFile = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
             file.salt.unwrap()
         };
-        assert_ne!(salt_before, salt_after, "la rotación debe generar nueva sal");
+        assert_ne!(
+            salt_before, salt_after,
+            "la rotación debe generar nueva sal"
+        );
 
         assert!(EncryptedFileSecretStore::open(&path, "clave-a").is_err());
         let reopened = EncryptedFileSecretStore::open(&path, "clave-b").unwrap();
@@ -713,7 +714,10 @@ mod tests {
         fs::write(&path, serde_json::to_vec_pretty(&v1).unwrap()).unwrap();
 
         let store = EncryptedFileSecretStore::open(&path, master).unwrap();
-        assert_eq!(store.resolve("memory://a").await.unwrap().password, "s3cr3t");
+        assert_eq!(
+            store.resolve("memory://a").await.unwrap().password,
+            "s3cr3t"
+        );
 
         let migrated: SecretFile = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(migrated.version, 2);

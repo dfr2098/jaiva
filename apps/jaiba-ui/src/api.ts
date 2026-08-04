@@ -23,15 +23,66 @@ declare global {
   interface Window {
     __JAIBA_API_BASE__?: string;
     __JAIVA_API_BASE__?: string;
+    __TAURI_INTERNALS__?: unknown;
   }
 }
 
-const API_ROOT =
-  window.__JAIBA_API_BASE__ ??
-  window.__JAIVA_API_BASE__ ??
-  import.meta.env.VITE_JAIBA_API_BASE ??
-  import.meta.env.VITE_JAIVA_API_BASE ??
-  "/jaiba-api";
+/** True cuando la UI corre dentro del WebView de Tauri. */
+export function isTauriRuntime(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    ("__TAURI_INTERNALS__" in window || Boolean(import.meta.env.TAURI_ENV_PLATFORM))
+  );
+}
+
+/**
+ * Resuelve la base del API administrativo.
+ *
+ * Orden: override en window → localStorage → VITE_* → Tauri (loopback 9090) → proxy Vite.
+ * En desktop (fase 9B) el default es modo remoto contra `jaiba serve`.
+ */
+function resolveApiRoot(): string {
+  const fromWindow = window.__JAIBA_API_BASE__ ?? window.__JAIVA_API_BASE__;
+  if (fromWindow) return fromWindow;
+
+  try {
+    const stored =
+      window.localStorage.getItem("jaiba.api.base") ??
+      window.localStorage.getItem("jaiva.api.base");
+    if (stored?.trim()) return stored.trim().replace(/\/$/, "");
+  } catch {
+    // private mode / storage blocked
+  }
+
+  const fromEnv =
+    import.meta.env.VITE_JAIBA_API_BASE ?? import.meta.env.VITE_JAIVA_API_BASE;
+  if (fromEnv) return fromEnv;
+
+  if (isTauriRuntime()) {
+    return "http://127.0.0.1:9090";
+  }
+
+  return "/jaiba-api";
+}
+
+let API_ROOT = resolveApiRoot();
+
+/** Base efectiva del API (útil para UI / diagnóstico). */
+export function apiRoot(): string {
+  return API_ROOT;
+}
+
+/**
+ * Fija la base del API (p. ej. tras `invoke("api_base")` en Tauri).
+ * Debe llamarse antes de las primeras peticiones.
+ */
+export function setApiRoot(base: string): void {
+  const trimmed = base.trim().replace(/\/$/, "");
+  if (trimmed) {
+    API_ROOT = trimmed;
+    window.__JAIBA_API_BASE__ = trimmed;
+  }
+}
 
 const FLOW_STATES = new Set([
   "STOPPED",
@@ -46,9 +97,22 @@ function apiUrl(path: string): string {
   return `${API_ROOT}${path}`;
 }
 
+function adminToken(): string | null {
+  return (
+    window.sessionStorage.getItem("jaiba.admin.token") ??
+    window.sessionStorage.getItem("jaiva.admin.token")
+  );
+}
+
 function websocketUrl(path: string): string {
   const absolute = new URL(apiUrl(path), window.location.href);
   absolute.protocol = absolute.protocol === "https:" ? "wss:" : "ws:";
+  // Fuera de loopback el servidor exige Bearer; el navegador no envía
+  // Authorization en WebSocket, así que se pasa ?access_token=.
+  const token = adminToken();
+  if (token && !absolute.searchParams.has("access_token")) {
+    absolute.searchParams.set("access_token", token);
+  }
   return absolute.toString();
 }
 
@@ -65,9 +129,7 @@ function isFlowSnapshot(value: unknown): value is FlowSnapshot {
 }
 
 function adminHeaders(extra?: HeadersInit): HeadersInit {
-  const token =
-    window.sessionStorage.getItem("jaiba.admin.token") ??
-    window.sessionStorage.getItem("jaiva.admin.token");
+  const token = adminToken();
   return {
     Accept: "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -111,8 +173,16 @@ async function requestText(path: string, init?: RequestInit): Promise<string> {
   return text;
 }
 
+export interface WhoAmI {
+  actor: string;
+  role: string;
+  projects: string[];
+  authentication: string;
+}
+
 export const jaivaApi = {
   health: () => request<{ status: string; service: string }>("/health"),
+  whoami: () => request<WhoAmI>("/api/v1/whoami"),
   runtime: async (): Promise<FlowSnapshot | null> => {
     const response = await fetch(apiUrl("/runtime"), {
       headers: { Accept: "application/json" },

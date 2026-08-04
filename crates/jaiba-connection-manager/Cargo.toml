@@ -12,6 +12,7 @@ argon2.workspace = true
 async-trait.workspace = true
 base64 = "0.21"
 getrandom = "0.2"
+regex = "1"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

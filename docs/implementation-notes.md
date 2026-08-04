@@ -108,10 +108,10 @@ mismo estado.
 El registro se guarda atómicamente en `flows.json`. Un fallo de persistencia se
 devuelve como error en vez de responder que la operación fue exitosa.
 
-Al desplegar o restaurar una versión también se recalcula la política
-administrativa: habilitación, método de autenticación y Bearer token. Esto
-evita conservar por accidente la seguridad configurada por una versión
-anterior.
+La política administrativa (habilitación, Bearer/`none`, token) se fija al
+**arranque del proceso** (`JAIBA_ADMIN_*` + YAML semilla de `jaiba serve`) y no
+se reescribe al desplegar o restaurar otra versión. Así un YAML publicado no
+puede bajar el nivel de seguridad del servidor. Ver fase 9A.
 
 ## Archivos clave de la implementación reciente
 
@@ -415,6 +415,34 @@ malformado, demasiado grande o con un identificador de respuesta distinto se
 rechaza. WASM Component Model puede agregarse después como transporte adicional
 sin cambiar `ProcessorPlugin` ni los sobres del protocolo.
 
+## Fase 9A — Endurecimiento admin (2026-08)
+
+**Problema:** bypass Bearer→None en loopback, auditoría incompleta en conexiones
+y posibles fugas de DSN/password en errores de driver.
+
+**Cambio:** `resolve_server_admin` exige token si `authentication=bearer`;
+`authorize` en tiempo constante; `/runtime` y `/ws*` gated fuera de loopback;
+`redact_sensitive` + `client_message`; `duplicate` clona `secret_ref`;
+`audit_action` en validate y CRUD/test de conexiones.
+Docs: [priority-9a-admin-hardening.md](priority-9a-admin-hardening.md).
+
+**Nota:** la política admin se fija al **arranque del proceso** (env + YAML
+semilla) y no se reescribe al desplegar otro flujo.
+
+## Fase 9B — Tauri desktop MVP (2026-08)
+
+**Problema:** empaquetar la UI operativa como app de escritorio sin reescribir
+el frontend ni embeber el motor en el WebView.
+
+**Cambio:** `apps/jaiba-ui/src-tauri/` (crate `jaiba-desktop`, Tauri 2). Modo
+remoto por defecto a `http://127.0.0.1:9090`; comando `api_base` y resolución
+en `src/api.ts`. Scripts `npm run desktop:dev` / `desktop:build`.
+Docs: [priority-9b-tauri-desktop.md](priority-9b-tauri-desktop.md).
+
+**Decisión:** sidecar de `jaiba serve` aplazado; CSP limitada a loopback.
+
+**Prueba:** con `jaiba serve` en `:9090`, `cd apps/jaiba-ui && npm run desktop:dev`.
+
 ## AI Data Prep Toolkit (2026-08)
 
 **Problema:** preparar datasets tabulares para plataformas ML externas sin
@@ -432,12 +460,72 @@ paquetes (Fase B). Sin Parquet ni train in-process.
 **Prueba:** `cargo test -p jaiba-runtime --lib processors::ai_prep` y
 `cargo run -- examples/ai-prep-conveyor.yaml`.
 
-## Trabajo posterior a la fase 9
+## Fase 10A — Sidecar Tauri (local / remoto)
 
-- procesadores ejecutables de consulta para MySQL, Oracle y SQL Server;
+**Problema:** el desktop 9B exigía un `jaiba serve` arrancado a mano.
+
+**Cambio:** `apps/jaiba-ui/src-tauri/src/sidecar.rs` gestiona spawn/stop del
+binario `jaiba`, conmutación local/remoto, YAML embebido y `externalBin`.
+UI: `EngineControl` en el topbar. Docs:
+[priority-10a-tauri-sidecar.md](priority-10a-tauri-sidecar.md).
+
+**Decisión:** proceso hijo vía `std::process` (no plugin-shell); si el puerto
+ya escucha, se reutiliza sin segundo sidecar. Auth local `none` en loopback.
+
+**Prueba:** `scripts/prepare-desktop-sidecar.sh` + `npm run desktop:dev` →
+Motor · local → Arrancar → health en `:9090`.
+
+## Fase 10B — TLS, roles y proyectos
+
+**Problema:** un solo Bearer sin roles; HTTP sin TLS nativo; sin alcance por flujo.
+
+**Cambio:** `crates/jaiba-server/src/auth.rs` (roles viewer/operator/admin,
+`JAIBA_ADMIN_USERS_FILE`, allowlist `projects`), HTTPS opcional con
+`JAIBA_TLS_*` vía `axum-server`, `GET /api/v1/whoami`. UI muestra actor/rol.
+Docs: [priority-10b-security.md](priority-10b-security.md). Ejemplo:
+`examples/admin-users.json`.
+
+**Decisión:** sin SSO; token de entorno sigue siendo admin global; permisos por
+`flow_id` (proyecto), no multi-tenant de datos.
+
+**Prueba:** `cargo test -p jaiba-server --lib` y serve con users file + curl whoami.
+
+## Fase 10C — Flujo de planta AI Prep
+
+**Problema:** el conveyor sintético no demostraba origen DB ni hand-off usable.
+
+**Cambio:** `examples/ai-prep-plant.yaml` (Postgres VALUES → `ai_*` → CSV +
+manifest con paths); `shuffle`/`seed` en split; `optional` en webhook;
+`scripts/mock-ml-webhook.py`. Docs:
+[priority-10c-plant-prep.md](priority-10c-plant-prep.md).
+
+**Decisión:** VALUES evita DDL en demos; Oracle se documenta como sustitución
+del nodo de lectura.
+
+**Prueba:** con `DATABASE_URL`, `cargo run -- examples/ai-prep-plant.yaml` y
+`failed=0`; opcionalmente el mock en `:8099`.
+
+## CI mínimo (GitHub Actions)
+
+**Problema:** no había gate automático de fmt/test.
+
+**Cambio:** `.github/workflows/ci.yml` (fmt + `cargo test --workspace` +
+typecheck UI) y `.github/workflows/phase8-integration.yml` (manual / label
+`phase8`). Docs: [ci.md](ci.md).
+
+**Decisión:** Phase 8 sigue siendo opt-in (necesita entorno real / self-hosted);
+el CI de PR no levanta contenedores.
+
+**Prueba:** push/PR dispara CI; localmente los mismos comandos de `docs/ci.md`.
+
+## Trabajo posterior a la fase 9 / 10A–10C
+
+- procesadores ejecutables de consulta para MySQL y SQL Server;
 - catálogo firmado y política de permisos para plugins de terceros;
 - transporte WebAssembly opcional;
-- automatización de pruebas reales en CI con servicios efímeros.
+- Phase 8 en CI con servicios efímeros (hoy: self-hosted / manual);
+- firmado/auto-update del instalador desktop;
+- SSO / gestión de usuarios en UI.
 
 ## Regla para futuras implementaciones
 

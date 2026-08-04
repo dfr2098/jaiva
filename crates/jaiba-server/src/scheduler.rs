@@ -20,7 +20,10 @@ use jaiba_runtime::{
 };
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 
-use crate::{flow_registry::FlowRegistry, schedule_store::{ScheduleState, ScheduleStore}};
+use crate::{
+    flow_registry::FlowRegistry,
+    schedule_store::{ScheduleState, ScheduleStore},
+};
 
 /// Orquesta disparos repetidos sobre flujos ya cargados en el registro.
 pub struct FlowScheduler {
@@ -281,10 +284,7 @@ fn should_catch_up(schedule: &ScheduleConfig, state: &ScheduleState) -> bool {
     match &schedule.trigger {
         ScheduleTrigger::Interval { every_seconds } => elapsed >= *every_seconds,
         ScheduleTrigger::Cron { expression } => {
-            let timezone = schedule
-                .timezone
-                .as_deref()
-                .unwrap_or("UTC");
+            let timezone = schedule.timezone.as_deref().unwrap_or("UTC");
             delay_until_next_cron(expression, timezone)
                 .map(|delay| delay < Duration::from_secs(2))
                 .unwrap_or(false)
@@ -311,9 +311,7 @@ mod tests {
     fn validates_interval_and_cron() {
         let ok = ScheduleConfig {
             enabled: true,
-            trigger: ScheduleTrigger::Interval {
-                every_seconds: 5,
-            },
+            trigger: ScheduleTrigger::Interval { every_seconds: 5 },
             timezone: None,
             overlap: OverlapPolicy::Skip,
             catch_up: CatchUpPolicy::None,
@@ -322,9 +320,7 @@ mod tests {
 
         let bad = ScheduleConfig {
             enabled: true,
-            trigger: ScheduleTrigger::Interval {
-                every_seconds: 0,
-            },
+            trigger: ScheduleTrigger::Interval { every_seconds: 0 },
             timezone: None,
             overlap: OverlapPolicy::Skip,
             catch_up: CatchUpPolicy::None,

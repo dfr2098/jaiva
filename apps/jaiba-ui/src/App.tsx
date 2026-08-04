@@ -3,6 +3,7 @@ import { jaivaApi } from "./api";
 import {
   CrabMark,
   AdminAccess,
+  EngineControl,
   FlowCanvas,
   FlowControls,
   LifecycleBadge,
@@ -235,6 +236,7 @@ export default function App() {
           </button>
         </nav>
         <Status online={online} label={message} />
+        <EngineControl onChanged={() => void refresh()} />
         <AdminAccess />
       </header>
 

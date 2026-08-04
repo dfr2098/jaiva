@@ -4,11 +4,7 @@
 //! el lookup se carga una vez (`lookup_records` YAML o `lookup_path` JSON) y
 //! se indexa por `key`. Filas sin match se dejan igual (left join laxo).
 
-use std::{
-    collections::HashMap,
-    fs,
-    sync::Mutex,
-};
+use std::{collections::HashMap, fs, sync::Mutex};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -60,7 +56,9 @@ impl AiLookupJoin {
                 FlowError::Configuration(format!("ai_lookup_join lookup JSON: {error}"))
             })?;
             let array = loaded.as_array().ok_or_else(|| {
-                FlowError::Configuration("ai_lookup_join lookup_path must be a JSON array".to_owned())
+                FlowError::Configuration(
+                    "ai_lookup_join lookup_path must be a JSON array".to_owned(),
+                )
             })?;
             lookup.extend(array.iter().cloned());
         }

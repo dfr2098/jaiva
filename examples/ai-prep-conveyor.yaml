@@ -201,6 +201,9 @@ processors:
     config:
       path: output/ai-prep/manifest.json
       dataset_name: conveyor-sensors
+      train_path: output/ai-prep/train.csv
+      validation_path: output/ai-prep/validation.csv
+      test_path: output/ai-prep/test.csv
 
 connections:
   - { from: source, relationship: success, to: select }

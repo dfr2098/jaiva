@@ -435,8 +435,8 @@ impl FlowRegistry {
         };
 
         let metrics = FlowMetrics::default();
-        let supervisor = FlowSupervisor::new(config, metrics.clone())
-            .with_connection_resolver(resolver.clone());
+        let supervisor =
+            FlowSupervisor::new(config, metrics.clone()).with_connection_resolver(resolver.clone());
 
         if start {
             // 5. Drenar la versión anterior en ejecución (si la hay).
@@ -525,16 +525,11 @@ impl FlowRegistry {
     }
 
     /// Detiene el flujo y lo saca del mapa `running` para liberar cupo y permitir archivar.
-    pub async fn stop_and_unload(
-        &self,
-        id: &str,
-    ) -> Result<SupervisedFlowSnapshot, RegistryError> {
-        let previous = self
-            .running
-            .write()
-            .await
-            .remove(id)
-            .ok_or_else(|| RegistryError::NotFound(format!("flujo '{id}' no está en ejecución")))?;
+    pub async fn stop_and_unload(&self, id: &str) -> Result<SupervisedFlowSnapshot, RegistryError> {
+        let previous =
+            self.running.write().await.remove(id).ok_or_else(|| {
+                RegistryError::NotFound(format!("flujo '{id}' no está en ejecución"))
+            })?;
         match previous.supervisor.stop_gracefully().await {
             Ok(()) => Ok(previous.supervisor.snapshot()),
             Err(error) => {
@@ -715,8 +710,8 @@ async fn restore_previous(
 ) {
     let supervisor = match parse_and_validate(&previous.source) {
         Ok(config) => {
-            let restored =
-                FlowSupervisor::new(config, previous.metrics.clone()).with_connection_resolver(resolver);
+            let restored = FlowSupervisor::new(config, previous.metrics.clone())
+                .with_connection_resolver(resolver);
             if let Err(error) = restored.start().await {
                 tracing::error!(
                     flow_id = %id,

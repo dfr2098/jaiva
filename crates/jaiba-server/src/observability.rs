@@ -33,6 +33,9 @@ use jaiba_runtime::{
     error::FlowError,
 };
 
+use crate::auth::{
+    AuthContext, Permission, Principal, Role, WhoAmI, load_users_file, match_principal,
+};
 use crate::connection_api::{
     compile_query, create_connection, delete_connection, describe_metadata, diagnose_connection,
     duplicate_connection, get_connection, list_connection_types, list_connections, list_metadata,
@@ -55,7 +58,10 @@ pub(crate) struct AppState {
 struct AdminAccess {
     enabled: bool,
     authentication: AdminAuthentication,
-    token: Option<String>,
+    /// Principales Bearer (token único o fichero de usuarios).
+    principals: Vec<Principal>,
+    /// True si el bind es loopback (permite /runtime y /ws sin Bearer).
+    bind_is_loopback: bool,
 }
 
 #[derive(Clone)]
@@ -238,9 +244,7 @@ impl ObservabilityServer {
         // inicial) y NUNCA se reescribe al desplegar otro flujo.
         let seed_config = self.supervisor.as_ref().map(FlowSupervisor::config);
         let (admin, body_limit) = resolve_server_admin(address, seed_config)?;
-        if let (Some(supervisor), Some(source)) =
-            (self.supervisor.as_ref(), self.source.as_ref())
-        {
+        if let (Some(supervisor), Some(source)) = (self.supervisor.as_ref(), self.source.as_ref()) {
             let config = supervisor.config();
             let flow_id = config.id.clone();
             let repository = if config.engine.repository.enabled {
@@ -268,6 +272,7 @@ impl ObservabilityServer {
             .route("/metrics", get(prometheus))
             .route("/ws", get(websocket))
             .route("/ws/v1", get(websocket_v1))
+            .route("/api/v1/whoami", get(whoami))
             .route("/api/v1/flows", get(list_flows).post(create_flow))
             .route("/api/v1/flows/validate", post(validate_flow))
             .route("/api/v1/flows/{id}", get(get_flow))
@@ -330,12 +335,55 @@ impl ObservabilityServer {
             )
             .layer(DefaultBodyLimit::max(body_limit))
             .with_state(state.clone());
-        let listener = TcpListener::bind(address).await?;
-        tracing::info!(%address, "observability and administration server listening");
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal(state.registry.clone()))
-            .await
-            .map_err(|error| FlowError::Server(error.to_string()))
+        serve_http_or_https(address, app, state.registry.clone()).await
+    }
+}
+
+async fn serve_http_or_https(
+    address: SocketAddr,
+    app: Router,
+    registry: Arc<FlowRegistry>,
+) -> Result<(), FlowError> {
+    let cert = env::var("JAIBA_TLS_CERT_FILE")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let key = env::var("JAIBA_TLS_KEY_FILE")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    match (cert, key) {
+        (Some(cert), Some(key)) => {
+            let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert, &key)
+                .await
+                .map_err(|error| {
+                    FlowError::Configuration(format!(
+                        "no se pudo cargar TLS (JAIBA_TLS_CERT_FILE / JAIBA_TLS_KEY_FILE): {error}"
+                    ))
+                })?;
+            tracing::info!(%address, cert = %cert, "HTTPS administration server listening");
+            let handle = axum_server::Handle::new();
+            let shutdown_handle = handle.clone();
+            let registry = registry.clone();
+            tokio::spawn(async move {
+                shutdown_signal(registry).await;
+                shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
+            });
+            axum_server::bind_rustls(address, config)
+                .handle(handle)
+                .serve(app.into_make_service())
+                .await
+                .map_err(|error| FlowError::Server(error.to_string()))
+        }
+        (None, None) => {
+            let listener = TcpListener::bind(address).await?;
+            tracing::info!(%address, "observability and administration server listening");
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal(registry))
+                .await
+                .map_err(|error| FlowError::Server(error.to_string()))
+        }
+        _ => Err(FlowError::Configuration(
+            "TLS incompleto: defina JAIBA_TLS_CERT_FILE y JAIBA_TLS_KEY_FILE juntos".to_owned(),
+        )),
     }
 }
 
@@ -360,8 +408,22 @@ async fn readiness(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn runtime(State(state): State<AppState>) -> Json<Option<SupervisedFlowSnapshot>> {
-    Json(state.registry.primary_snapshot().await)
+#[derive(Debug, Deserialize)]
+struct ObservabilityQuery {
+    /// Token opcional para WebSocket cuando el bind no es loopback.
+    access_token: Option<String>,
+}
+
+async fn runtime(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ObservabilityQuery>,
+) -> Response {
+    if let Err(response) = authorize_observability(&state, &headers, query.access_token.as_deref())
+    {
+        return response;
+    }
+    Json(state.registry.primary_snapshot().await).into_response()
 }
 
 async fn prometheus(State(state): State<AppState>) -> Response {
@@ -373,33 +435,68 @@ async fn prometheus(State(state): State<AppState>) -> Response {
         .into_response()
 }
 
-async fn websocket(upgrade: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
-    upgrade.on_upgrade(move |socket| stream_metrics(socket, state))
+async fn websocket(
+    upgrade: WebSocketUpgrade,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ObservabilityQuery>,
+) -> Response {
+    if let Err(response) = authorize_observability(&state, &headers, query.access_token.as_deref())
+    {
+        return response;
+    }
+    upgrade
+        .on_upgrade(move |socket| stream_metrics(socket, state))
+        .into_response()
 }
 
 async fn websocket_v1(
     upgrade: WebSocketUpgrade,
     State(state): State<AppState>,
-) -> impl IntoResponse {
-    upgrade.on_upgrade(move |socket| stream_runtime(socket, state))
+    headers: HeaderMap,
+    Query(query): Query<ObservabilityQuery>,
+) -> Response {
+    if let Err(response) = authorize_observability(&state, &headers, query.access_token.as_deref())
+    {
+        return response;
+    }
+    upgrade
+        .on_upgrade(move |socket| stream_runtime(socket, state))
+        .into_response()
 }
 
 /// Lista todos los flujos registrados con su historial de versiones y estados.
 async fn list_flows(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
-    Json(state.registry.list_records().await).into_response()
+    let ctx = match authorize_perm(&state, &headers, Permission::Read) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
+    let records = state.registry.list_records().await;
+    let filtered: Vec<_> = records
+        .into_iter()
+        .filter(|record| ctx.allows_project(&record.id))
+        .collect();
+    Json(filtered).into_response()
 }
 
 /// Importa/crea una nueva versión DRAFT del flujo a partir del YAML del cuerpo.
 async fn create_flow(State(state): State<AppState>, headers: HeaderMap, body: String) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let ctx = match authorize_perm(&state, &headers, Permission::Operate) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     match state.registry.create_draft(&body, None).await {
         Ok((flow_id, version)) => {
-            tracing::warn!(audit_action = "flow_create", flow_id = %flow_id, version, "administrative action");
+            if !ctx.allows_project(&flow_id) {
+                return forbidden("flow is outside the caller's project allowlist");
+            }
+            tracing::warn!(
+                audit_action = "flow_create",
+                actor = admin_actor(&ctx),
+                flow_id = %flow_id,
+                version,
+                "administrative action"
+            );
             (StatusCode::CREATED, Json(DraftCreated { flow_id, version })).into_response()
         }
         Err(error) => registry_error(error),
@@ -411,17 +508,31 @@ async fn validate_flow(
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let ctx = match authorize_perm(&state, &headers, Permission::Operate) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     match parse_and_validate(&body) {
-        Ok(config) => Json(ValidationResult {
-            valid: true,
-            flow_id: config.id,
-            processors: config.processors.len(),
-            connections: config.connections.len(),
-        })
-        .into_response(),
+        Ok(config) => {
+            if !ctx.allows_project(&config.id) {
+                return forbidden("flow is outside the caller's project allowlist");
+            }
+            tracing::warn!(
+                audit_action = "flow_validate",
+                actor = admin_actor(&ctx),
+                flow_id = %config.id,
+                processors = config.processors.len(),
+                connections = config.connections.len(),
+                "administrative action"
+            );
+            Json(ValidationResult {
+                valid: true,
+                flow_id: config.id,
+                processors: config.processors.len(),
+                connections: config.connections.len(),
+            })
+            .into_response()
+        }
         Err(error) => configuration_error(error),
     }
 }
@@ -435,9 +546,10 @@ async fn deploy_flow(
     Query(query): Query<DeployQuery>,
     body: String,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let _ctx = match authorize_flow(&state, &headers, Permission::Operate, &id) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     let config = match parse_and_validate(&body) {
         Ok(config) => config,
         Err(error) => return configuration_error(error),
@@ -479,9 +591,10 @@ async fn validate_version(
     headers: HeaderMap,
     Path((id, version)): Path<(String, u32)>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let _ctx = match authorize_flow(&state, &headers, Permission::Operate, &id) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     match state.registry.validate_version(&id, version).await {
         Ok(record) => {
             tracing::warn!(audit_action = "flow_validate", flow_id = %id, version, "administrative action");
@@ -498,9 +611,10 @@ async fn deploy_version(
     Path((id, version)): Path<(String, u32)>,
     Query(query): Query<DeployQuery>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let _ctx = match authorize_flow(&state, &headers, Permission::Operate, &id) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     let resolver = match build_resolver().await {
         Ok(resolver) => resolver,
         Err(error) => return configuration_error(error),
@@ -526,9 +640,10 @@ async fn rollback_flow(
     Path(id): Path<String>,
     Query(query): Query<DeployQuery>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let _ctx = match authorize_flow(&state, &headers, Permission::Operate, &id) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     let resolver = match build_resolver().await {
         Ok(resolver) => resolver,
         Err(error) => return configuration_error(error),
@@ -549,9 +664,10 @@ async fn archive_version(
     headers: HeaderMap,
     Path((id, version)): Path<(String, u32)>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let _ctx = match authorize_flow(&state, &headers, Permission::Operate, &id) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     match state.registry.archive_version(&id, version).await {
         Ok(record) => {
             tracing::warn!(audit_action = "flow_archive", flow_id = %id, version, "administrative action");
@@ -567,7 +683,7 @@ async fn list_versions(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
+    if let Err(response) = authorize_flow(&state, &headers, Permission::Read, &id) {
         return response;
     }
     match state.registry.get_record(&id).await {
@@ -582,7 +698,7 @@ async fn export_version(
     headers: HeaderMap,
     Path((id, version)): Path<(String, u32)>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
+    if let Err(response) = authorize_flow(&state, &headers, Permission::Read, &id) {
         return response;
     }
     match state.registry.export_version(&id, version).await {
@@ -609,7 +725,7 @@ async fn get_flow(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
+    if let Err(response) = authorize_flow(&state, &headers, Permission::Read, &id) {
         return response;
     }
     match state.registry.get_record(&id).await {
@@ -626,9 +742,10 @@ async fn start_flow(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let _ctx = match authorize_flow(&state, &headers, Permission::Operate, &id) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     let Some(supervisor) = state.registry.supervisor(&id).await else {
         return not_found("flow is not running");
     };
@@ -649,9 +766,10 @@ async fn trigger_flow(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let _ctx = match authorize_flow(&state, &headers, Permission::Operate, &id) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     match state.scheduler.trigger(&id).await {
         Ok(true) => {
             tracing::warn!(audit_action = "trigger", flow_id = %id, "administrative action");
@@ -680,9 +798,10 @@ async fn stop_flow(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let _ctx = match authorize_flow(&state, &headers, Permission::Operate, &id) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     state.scheduler.disarm(&id).await;
     match state.registry.stop_and_unload(&id).await {
         Ok(snapshot) => {
@@ -730,12 +849,16 @@ async fn provenance(
     headers: HeaderMap,
     Query(query): Query<FlowQuery>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let ctx = match authorize_perm(&state, &headers, Permission::Read) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     let Some(flow_id) = resolve_target_flow(&state, query.flow.as_deref()).await else {
         return unavailable("no flow with a persistent repository is available");
     };
+    if !ctx.allows_project(&flow_id) {
+        return forbidden("flow is outside the caller's project allowlist");
+    }
     let Some(repository) = state.registry.repository(&flow_id).await else {
         return unavailable("persistent repository is disabled");
     };
@@ -756,12 +879,16 @@ async fn dead_letters(
     headers: HeaderMap,
     Query(query): Query<FlowQuery>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let ctx = match authorize_perm(&state, &headers, Permission::Read) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     let Some(flow_id) = resolve_target_flow(&state, query.flow.as_deref()).await else {
         return unavailable("no flow with a persistent repository is available");
     };
+    if !ctx.allows_project(&flow_id) {
+        return forbidden("flow is outside the caller's project allowlist");
+    }
     let Some(repository) = state.registry.repository(&flow_id).await else {
         return unavailable("persistent repository is disabled");
     };
@@ -778,18 +905,27 @@ async fn replay_dead_letter(
     Path(queue_id): Path<String>,
     Query(query): Query<FlowQuery>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let ctx = match authorize_perm(&state, &headers, Permission::Operate) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     let Some(flow_id) = resolve_target_flow(&state, query.flow.as_deref()).await else {
         return unavailable("no flow with a persistent repository is available");
     };
+    if !ctx.allows_project(&flow_id) {
+        return forbidden("flow is outside the caller's project allowlist");
+    }
     let Some(repository) = state.registry.repository(&flow_id).await else {
         return unavailable("persistent repository is disabled");
     };
     match repository.requeue_dead_letter(&queue_id).await {
         Ok(true) => {
-            tracing::warn!(audit_action = "dead_letter_replay", %queue_id, "administrative action");
+            tracing::warn!(
+                audit_action = "dead_letter_replay",
+                actor = admin_actor(&ctx),
+                %queue_id,
+                "administrative action"
+            );
             Json(ApiMessage {
                 message: "dead-letter packet requeued".to_owned(),
             })
@@ -815,16 +951,22 @@ async fn mutate_sync(
     action: &'static str,
     operation: fn(&FlowSupervisor) -> bool,
 ) -> Response {
-    if let Err(response) = authorize(state, headers) {
-        return response;
-    }
+    let ctx = match authorize_flow(state, headers, Permission::Operate, id) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     let Some(supervisor) = state.registry.supervisor(id).await else {
         return not_found("flow is not running");
     };
     if !operation(&supervisor) {
         return conflict("operation is not valid in the current flow state");
     }
-    tracing::warn!(audit_action = action, flow_id = %id, "administrative action");
+    tracing::warn!(
+        audit_action = action,
+        actor = admin_actor(&ctx),
+        flow_id = %id,
+        "administrative action"
+    );
     Json(supervisor.snapshot()).into_response()
 }
 
@@ -901,36 +1043,35 @@ fn resolve_server_admin(
         "JAIBA_ADMIN_TOKEN".to_owned()
     };
 
-    let token = if enabled && authentication == AdminAuthentication::Bearer {
-        match resolve_admin_token(&token_env) {
-            Some(token) => Some(token),
-            None if address.ip().is_loopback() => {
-                tracing::warn!(
-                    "API administrativa Bearer sin token en loopback; se permite acceso sin autenticar. Configure {token_env} en producción."
+    let mut principals = Vec::new();
+    if enabled && authentication == AdminAuthentication::Bearer {
+        if let Ok(path) = env::var("JAIBA_ADMIN_USERS_FILE") {
+            let path = path.trim();
+            if !path.is_empty() {
+                principals = load_users_file(std::path::Path::new(path))?;
+                tracing::info!(
+                    path,
+                    users = principals.len(),
+                    "admin multi-usuario cargado desde JAIBA_ADMIN_USERS_FILE"
                 );
-                None
-            }
-            None => {
-                return Err(FlowError::Configuration(format!(
-                    "variable de entorno '{token_env}' requerida para la API administrativa"
-                )));
             }
         }
-    } else {
-        None
-    };
-
-    // En loopback, si Bearer quedó sin token, tratar como None para no bloquear
-    // el modo servidor puro durante desarrollo local.
-    let authentication = if enabled
-        && authentication == AdminAuthentication::Bearer
-        && token.is_none()
-        && address.ip().is_loopback()
-    {
-        AdminAuthentication::None
-    } else {
-        authentication
-    };
+        if let Some(token) = resolve_admin_token(&token_env) {
+            // Token de entorno sigue siendo admin global (bootstrap / compat 9A).
+            principals.push(Principal {
+                id: "bearer".to_owned(),
+                role: Role::Admin,
+                projects: vec!["*".to_owned()],
+                token_secret: token,
+            });
+        }
+        if principals.is_empty() {
+            return Err(FlowError::Configuration(format!(
+                "authentication=bearer requiere '{token_env}' o JAIBA_ADMIN_USERS_FILE \
+                 (en desarrollo local use engine.admin.authentication: none o JAIBA_ADMIN_AUTH=none)"
+            )));
+        }
+    }
 
     let body_limit = env::var("JAIBA_ADMIN_MAX_BODY_BYTES")
         .ok()
@@ -939,56 +1080,193 @@ fn resolve_server_admin(
         .unwrap_or(1024 * 1024)
         .max(1);
 
+    if enabled && authentication == AdminAuthentication::None {
+        tracing::warn!(
+            %address,
+            "API administrativa sin autenticación (solo válido en loopback)"
+        );
+    }
+
     Ok((
         AdminAccess {
             enabled,
             authentication,
-            token,
+            principals,
+            bind_is_loopback: address.ip().is_loopback(),
         },
         body_limit,
     ))
 }
 
 fn parse_env_bool(name: &str) -> Option<bool> {
-    env::var(name).ok().and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
-    })
+    env::var(name)
+        .ok()
+        .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        })
 }
 
-#[allow(clippy::result_large_err)]
-pub(crate) fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
-    let admin = state.admin.read().expect("admin lock poisoned");
+/// Actor lógico para auditoría (id de usuario o `none` / `bearer`).
+pub(crate) fn admin_actor(ctx: &AuthContext) -> &str {
+    ctx.actor.as_str()
+}
+
+fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+}
+
+fn authenticate(
+    admin: &AdminAccess,
+    headers: &HeaderMap,
+    query_token: Option<&str>,
+) -> Result<AuthContext, Response> {
     if !admin.enabled {
         return Err(unavailable("administrative API is disabled"));
     }
     if admin.authentication == AdminAuthentication::None {
+        return Ok(AuthContext {
+            actor: "none".to_owned(),
+            role: Role::Admin,
+            projects: vec!["*".to_owned()],
+        });
+    }
+    let presented = extract_bearer_token(headers).or(query_token);
+    let Some(token) = presented else {
+        return Err(unauthorized());
+    };
+    match match_principal(&admin.principals, token) {
+        Some(principal) => Ok(AuthContext {
+            actor: principal.id.clone(),
+            role: principal.role,
+            projects: principal.projects.clone(),
+        }),
+        None => {
+            tracing::warn!(
+                audit_action = "authorization_rejected",
+                actor = "anonymous",
+                "administrative authorization failed"
+            );
+            Err(unauthorized())
+        }
+    }
+}
+
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(ApiMessage {
+            message: "a valid Bearer token is required".to_owned(),
+        }),
+    )
+        .into_response()
+}
+
+fn forbidden(message: &str) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(ApiMessage {
+            message: message.to_owned(),
+        }),
+    )
+        .into_response()
+}
+
+/// Autoriza con permiso Operate (compat / helpers).
+#[allow(dead_code)]
+#[allow(clippy::result_large_err)]
+pub(crate) fn authorize(state: &AppState, headers: &HeaderMap) -> Result<AuthContext, Response> {
+    authorize_perm(state, headers, Permission::Operate)
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn authorize_perm(
+    state: &AppState,
+    headers: &HeaderMap,
+    permission: Permission,
+) -> Result<AuthContext, Response> {
+    let admin = state.admin.read().expect("admin lock poisoned");
+    let ctx = authenticate(&admin, headers, None)?;
+    if !ctx.has_permission(permission) {
+        tracing::warn!(
+            audit_action = "authorization_forbidden",
+            actor = %ctx.actor,
+            role = ctx.role.as_str(),
+            ?permission,
+            "insufficient role"
+        );
+        return Err(forbidden("insufficient role for this operation"));
+    }
+    Ok(ctx)
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn authorize_flow(
+    state: &AppState,
+    headers: &HeaderMap,
+    permission: Permission,
+    flow_id: &str,
+) -> Result<AuthContext, Response> {
+    let ctx = authorize_perm(state, headers, permission)?;
+    if !ctx.allows_project(flow_id) {
+        tracing::warn!(
+            audit_action = "authorization_forbidden",
+            actor = %ctx.actor,
+            flow_id,
+            "project not allowed"
+        );
+        return Err(forbidden("flow is outside the caller's project allowlist"));
+    }
+    Ok(ctx)
+}
+
+/// Autoriza superficies de observación (`/runtime`, `/ws`) fuera de loopback.
+///
+/// En bind loopback siguen abiertas (UI local / health probes). En bind no
+/// loopback exigen Bearer con al menos rol viewer.
+#[allow(clippy::result_large_err)]
+fn authorize_observability(
+    state: &AppState,
+    headers: &HeaderMap,
+    query_token: Option<&str>,
+) -> Result<(), Response> {
+    let admin = state.admin.read().expect("admin lock poisoned");
+    if admin.bind_is_loopback || admin.authentication == AdminAuthentication::None {
         return Ok(());
     }
-    let Some(expected) = admin.token.as_deref() else {
-        return Err(unavailable(
-            "administrative token environment variable is missing",
-        ));
+    let ctx = authenticate(&admin, headers, query_token)?;
+    if !ctx.has_permission(Permission::Read) {
+        return Err(forbidden("insufficient role for observability"));
+    }
+    Ok(())
+}
+
+async fn whoami(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let admin = state.admin.read().expect("admin lock poisoned");
+    let auth_label = match admin.authentication {
+        AdminAuthentication::None => "none",
+        AdminAuthentication::Bearer => {
+            if admin.principals.iter().any(|p| p.id != "bearer") {
+                "users"
+            } else {
+                "bearer"
+            }
+        }
     };
-    let provided = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "));
-    if provided == Some(expected) {
-        Ok(())
-    } else {
-        tracing::warn!(
-            audit_action = "authorization_rejected",
-            "administrative authorization failed"
-        );
-        Err((
-            StatusCode::UNAUTHORIZED,
-            Json(ApiMessage {
-                message: "a valid Bearer token is required".to_owned(),
-            }),
-        )
-            .into_response())
+    drop(admin);
+    match authorize_perm(&state, &headers, Permission::Read) {
+        Ok(ctx) => Json(WhoAmI {
+            actor: ctx.actor,
+            role: ctx.role.as_str(),
+            projects: ctx.projects,
+            authentication: auth_label,
+        })
+        .into_response(),
+        Err(response) => response,
     }
 }
 
@@ -1237,6 +1515,46 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn bearer_without_token_fails_even_on_loopback() {
+        // Simula ausencia de token: resolve_server_admin no degrada a none.
+        let previous = std::env::var("JAIBA_ADMIN_TOKEN").ok();
+        let previous_users = std::env::var("JAIBA_ADMIN_USERS_FILE").ok();
+        // SAFETY: test serializes env mutation within this process.
+        unsafe {
+            std::env::remove_var("JAIBA_ADMIN_TOKEN");
+            std::env::remove_var("JAIVA_ADMIN_TOKEN");
+            std::env::remove_var("JAIBA_ADMIN_AUTH");
+            std::env::remove_var("JAIBA_ADMIN_USERS_FILE");
+        }
+        let result = resolve_server_admin("127.0.0.1:9090".parse().unwrap(), None);
+        let err = match result {
+            Ok(_) => panic!("expected configuration error without admin token"),
+            Err(error) => error,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("requiere") || message.contains("requerida"),
+            "unexpected error: {err}"
+        );
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("JAIBA_ADMIN_TOKEN", value),
+                None => std::env::remove_var("JAIBA_ADMIN_TOKEN"),
+            }
+            match previous_users {
+                Some(value) => std::env::set_var("JAIBA_ADMIN_USERS_FILE", value),
+                None => std::env::remove_var("JAIBA_ADMIN_USERS_FILE"),
+            }
+        }
+    }
+
+    #[test]
+    fn auth_module_covers_token_compare() {
+        // Comparación en tiempo constante vive en `auth::token_matches`.
+        assert!(crate::auth::Role::Viewer < crate::auth::Role::Admin);
     }
 
     #[test]

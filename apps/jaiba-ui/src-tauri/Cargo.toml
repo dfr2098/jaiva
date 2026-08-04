@@ -1,0 +1,27 @@
+# Crate independiente del workspace del motor (ver exclude en Cargo.toml raíz).
+[workspace]
+
+[package]
+name = "jaiba-desktop"
+version = "0.2.0"
+description = "Cliente de escritorio Jaiba (UI embebida, remoto o sidecar local)"
+authors = ["Jaiba"]
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+name = "jaiba_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true

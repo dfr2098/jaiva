@@ -1,0 +1,19 @@
+[[permission]]
+identifier = "allow-engine-status"
+description = "Permite consultar el estado del motor local/remoto."
+commands.allow = ["engine_status"]
+
+[[permission]]
+identifier = "allow-set-engine-mode"
+description = "Permite cambiar entre motor local (sidecar) y remoto."
+commands.allow = ["set_engine_mode"]
+
+[[permission]]
+identifier = "allow-start-local-engine"
+description = "Permite arrancar el sidecar jaiba serve."
+commands.allow = ["start_local_engine"]
+
+[[permission]]
+identifier = "allow-stop-local-engine"
+description = "Permite detener el sidecar jaiba serve."
+commands.allow = ["stop_local_engine"]

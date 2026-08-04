@@ -1,0 +1,77 @@
+# Fase 8 opcional: integración contra un entorno de pruebas ya levantado.
+# No corre en cada PR. Disparo manual (o label `phase8` en PR con runner self-hosted).
+#
+# Requisitos del runner:
+#   - Postgres, Kafka, MongoDB y SQL Server accesibles (defaults del harness)
+#   - Secrets / variables: ver docs/priority-8-integration-tests.md
+#
+# En GitHub: Settings → Secrets and variables → Actions
+#   JAIBA_TEST_POSTGRES_PASSWORD
+#   JAIBA_TEST_MONGODB_PASSWORD
+#   JAIBA_TEST_SQLSERVER_PASSWORD
+name: Phase 8 integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Runner label (ubuntu-latest solo si los servicios son alcanzables desde Actions)"
+        required: true
+        default: self-hosted
+        type: choice
+        options:
+          - self-hosted
+          - ubuntu-latest
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: phase8-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  phase8:
+    name: phase8-integration
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'phase8'))
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || 'self-hosted' }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: System deps (librdkafka / SQL Server build aids)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev cmake g++ \
+            libsasl2-dev
+
+      - name: Run Phase 8 harness
+        env:
+          JAIBA_TEST_POSTGRES_PASSWORD: ${{ secrets.JAIBA_TEST_POSTGRES_PASSWORD }}
+          JAIBA_TEST_MONGODB_PASSWORD: ${{ secrets.JAIBA_TEST_MONGODB_PASSWORD }}
+          JAIBA_TEST_SQLSERVER_PASSWORD: ${{ secrets.JAIBA_TEST_SQLSERVER_PASSWORD }}
+          # Hosts/puertos opcionales (si no se definen, usa defaults del script).
+          JAIBA_TEST_POSTGRES_HOST: ${{ vars.JAIBA_TEST_POSTGRES_HOST }}
+          JAIBA_TEST_POSTGRES_PORT: ${{ vars.JAIBA_TEST_POSTGRES_PORT }}
+          JAIBA_TEST_KAFKA_BROKERS: ${{ vars.JAIBA_TEST_KAFKA_BROKERS }}
+          JAIBA_TEST_MONGODB_HOST: ${{ vars.JAIBA_TEST_MONGODB_HOST }}
+          JAIBA_TEST_MONGODB_PORT: ${{ vars.JAIBA_TEST_MONGODB_PORT }}
+          JAIBA_TEST_SQLSERVER_HOST: ${{ vars.JAIBA_TEST_SQLSERVER_HOST }}
+          JAIBA_TEST_SQLSERVER_PORT: ${{ vars.JAIBA_TEST_SQLSERVER_PORT }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${JAIBA_TEST_POSTGRES_PASSWORD:-}" || -z "${JAIBA_TEST_MONGODB_PASSWORD:-}" || -z "${JAIBA_TEST_SQLSERVER_PASSWORD:-}" ]]; then
+            echo "Faltan secrets JAIBA_TEST_*_PASSWORD. Configúralos en el repositorio o usa un runner self-hosted con el entorno de pruebas." >&2
+            exit 1
+          fi
+          ./scripts/phase8-integration.sh

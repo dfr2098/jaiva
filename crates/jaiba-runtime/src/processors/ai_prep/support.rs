@@ -8,10 +8,7 @@ use serde_json::{Map, Number, Value};
 use crate::error::FlowError;
 
 /// Exige que cada elemento del paquete sea un objeto JSON.
-pub(crate) fn require_objects(
-    records: &[Value],
-    processor_id: &str,
-) -> Result<(), FlowError> {
+pub(crate) fn require_objects(records: &[Value], processor_id: &str) -> Result<(), FlowError> {
     for (index, record) in records.iter().enumerate() {
         if !record.is_object() {
             return Err(FlowError::Processor {
@@ -78,10 +75,7 @@ pub(crate) fn field_key(record: &Map<String, Value>, fields: &[String]) -> Strin
 ///
 /// Sin funciones, sin acceso a memoria arbitraria: solo nombres de campo del
 /// registro actual. Precedencia estándar (`*`/`/` sobre `+`/`-`).
-pub(crate) fn eval_expr(
-    expr: &str,
-    record: &Map<String, Value>,
-) -> Result<f64, String> {
+pub(crate) fn eval_expr(expr: &str, record: &Map<String, Value>) -> Result<f64, String> {
     let tokens = tokenize(expr)?;
     let mut parser = Parser {
         tokens: &tokens,

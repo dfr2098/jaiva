@@ -19,8 +19,16 @@ processors:
       records:
         - customer_id: 1
           customer_name: Ada
+          score: "10"
+          status: OK
         - customer_id: 2
           customer_name: Linus
+          score: "20"
+          status: WARN
+        - customer_id: 3
+          customer_name: null
+          score: "15"
+          status: OK
 
   - id: transform
     type: rename_fields
@@ -32,6 +40,19 @@ processors:
         customer_id: id
         customer_name: name
 
+  # AI Prep: tipado + drop de filas sin nombre (demo del toolkit).
+  - id: cast_score
+    type: ai_cast_types
+    config:
+      fields:
+        score: number
+      on_error: drop
+
+  - id: drop_null_names
+    type: ai_drop_nulls
+    config:
+      fields: [name]
+
   - id: destination
     type: log_records
 
@@ -41,5 +62,13 @@ connections:
     to: transform
 
   - from: transform
+    relationship: success
+    to: cast_score
+
+  - from: cast_score
+    relationship: success
+    to: drop_null_names
+
+  - from: drop_null_names
     relationship: success
     to: destination

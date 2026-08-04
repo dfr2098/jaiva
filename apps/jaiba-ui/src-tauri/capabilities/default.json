@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permisos desktop 9B/10A: API base + control del sidecar.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "allow-api-base",
+    "allow-engine-status",
+    "allow-set-engine-mode",
+    "allow-start-local-engine",
+    "allow-stop-local-engine"
+  ]
+}

@@ -9,6 +9,9 @@ members = [
     "crates/jaiba-connection-manager",
     "simulator/jaiba-simulator",
 ]
+exclude = [
+    "apps/jaiba-ui/src-tauri",
+]
 default-members = ["crates/jaiba-cli"]
 
 [workspace.package]

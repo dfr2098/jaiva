@@ -146,10 +146,7 @@ connections:
     let packets = captured.lock().unwrap();
     assert_eq!(packets.len(), 1);
     assert_eq!(packets[0].1.len(), 2);
-    assert!(!packets[0].1[0]
-        .as_object()
-        .unwrap()
-        .contains_key("extra"));
+    assert!(!packets[0].1[0].as_object().unwrap().contains_key("extra"));
 }
 
 #[tokio::test]
@@ -265,6 +262,9 @@ processors:
     config:
       path: {}
       dataset_name: conveyor
+      train_path: output/train.csv
+      validation_path: output/validation.csv
+      test_path: output/test.csv
   - id: sink
     type: log_records
 connections:
@@ -285,6 +285,8 @@ connections:
     assert!(body.contains("checksum_sha256"));
     assert!(body.contains("\"row_count\": 2"));
     assert!(body.contains("norte") || body.contains("plant"));
+    assert!(body.contains("train_path"));
+    assert!(body.contains("output/train.csv"));
     let _ = fs::remove_file(&manifest_path);
 }
 
@@ -292,10 +294,7 @@ connections:
 fn registry_exposes_ai_prep_processors() {
     let registry: ProcessorRegistry = default_registry();
     for (name, config) in [
-        (
-            "ai_select_fields",
-            serde_json::json!({"keep": ["a"]}),
-        ),
+        ("ai_select_fields", serde_json::json!({"keep": ["a"]})),
         ("ai_drop_nulls", serde_json::json!({"fields": ["a"]})),
         (
             "ai_fill_missing",
@@ -313,10 +312,7 @@ fn registry_exposes_ai_prep_processors() {
             "ai_cast_types",
             serde_json::json!({"fields": {"a": "number"}}),
         ),
-        (
-            "ai_normalize",
-            serde_json::json!({"fields": ["a"]}),
-        ),
+        ("ai_normalize", serde_json::json!({"fields": ["a"]})),
         (
             "ai_encode_categories",
             serde_json::json!({"fields": {"a": {"x": 1}}}),

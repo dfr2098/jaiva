@@ -1,0 +1,22 @@
+{
+  "users": [
+    {
+      "id": "admin",
+      "role": "admin",
+      "token": "dev-admin-token",
+      "projects": ["*"]
+    },
+    {
+      "id": "ops",
+      "role": "operator",
+      "token": "dev-ops-token",
+      "projects": ["*"]
+    },
+    {
+      "id": "viewer",
+      "role": "viewer",
+      "token": "dev-viewer-token",
+      "projects": ["visualisa-example", "desktop-local"]
+    }
+  ]
+}

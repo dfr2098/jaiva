@@ -73,6 +73,10 @@ Durante desarrollo local puede configurarse `authentication: none`. Este modo
 solo arranca si el servidor escucha en loopback; el valor predeterminado y
 recomendado para operación continúa siendo `bearer`.
 
+Si eliges `bearer` y falta `JAIBA_ADMIN_TOKEN`, el arranque **falla** (incluso
+en loopback). No hay degradación silenciosa a `none`. Ver
+[priority-9a-admin-hardening.md](priority-9a-admin-hardening.md).
+
 | Método | Ruta | Acción |
 |---|---|---|
 | `GET` | `/api/v1/flows` | Lista el flujo configurado |

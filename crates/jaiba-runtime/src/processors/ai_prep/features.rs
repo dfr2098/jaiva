@@ -137,7 +137,10 @@ impl Processor for AiNormalize {
         for field in &self.fields {
             for record in records.iter() {
                 if let Some(number) = record.get(field).and_then(as_f64) {
-                    batch_stats.entry(field.clone()).or_default().observe(number);
+                    batch_stats
+                        .entry(field.clone())
+                        .or_default()
+                        .observe(number);
                 }
             }
         }
@@ -378,12 +381,17 @@ impl Processor for AiComputeFields {
 /// Ratios ≥ 0 y suma ≈ 1.0 (default 0.7 / 0.2 / 0.1). El remanente tras
 /// redondeo de train+validation cae en `test`. Emite solo splits no vacíos
 /// y marca el atributo `ai.split` en cada paquete saliente.
+///
+/// Con `shuffle: true` reordena las filas antes del corte (PRNG xorshift64;
+/// `seed` opcional para reproducibilidad).
 pub struct AiSplitDataset {
     train: f64,
     validation: f64,
     /// Guardado para validar la suma; el remanente del slice es `test`.
     #[allow(dead_code)]
     test: f64,
+    shuffle: bool,
+    seed: u64,
 }
 
 #[derive(Deserialize)]
@@ -394,6 +402,10 @@ struct SplitConfig {
     validation: f64,
     #[serde(default = "default_test")]
     test: f64,
+    #[serde(default)]
+    shuffle: bool,
+    #[serde(default)]
+    seed: Option<u64>,
 }
 
 fn default_train() -> f64 {
@@ -406,12 +418,18 @@ fn default_test() -> f64 {
     0.1
 }
 
+/// Semilla por defecto si `shuffle` sin `seed` explícito.
+const DEFAULT_SPLIT_SEED: u64 = 0x4A41_4942_415F_5344; // JAIBA_SD
+
 impl AiSplitDataset {
     pub fn from_config(value: &Value) -> Result<Self, FlowError> {
         let config: SplitConfig = serde_json::from_value(value.clone())
             .map_err(|error| FlowError::Configuration(error.to_string()))?;
         let sum = config.train + config.validation + config.test;
-        if (sum - 1.0).abs() > 0.001 || config.train < 0.0 || config.validation < 0.0 || config.test < 0.0
+        if (sum - 1.0).abs() > 0.001
+            || config.train < 0.0
+            || config.validation < 0.0
+            || config.test < 0.0
         {
             return Err(FlowError::Configuration(
                 "ai_split_dataset ratios must be >= 0 and sum to 1.0".to_owned(),
@@ -421,6 +439,8 @@ impl AiSplitDataset {
             train: config.train,
             validation: config.validation,
             test: config.test,
+            shuffle: config.shuffle,
+            seed: config.seed.unwrap_or(DEFAULT_SPLIT_SEED),
         })
     }
 }
@@ -437,21 +457,22 @@ impl Processor for AiSplitDataset {
         context: &ProcessorContext,
         output: &OutputSender,
     ) -> Result<(), FlowError> {
-        let records = packet
-            .records()
-            .map_err(|message| FlowError::Processor {
-                processor_id: context.processor_id.clone(),
-                message,
-            })?;
+        let records = packet.records().map_err(|message| FlowError::Processor {
+            processor_id: context.processor_id.clone(),
+            message,
+        })?;
         require_objects(records, &context.processor_id)?;
+        let mut records = records.to_vec();
         let total = records.len();
         if total == 0 {
             output.emit("train", packet).await?;
             return Ok(());
         }
+        if self.shuffle {
+            fisher_yates_shuffle(&mut records, self.seed);
+        }
         let train_end = ((total as f64) * self.train).round() as usize;
-        let validation_end =
-            train_end + ((total as f64) * self.validation).round() as usize;
+        let validation_end = train_end + ((total as f64) * self.validation).round() as usize;
         let train_end = train_end.min(total);
         let validation_end = validation_end.min(total);
 
@@ -463,6 +484,22 @@ impl Processor for AiSplitDataset {
         emit_split(output, &packet, "validation", validation).await?;
         emit_split(output, &packet, "test", test).await?;
         Ok(())
+    }
+}
+
+/// Fisher–Yates con xorshift64 (sin dependencia `rand`).
+fn fisher_yates_shuffle(records: &mut [Value], seed: u64) {
+    let mut state = if seed == 0 {
+        0x9E37_79B9_7F4A_7C15
+    } else {
+        seed
+    };
+    for i in (1..records.len()).rev() {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let j = (state as usize) % (i + 1);
+        records.swap(i, j);
     }
 }
 

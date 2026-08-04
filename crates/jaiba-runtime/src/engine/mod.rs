@@ -23,9 +23,6 @@ mod workers;
 
 pub use circuit::CircuitBreakers;
 pub use connections::ConnectionManager;
-pub use resolver::{
-    ConnectionResolver, ProfileConnectionResolver, ResolvedConnection, referenced_db_aliases,
-};
 pub use context::ProcessorContext;
 pub use control::{FlowControl, FlowControlSnapshot, FlowLifecycle};
 pub use executor::FlowEngine;
@@ -38,6 +35,9 @@ pub use repository::{
     ContentReference, ContentRepository, DeadLetterEntry, LocalContentRepository,
     LocalPacketRepository, PacketRepository, ProvenanceEvent, ProvenanceRecord, RepositoryStats,
     StoredWork,
+};
+pub use resolver::{
+    ConnectionResolver, ProfileConnectionResolver, ResolvedConnection, referenced_db_aliases,
 };
 pub use schema::{DataType, FieldSchema, RecordSchema};
 pub use state::StateStore;

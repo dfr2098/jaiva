@@ -639,10 +639,7 @@ impl Processor for AiCastTypes {
 }
 
 /// Aplica el mapa de casts a una fila; deja `null` sin tocar.
-fn cast_record(
-    mut record: Value,
-    fields: &HashMap<String, CastKind>,
-) -> Result<Value, String> {
+fn cast_record(mut record: Value, fields: &HashMap<String, CastKind>) -> Result<Value, String> {
     let object = record
         .as_object_mut()
         .ok_or_else(|| "expected object".to_owned())?;

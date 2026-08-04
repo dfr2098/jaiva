@@ -65,7 +65,6 @@ impl ScheduleStore {
         }
         Ok(())
     }
-
 }
 
 fn load(path: &Path) -> Result<HashMap<String, ScheduleState>, FlowError> {
@@ -75,9 +74,8 @@ fn load(path: &Path) -> Result<HashMap<String, ScheduleState>, FlowError> {
     let bytes = fs::read(path).map_err(|error| {
         FlowError::Configuration(format!("no se pudo leer schedules.json: {error}"))
     })?;
-    let file: ScheduleFile = serde_json::from_slice(&bytes).map_err(|error| {
-        FlowError::Configuration(format!("schedules.json corrupto: {error}"))
-    })?;
+    let file: ScheduleFile = serde_json::from_slice(&bytes)
+        .map_err(|error| FlowError::Configuration(format!("schedules.json corrupto: {error}")))?;
     Ok(file.flows)
 }
 

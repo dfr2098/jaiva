@@ -48,7 +48,8 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 use url::Url;
 use uuid::Uuid;
 
-use crate::observability::{AppState, authorize};
+use crate::auth::Permission;
+use crate::observability::{AppState, admin_actor, authorize_perm};
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ConnectionTypeView {
@@ -135,7 +136,7 @@ pub(crate) async fn list_metadata(
     Path(id): Path<String>,
     Query(query): Query<MetadataQuery>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
         return response;
     }
     match state
@@ -153,7 +154,7 @@ pub(crate) async fn describe_metadata(
     headers: HeaderMap,
     Path((id, schema, name)): Path<(String, String, String)>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
         return response;
     }
     let object = DatabaseObject {
@@ -173,7 +174,7 @@ pub(crate) async fn compile_query(
     Path(id): Path<String>,
     Json(specification): Json<QuerySpec>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
         return response;
     }
     match state
@@ -235,7 +236,7 @@ pub(crate) async fn list_connection_types(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
         return response;
     }
     Json(
@@ -262,7 +263,7 @@ pub(crate) async fn list_connections(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
         return response;
     }
     let profiles = state.connection_manager.list().await;
@@ -281,7 +282,7 @@ pub(crate) async fn get_connection(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
         return response;
     }
     match state.connection_manager.get(&id).await {
@@ -298,9 +299,10 @@ pub(crate) async fn create_connection(
     headers: HeaderMap,
     Json(input): Json<ConnectionInput>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let ctx = match authorize_perm(&state, &headers, Permission::Admin) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     if let Err(response) = validate_input(&input, true) {
         return response;
     }
@@ -331,10 +333,19 @@ pub(crate) async fn create_connection(
         )
         .await
     {
-        Ok(profile) => match view(&state, profile).await {
-            Ok(item) => (StatusCode::CREATED, Json(item)).into_response(),
-            Err(response) => response,
-        },
+        Ok(profile) => {
+            tracing::warn!(
+                audit_action = "connection_create",
+                actor = admin_actor(&ctx),
+                profile_id = %profile.id,
+                profile_name = %profile.name,
+                "administrative action"
+            );
+            match view(&state, profile).await {
+                Ok(item) => (StatusCode::CREATED, Json(item)).into_response(),
+                Err(response) => response,
+            }
+        }
         Err(error) => {
             let _ = state.connection_secrets.remove(&secret_ref).await;
             manager_error(error)
@@ -348,9 +359,10 @@ pub(crate) async fn update_connection(
     Path(id): Path<String>,
     Json(input): Json<ConnectionInput>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let ctx = match authorize_perm(&state, &headers, Permission::Admin) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     if let Err(response) = validate_input(&input, false) {
         return response;
     }
@@ -388,6 +400,13 @@ pub(crate) async fn update_connection(
     if let Err(error) = state.connection_manager.update(profile.clone()).await {
         return manager_error(error);
     }
+    tracing::warn!(
+        audit_action = "connection_update",
+        actor = admin_actor(&ctx),
+        profile_id = %profile.id,
+        profile_name = %profile.name,
+        "administrative action"
+    );
     match view(&state, profile).await {
         Ok(item) => Json(item).into_response(),
         Err(response) => response,
@@ -399,11 +418,19 @@ pub(crate) async fn delete_connection(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let ctx = match authorize_perm(&state, &headers, Permission::Admin) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     match state.connection_manager.delete(&id).await {
         Ok(profile) => {
+            tracing::warn!(
+                audit_action = "connection_delete",
+                actor = admin_actor(&ctx),
+                profile_id = %profile.id,
+                profile_name = %profile.name,
+                "administrative action"
+            );
             let _ = state.connection_secrets.remove(&profile.secret_ref).await;
             StatusCode::NO_CONTENT.into_response()
         }
@@ -417,14 +444,25 @@ pub(crate) async fn duplicate_connection(
     Path(id): Path<String>,
     Json(input): Json<DuplicateInput>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let ctx = match authorize_perm(&state, &headers, Permission::Admin) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     match state.connection_manager.duplicate(&id, input.name).await {
-        Ok(profile) => match view(&state, profile).await {
-            Ok(item) => (StatusCode::CREATED, Json(item)).into_response(),
-            Err(response) => response,
-        },
+        Ok(profile) => {
+            tracing::warn!(
+                audit_action = "connection_duplicate",
+                actor = admin_actor(&ctx),
+                profile_id = %profile.id,
+                profile_name = %profile.name,
+                source_id = %id,
+                "administrative action"
+            );
+            match view(&state, profile).await {
+                Ok(item) => (StatusCode::CREATED, Json(item)).into_response(),
+                Err(response) => response,
+            }
+        }
         Err(error) => manager_error(error),
     }
 }
@@ -434,17 +472,26 @@ pub(crate) async fn test_connection(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
-        return response;
-    }
+    let ctx = match authorize_perm(&state, &headers, Permission::Admin) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     match state.connection_manager.test(&id).await {
-        Ok(_) => match state.connection_manager.get(&id).await {
-            Ok(profile) => match view(&state, profile).await {
-                Ok(item) => Json(item).into_response(),
-                Err(response) => response,
-            },
-            Err(error) => manager_error(error),
-        },
+        Ok(_) => {
+            tracing::warn!(
+                audit_action = "connection_test",
+                actor = admin_actor(&ctx),
+                profile_id = %id,
+                "administrative action"
+            );
+            match state.connection_manager.get(&id).await {
+                Ok(profile) => match view(&state, profile).await {
+                    Ok(item) => Json(item).into_response(),
+                    Err(response) => response,
+                },
+                Err(error) => manager_error(error),
+            }
+        }
         Err(error) => manager_error(error),
     }
 }
@@ -454,7 +501,7 @@ pub(crate) async fn diagnose_connection(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Err(response) = authorize(&state, &headers) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
         return response;
     }
     match state.connection_manager.diagnose(&id).await {
@@ -548,8 +595,8 @@ fn materialize_connection(
             if let Some(auth_source) = &parsed.auth_source {
                 options.insert("auth_source".to_owned(), auth_source.clone());
             }
-            let connection_url = apply_credentials_to_mongo_url(raw, &username, &password)
-                .map_err(bad_request)?;
+            let connection_url =
+                apply_credentials_to_mongo_url(raw, &username, &password).map_err(bad_request)?;
             options.insert("connection_url".to_owned(), connection_url);
             let database = input
                 .database
@@ -696,6 +743,12 @@ fn validate_input(input: &ConnectionInput, password_required: bool) -> Result<()
 }
 
 fn manager_error(error: ConnectionManagerError) -> Response {
+    // Detalle completo solo en logs; el cliente recibe mensaje redactado.
+    tracing::warn!(
+        target: "jaiba.connections",
+        error = %error,
+        "connection manager error"
+    );
     let status = match error {
         ConnectionManagerError::NotFound(_) => StatusCode::NOT_FOUND,
         ConnectionManagerError::DuplicateName(_) => StatusCode::CONFLICT,
@@ -710,7 +763,7 @@ fn manager_error(error: ConnectionManagerError) -> Response {
     (
         status,
         Json(ErrorMessage {
-            message: error.to_string(),
+            message: error.client_message(),
         }),
     )
         .into_response()
@@ -3121,9 +3174,8 @@ connections:
             env::var("JAIBA_TEST_MONGODB_DATABASE").unwrap_or_else(|_| "dma_test".to_owned());
         let username =
             env::var("JAIBA_TEST_MONGODB_USER").unwrap_or_else(|_| "dma_test".to_owned());
-        let raw = format!(
-            "mongodb://{username}:{password}@{host}:{port}/{database}?authSource=admin"
-        );
+        let raw =
+            format!("mongodb://{username}:{password}@{host}:{port}/{database}?authSource=admin");
 
         let input = ConnectionInput {
             name: "mongo_from_url".to_owned(),

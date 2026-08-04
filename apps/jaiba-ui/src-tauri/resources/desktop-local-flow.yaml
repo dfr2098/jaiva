@@ -1,0 +1,31 @@
+# Flujo mínimo embebido para el sidecar desktop (fase 10A).
+# El diseñador puede publicar otro flujo encima vía API.
+id: desktop-local
+
+engine:
+  max_concurrency: 8
+  admin:
+    enabled: true
+    authentication: none
+  repository:
+    enabled: true
+    database_path: .jaiba/desktop-local-repository.db
+    content_path: .jaiba/desktop-local-content
+    abandoned_after_seconds: 0
+    completed_retention_hours: 24
+
+processors:
+  - id: source
+    type: generate_records
+    config:
+      records:
+        - hello: jaiba
+          mode: local-sidecar
+
+  - id: destination
+    type: log_records
+
+connections:
+  - from: source
+    relationship: success
+    to: destination

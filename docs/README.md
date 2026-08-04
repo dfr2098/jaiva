@@ -8,6 +8,7 @@ notas sueltas en el código.
 | Documento | Contenido |
 |---|---|
 | [../README.md](../README.md) | Visión rápida, ejecutar, capacidades |
+| [ci.md](ci.md) | GitHub Actions: CI mínimo + Phase 8 opcional |
 | [architecture.md](architecture.md) | Componentes y flujo de datos |
 | [project-vision.md](project-vision.md) | Alcance y límites del producto |
 | [configuration.md](configuration.md) | YAML de flujos, conexiones y features |
@@ -33,6 +34,11 @@ notas sueltas en el código.
 | [priority-7-control-plane.md](priority-7-control-plane.md) | API admin y endurecimiento |
 | [priority-7-8-parallel-workers.md](priority-7-8-parallel-workers.md) | Workers por procesador |
 | [priority-9-metrics.md](priority-9-metrics.md) | Métricas Prometheus |
+| [priority-9a-admin-hardening.md](priority-9a-admin-hardening.md) | Fase 9A: endurecimiento admin / secretos / audit |
+| [priority-9b-tauri-desktop.md](priority-9b-tauri-desktop.md) | Fase 9B: cliente desktop Tauri (MVP remoto) |
+| [priority-10a-tauri-sidecar.md](priority-10a-tauri-sidecar.md) | Fase 10A: sidecar `jaiba serve` + modo local/remoto |
+| [priority-10b-security.md](priority-10b-security.md) | Fase 10B: TLS, usuarios/roles, permisos por proyecto |
+| [priority-10c-plant-prep.md](priority-10c-plant-prep.md) | Fase 10C: Postgres/Oracle → AI Prep → CSV + manifest |
 
 ## Pruebas de integración (Fase 8 de producto)
 

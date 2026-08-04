@@ -1,12 +1,12 @@
 mod ai_prep;
 mod checkpoint;
+#[cfg(feature = "kafka-driver")]
+mod consume_kafka;
 mod encode;
 mod generate_records;
 mod log_records;
 #[cfg(feature = "mongodb-driver")]
 mod mongodb_support;
-#[cfg(feature = "kafka-driver")]
-mod consume_kafka;
 #[cfg(feature = "kafka-driver")]
 mod publish_kafka;
 mod put_database;
@@ -30,11 +30,11 @@ use ai_prep::{
     AiTriggerWebhook,
 };
 use checkpoint::{LoadCheckpoint, SaveCheckpoint};
+#[cfg(feature = "kafka-driver")]
+use consume_kafka::ConsumeKafka;
 use encode::Encode;
 use generate_records::GenerateRecords;
 use log_records::LogRecords;
-#[cfg(feature = "kafka-driver")]
-use consume_kafka::ConsumeKafka;
 #[cfg(feature = "kafka-driver")]
 use publish_kafka::PublishKafka;
 use put_database::PutDatabase;

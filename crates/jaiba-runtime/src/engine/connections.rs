@@ -232,6 +232,12 @@ impl ConnectionManager {
         })
     }
 
+    pub fn mysql(&self, name: &str) -> Result<&MySqlPool, FlowError> {
+        self.mysql.get(name).ok_or_else(|| {
+            FlowError::Configuration(format!("MySQL connection '{name}' does not exist"))
+        })
+    }
+
     #[cfg(feature = "mongodb-driver")]
     pub fn mongodb(&self, name: &str) -> Result<&MongoClient, FlowError> {
         self.mongodb.get(name).ok_or_else(|| {

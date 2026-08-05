@@ -14,6 +14,7 @@ mod put_database;
 mod put_mongodb;
 #[cfg(feature = "mongodb-driver")]
 mod query_mongodb;
+mod query_mysql;
 #[cfg(feature = "oracle-driver")]
 mod query_oracle;
 mod query_postgres;
@@ -42,6 +43,7 @@ use put_database::PutDatabase;
 use put_mongodb::PutMongoDb;
 #[cfg(feature = "mongodb-driver")]
 use query_mongodb::QueryMongoDb;
+use query_mysql::QueryMysql;
 #[cfg(feature = "oracle-driver")]
 use query_oracle::QueryOracle;
 use query_postgres::QueryPostgres;
@@ -107,6 +109,9 @@ pub fn default_registry() -> ProcessorRegistry {
     });
     registry.register("query_postgres", |config| {
         Ok(Arc::new(QueryPostgres::from_config(config)?))
+    });
+    registry.register("query_mysql", |config| {
+        Ok(Arc::new(QueryMysql::from_config(config)?))
     });
     #[cfg(feature = "mongodb-driver")]
     registry.register("query_mongodb", |config| {

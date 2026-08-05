@@ -1358,6 +1358,20 @@ pub(crate) fn parse_and_validate(body: &str) -> Result<FlowConfig, FlowError> {
                     )));
                 }
             }
+            ("query_mysql", Some(name)) => {
+                let definition = config.database_connections.get(name).ok_or_else(|| {
+                    FlowError::Configuration(format!(
+                        "processor '{}' references unknown database connection '{name}'",
+                        processor.id
+                    ))
+                })?;
+                if !matches!(definition.connection_type.as_str(), "mysql" | "mariadb") {
+                    return Err(FlowError::Configuration(format!(
+                        "processor '{}' requires a MySQL or MariaDB connection",
+                        processor.id
+                    )));
+                }
+            }
             ("query_mongodb" | "put_mongodb", Some(name)) => {
                 let definition = config.database_connections.get(name).ok_or_else(|| {
                     FlowError::Configuration(format!(

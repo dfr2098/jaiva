@@ -17,6 +17,7 @@ jaiba-core = { path = "../jaiba-core" }
 jaiba-connection-manager = { path = "../jaiba-connection-manager" }
 jaiba-plugin-sdk = { path = "../jaiba-plugin-sdk" }
 async-trait.workspace = true
+chrono.workspace = true
 csv.workspace = true
 futures-util.workspace = true
 serde.workspace = true

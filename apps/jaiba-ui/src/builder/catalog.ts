@@ -99,6 +99,32 @@ export const PROCESSOR_CATALOG: ProcessorDef[] = [
     defaultConfig: { connection: "", query: "", batch_size: 1000 },
   },
   {
+    type: "query_mysql",
+    label: "Leer MySQL",
+    category: "source",
+    description: "Lee MySQL/MariaDB por lotes y emite cada fila como objeto JSON.",
+    fields: [
+      {
+        key: "connection",
+        label: "Conexión",
+        kind: "connectionRef",
+        connectionKind: "mysql",
+        required: true,
+        help: "Alias de un perfil MySQL o MariaDB en Conexiones.",
+      },
+      {
+        key: "query",
+        label: "Consulta SQL",
+        kind: "textarea",
+        required: true,
+        placeholder: "SELECT id, name FROM schema.tabla WHERE active = ?",
+        help: "Usa placeholders `?`. Puedes crearla desde Conexiones → Constructor SQL.",
+      },
+      { key: "batch_size", label: "Tamaño de lote", kind: "number" },
+    ],
+    defaultConfig: { connection: "", query: "", batch_size: 1000 },
+  },
+  {
     type: "query_oracle",
     label: "Leer Oracle",
     category: "source",

@@ -59,9 +59,11 @@ Abrir:
 http://127.0.0.1:9080
 ```
 
-El contenedor usa `network_mode: host` para que Nginx pueda comunicarse con la
-API local sin publicar Jaiba en la red. Esta configuración está destinada a
-Linux.
+Compose publica únicamente `127.0.0.1:9080` y Nginx accede a la API mediante
+`host.docker.internal:9090`. Así la interfaz funciona en Docker Desktop sin
+publicar Jaiba ni la UI en la LAN. En Windows se recomienda ejecutar el backend
+nativo; en Linux puede sobreescribirse `JAIBA_API_UPSTREAM` si el host usa otra
+dirección alcanzable desde Docker.
 
 ## Desarrollo React
 

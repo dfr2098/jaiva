@@ -200,17 +200,23 @@ distribución WSL antes de ejecutar `npm ci`, Vite o Tauri.
 ### WSL no resuelve `index.crates.io`
 
 El mensaje `Could not resolve host: index.crates.io` es un problema DNS de WSL,
-no de Cargo ni de la dependencia mencionada. Con red reflejada y túnel DNS, la
-configuración de Windows debe incluir:
+no de Cargo ni de la dependencia mencionada. Para el flujo Docker Desktop de
+este repositorio se recomienda NAT + túnel DNS:
 
 ```ini
 # C:\Users\<usuario>\.wslconfig
 [wsl2]
-networkingMode=mirrored
+networkingMode=nat
 dnsTunneling=true
 autoProxy=true
 firewall=true
 ```
+
+WSL en modo `mirrored` tiene un problema conocido con contenedores Docker que
+publican puertos. El síntoma es un contenedor `healthy`, pero
+`NetworkSettings.Ports` vacío y `localhost:9080` sin respuesta. NAT evita ese
+fallo. Después de cambiar el modo se debe detener cualquier `wslrelay.exe`
+huérfano que todavía conserve 9080 antes de recrear Compose.
 
 No se debe bloquear la generación de `resolv.conf` dentro de la distribución:
 

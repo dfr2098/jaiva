@@ -141,8 +141,9 @@ cd apps/jaiba-ui
 docker compose up -d --build
 ```
 
-La interfaz queda en `http://127.0.0.1:9080`. El proxy usa la red de host para
-alcanzar la API enlazada exclusivamente a `127.0.0.1:9090`.
+La interfaz queda en `http://127.0.0.1:9080`. Docker publica solo loopback y el
+proxy usa `host.docker.internal:9090` para alcanzar la API nativa enlazada a
+`127.0.0.1:9090`.
 
 ## Archivos internos
 

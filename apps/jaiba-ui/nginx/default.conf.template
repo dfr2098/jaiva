@@ -5,7 +5,7 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
-    location /jaiva-api/ {
+    location /jaiba-api/ {
         proxy_pass ${JAIVA_API_UPSTREAM}/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -16,7 +16,8 @@ server {
         proxy_read_timeout 65s;
     }
 
-    location /jaiba-api/ {
+    # Alias histórico conservado por compatibilidad con configuraciones Jaiva.
+    location /jaiva-api/ {
         proxy_pass ${JAIVA_API_UPSTREAM}/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;

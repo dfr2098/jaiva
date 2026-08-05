@@ -1,0 +1,38 @@
+# Lectura MySQL/MariaDB → JSON por lotes.
+# Requiere MYSQL_DATABASE_URL, p. ej.:
+#   mysql://dma_test:pass@127.0.0.1:13306/dma_test
+id: mysql-query-example
+
+database_connections:
+  source:
+    type: mysql
+    url_env: MYSQL_DATABASE_URL
+    max_connections: 4
+
+engine:
+  repository:
+    enabled: false
+
+processors:
+  - id: read_mysql
+    type: query_mysql
+    config:
+      connection: source
+      batch_size: 100
+      # Cada fila se convierte a objeto JSON en el runtime.
+      query: |
+        SELECT 1 AS id, 'Ada' AS name, CAST(1 AS UNSIGNED) AS active
+        UNION ALL
+        SELECT 2, 'Linus', 0
+    retry:
+      maximum_attempts: 3
+      initial_delay_ms: 250
+      maximum_delay_ms: 5000
+
+  - id: show_records
+    type: log_records
+
+connections:
+  - from: read_mysql
+    relationship: success
+    to: show_records

@@ -63,7 +63,7 @@ flowchart LR
     API --> CM
     CM --> SQL
     SQL -->|SQL + parámetros| CMUI
-    CMUI -->|nodo query_postgres| DESIGNER
+    CMUI -->|nodo query_*| DESIGNER
     DESIGNER -->|YAML| API
     API --> VERSIONS
     VERSIONS -->|desplegar / rollback| ENGINE
@@ -361,6 +361,8 @@ Server, archivos u otros plugins.
 |---|---|
 | `generate_records` | Genera registros para pruebas |
 | `query_postgres` | Lee PostgreSQL mediante un pool compartido y crea lotes |
+| `query_mysql` | Lee MySQL/MariaDB por lotes y emite cada fila como objeto JSON |
+| `query_sqlserver` | Lee SQL Server (feature `sqlserver-driver`) por lotes vía Tiberius |
 | `query_oracle` | Lee Oracle por lotes y normaliza las filas como objetos JSON |
 | `put_database` | Escritura transaccional `insert`/`upsert` para PostgreSQL, MySQL/MariaDB, Oracle y SQL Server |
 | `auto_destination` | Detecta el motor y selecciona el plan de carga para los destinos de base de datos disponibles |
@@ -503,9 +505,21 @@ cargo run --features mongodb-driver -- examples/mongodb-copy.yaml
 El adaptador TDS se habilita con `--features sqlserver-driver` y acepta
 `sqlserver://usuario:contraseña@host:1433/base`. El upsert usa bloqueos
 `UPDLOCK`/`SERIALIZABLE` dentro de una transacción, sin depender de `MERGE`.
+La lectura usa `query_sqlserver` (placeholders `@P1`, `TOP` en el constructor).
 
 ```bash
 cargo run --features sqlserver-driver -- examples/sqlserver-write.yaml
+# Lectura:
+# cargo run --features sqlserver-driver -- examples/sqlserver-query.yaml
+```
+
+## MySQL / MariaDB
+
+Lectura con `query_mysql` (placeholders `?`; filas → JSON en el runtime):
+
+```bash
+export MYSQL_DATABASE_URL='mysql://user:pass@127.0.0.1:3306/dma_test'
+cargo run -- examples/mysql-query.yaml
 ```
 
 ## Kafka
@@ -521,8 +535,6 @@ expone topic, partición y offset en atributos de procedencia. Consulta
 
 ## Próximas integraciones
 
-- Lectores genéricos para MySQL y SQL Server.
-- Pool de conexiones SQL Server.
 - Array binding y pool de sesiones para acelerar Oracle.
 - Cancelación coordinada y circuit breaker.
 - Almacenamiento de estado PostgreSQL/Redis.

@@ -249,7 +249,8 @@ cargo test -p jaiba-server --features sqlserver-driver \
   sqlserver_real_connection_diagnostics_and_metadata -- --nocapture
 ```
 
-Limitación: todavía no se devuelven llaves/índices ni hay constructor visual SQL.
+Limitación: todavía no se devuelven llaves/índices. El constructor visual SQL y
+el nodo `query_sqlserver` están disponibles con `--features sqlserver-driver`.
 
 ## Flujo UI → diseñador (SQL)
 
@@ -259,7 +260,7 @@ sequenceDiagram
     participant UI as jaiba-ui
     participant API as jaiba-server
     participant CM as Connection Manager
-    participant DB as PostgreSQL / MySQL
+    participant DB as PostgreSQL / MySQL / SQL Server
     participant SQL as SQL Builder
     participant FB as Flow Builder
 

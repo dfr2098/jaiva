@@ -2,6 +2,7 @@ mod ai_prep;
 mod checkpoint;
 #[cfg(feature = "kafka-driver")]
 mod consume_kafka;
+mod domain_memory;
 mod encode;
 mod generate_records;
 mod log_records;
@@ -18,6 +19,8 @@ mod query_mysql;
 #[cfg(feature = "oracle-driver")]
 mod query_oracle;
 mod query_postgres;
+#[cfg(feature = "sqlserver-driver")]
+mod query_sqlserver;
 mod rename_fields;
 mod write_file;
 
@@ -33,6 +36,7 @@ use ai_prep::{
 use checkpoint::{LoadCheckpoint, SaveCheckpoint};
 #[cfg(feature = "kafka-driver")]
 use consume_kafka::ConsumeKafka;
+use domain_memory::{MemoryGet, MemoryRemove, MemoryUpsert};
 use encode::Encode;
 use generate_records::GenerateRecords;
 use log_records::LogRecords;
@@ -47,6 +51,8 @@ use query_mysql::QueryMysql;
 #[cfg(feature = "oracle-driver")]
 use query_oracle::QueryOracle;
 use query_postgres::QueryPostgres;
+#[cfg(feature = "sqlserver-driver")]
+use query_sqlserver::QuerySqlServer;
 use rename_fields::RenameFields;
 use write_file::WriteFile;
 
@@ -121,6 +127,10 @@ pub fn default_registry() -> ProcessorRegistry {
     registry.register("query_oracle", |config| {
         Ok(Arc::new(QueryOracle::from_config(config)?))
     });
+    #[cfg(feature = "sqlserver-driver")]
+    registry.register("query_sqlserver", |config| {
+        Ok(Arc::new(QuerySqlServer::from_config(config)?))
+    });
     registry.register("put_database", |config| {
         Ok(Arc::new(PutDatabase::from_config(config)?))
     });
@@ -143,6 +153,15 @@ pub fn default_registry() -> ProcessorRegistry {
     });
     registry.register("save_checkpoint", |config| {
         Ok(Arc::new(SaveCheckpoint::from_config(config)?))
+    });
+    registry.register("memory_upsert", |config| {
+        Ok(Arc::new(MemoryUpsert::from_config(config)?))
+    });
+    registry.register("memory_get", |config| {
+        Ok(Arc::new(MemoryGet::from_config(config)?))
+    });
+    registry.register("memory_remove", |config| {
+        Ok(Arc::new(MemoryRemove::from_config(config)?))
     });
     registry
 }

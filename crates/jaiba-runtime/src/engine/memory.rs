@@ -7,9 +7,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::{config::MemoryConfig, error::FlowError};
 
-use super::FlowMetrics;
+use super::{DomainMemoryHandle, FlowMetrics};
 
 const UNIT_BYTES: u64 = 64 * 1024;
+const DOMAIN_MEMORY_PRESSURE_DEMOTES: usize = 8;
 #[cfg(not(target_os = "linux"))]
 const PORTABLE_MEMORY_FALLBACK_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -22,6 +23,7 @@ pub struct MemoryLimiter {
     total_units: u32,
     budget_bytes: u64,
     metrics: FlowMetrics,
+    domain_memory: Option<DomainMemoryHandle>,
 }
 
 /// RAII reservation released when its final clone is dropped.
@@ -66,7 +68,14 @@ impl MemoryLimiter {
             total_units,
             budget_bytes,
             metrics,
+            domain_memory: None,
         }
+    }
+
+    /// Enlaza el JME para demote bajo backpressure del limiter de paquetes.
+    pub fn with_domain_memory(mut self, handle: DomainMemoryHandle) -> Self {
+        self.domain_memory = Some(handle);
+        self
     }
 
     /// Waits until the requested estimated bytes are available.
@@ -83,6 +92,9 @@ impl MemoryLimiter {
             Ok(permit) => permit,
             Err(tokio::sync::TryAcquireError::NoPermits) => {
                 self.metrics.backpressure();
+                if let Some(jme) = &self.domain_memory {
+                    jme.notify_pressure_budget(DOMAIN_MEMORY_PRESSURE_DEMOTES)?;
+                }
                 self.semaphore
                     .clone()
                     .acquire_many_owned(units)

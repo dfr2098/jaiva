@@ -15,6 +15,7 @@ mongodb-driver = ["dep:mongodb"]
 [dependencies]
 jaiba-core = { path = "../jaiba-core" }
 jaiba-connection-manager = { path = "../jaiba-connection-manager" }
+jaiba-memory = { path = "../jaiba-memory" }
 jaiba-plugin-sdk = { path = "../jaiba-plugin-sdk" }
 async-trait.workspace = true
 chrono.workspace = true

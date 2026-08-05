@@ -25,6 +25,8 @@ pub struct ConnectionManager {
     mongodb: Arc<HashMap<String, MongoClient>>,
     #[cfg(feature = "oracle-driver")]
     oracle: Arc<HashMap<String, OracleWriter>>,
+    #[cfg(feature = "sqlserver-driver")]
+    sqlserver: Arc<HashMap<String, SqlServerWriter>>,
     writers: Arc<HashMap<String, Arc<dyn DatabaseWriter>>>,
     #[cfg(feature = "kafka-driver")]
     kafka: Arc<HashMap<String, KafkaEndpoint>>,
@@ -103,6 +105,8 @@ impl ConnectionManager {
         let mut mongodb = HashMap::new();
         #[cfg(feature = "oracle-driver")]
         let mut oracle = HashMap::new();
+        #[cfg(feature = "sqlserver-driver")]
+        let mut sqlserver = HashMap::new();
         let mut writers: HashMap<String, Arc<dyn DatabaseWriter>> = HashMap::new();
         #[cfg(feature = "kafka-driver")]
         let mut kafka = HashMap::new();
@@ -126,6 +130,8 @@ impl ConnectionManager {
                 &mut mongodb,
                 #[cfg(feature = "oracle-driver")]
                 &mut oracle,
+                #[cfg(feature = "sqlserver-driver")]
+                &mut sqlserver,
                 &mut writers,
             )
             .await?;
@@ -154,6 +160,8 @@ impl ConnectionManager {
                     &mut mongodb,
                     #[cfg(feature = "oracle-driver")]
                     &mut oracle,
+                    #[cfg(feature = "sqlserver-driver")]
+                    &mut sqlserver,
                     &mut writers,
                 )
                 .await?;
@@ -220,6 +228,8 @@ impl ConnectionManager {
             mongodb: Arc::new(mongodb),
             #[cfg(feature = "oracle-driver")]
             oracle: Arc::new(oracle),
+            #[cfg(feature = "sqlserver-driver")]
+            sqlserver: Arc::new(sqlserver),
             writers: Arc::new(writers),
             #[cfg(feature = "kafka-driver")]
             kafka: Arc::new(kafka),
@@ -249,6 +259,13 @@ impl ConnectionManager {
     pub fn oracle(&self, name: &str) -> Result<&OracleWriter, FlowError> {
         self.oracle.get(name).ok_or_else(|| {
             FlowError::Configuration(format!("Oracle connection '{name}' does not exist"))
+        })
+    }
+
+    #[cfg(feature = "sqlserver-driver")]
+    pub fn sqlserver(&self, name: &str) -> Result<&SqlServerWriter, FlowError> {
+        self.sqlserver.get(name).ok_or_else(|| {
+            FlowError::Configuration(format!("SQL Server connection '{name}' does not exist"))
         })
     }
 
@@ -288,6 +305,7 @@ async fn insert_database(
     mysql: &mut HashMap<String, MySqlPool>,
     #[cfg(feature = "mongodb-driver")] mongodb: &mut HashMap<String, MongoClient>,
     #[cfg(feature = "oracle-driver")] oracle: &mut HashMap<String, OracleWriter>,
+    #[cfg(feature = "sqlserver-driver")] sqlserver: &mut HashMap<String, SqlServerWriter>,
     writers: &mut HashMap<String, Arc<dyn DatabaseWriter>>,
 ) -> Result<(), FlowError> {
     match connection_type {
@@ -351,7 +369,9 @@ async fn insert_database(
         "sqlserver" | "mssql" => {
             #[cfg(feature = "sqlserver-driver")]
             {
-                writers.insert(name.to_owned(), Arc::new(SqlServerWriter::from_url(url)?));
+                let connection = SqlServerWriter::from_url(url)?;
+                writers.insert(name.to_owned(), Arc::new(connection.clone()));
+                sqlserver.insert(name.to_owned(), connection);
             }
             #[cfg(not(feature = "sqlserver-driver"))]
             {
@@ -379,6 +399,8 @@ impl fmt::Debug for ConnectionManager {
             .field("writers", &self.writers.keys().collect::<Vec<_>>());
         #[cfg(feature = "oracle-driver")]
         debug.field("oracle", &self.oracle.keys().collect::<Vec<_>>());
+        #[cfg(feature = "sqlserver-driver")]
+        debug.field("sqlserver", &self.sqlserver.keys().collect::<Vec<_>>());
         #[cfg(feature = "mongodb-driver")]
         debug.field("mongodb", &self.mongodb.keys().collect::<Vec<_>>());
         #[cfg(feature = "kafka-driver")]

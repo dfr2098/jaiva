@@ -57,29 +57,30 @@ variante al núcleo.
 5. `connection_api.rs` selecciona el plugin correspondiente.
 6. `sql_builder.rs` valida y cita identificadores, genera placeholders y
    mantiene los valores separados en `parameters`.
-7. El adaptador puede devolver `processor_type` y `execution_statement`; para
-   PostgreSQL prepara el objeto JSONB que requiere `query_postgres`.
+7. El adaptador puede devolver `processor_type` y `execution_statement`:
+   PostgreSQL envuelve con `to_jsonb`; MySQL y SQL Server usan la sentencia
+   compilada tal cual (filas → JSON en el runtime).
 8. `pendingQueryNode.ts` guarda temporalmente la consulta compilada en
    `localStorage`.
 9. `FlowBuilder.tsx` consume ese dato, registra la conexión si hace falta y
-   crea el tipo de nodo indicado por el adaptador.
-10. Al ejecutar el flujo, `query_postgres.rs` liga los parámetros con SQLx y
+   crea el tipo de nodo indicado por el adaptador (`query_postgres`,
+   `query_mysql` o `query_sqlserver`).
+10. Al ejecutar el flujo, el procesador correspondiente liga los parámetros y
     emite los resultados por lotes.
-
-MySQL puede explorar metadatos y compilar consultas, pero todavía no crea un
-nodo ejecutable porque el runtime no contiene un procesador `query_mysql`.
 
 ## Decisiones de seguridad SQL
 
 - Los identificadores aceptan únicamente letras ASCII, números, `_` y `$`;
-  cada segmento se cita según PostgreSQL o MySQL.
-- Los valores siempre viajan como parámetros ligados.
+  cada segmento se cita según el dialecto (`"…"`, `` `…` `` o `[…]`).
+- Los valores siempre viajan como parámetros ligados (`$n`, `?`, `@Pn`).
 - `null` con igualdad se convierte en `IS NULL`; con desigualdad se convierte
   en `IS NOT NULL`.
 - Una lista `IN` vacía o que contenga `null` se rechaza.
-- `query_postgres` rechaza parámetros `null` sin tipo.
-- Los enteros mayores que PostgreSQL `BIGINT` se rechazan para impedir pérdida
+- `query_postgres`, `query_mysql` y `query_sqlserver` rechazan parámetros
+  `null` sin tipo.
+- Los enteros mayores que `BIGINT` con signo se rechazan para impedir pérdida
   silenciosa de precisión.
+- SQL Server usa `SELECT TOP (n)` en lugar de `LIMIT`.
 
 Si se añade un operador SQL nuevo, debe implementarse en `FilterOperator`, en
 `sql_builder.rs` y en la UI, acompañado de pruebas de compilación segura.
@@ -121,7 +122,9 @@ puede bajar el nivel de seguridad del servidor. Ver fase 9A.
 | `crates/jaiba-server/src/connection_api.rs` | API de conexiones, metadatos y compilación |
 | `crates/jaiba-server/src/sql_builder.rs` | Compilador SQL seguro por dialecto |
 | `crates/jaiba-server/src/flow_registry.rs` | Versiones, despliegue y rollback |
-| `crates/jaiba-runtime/src/processors/query_postgres.rs` | Ejecución parametrizada de consultas |
+| `crates/jaiba-runtime/src/processors/query_postgres.rs` | Lectura PostgreSQL parametrizada |
+| `crates/jaiba-runtime/src/processors/query_mysql.rs` | Lectura MySQL/MariaDB → JSON |
+| `crates/jaiba-runtime/src/processors/query_sqlserver.rs` | Lectura SQL Server (feature `sqlserver-driver`) |
 | `apps/jaiba-ui/src/connections/SqlQueryBuilder.tsx` | Constructor visual |
 | `apps/jaiba-ui/src/builder/pendingQueryNode.ts` | Traspaso temporal hacia el diseñador |
 | `apps/jaiba-ui/src/builder/FlowBuilder.tsx` | Creación automática del nodo |
@@ -249,7 +252,8 @@ Estado comprobado el 29 de julio de 2026 contra SQL Server 2022:
 - creación, inserción y limpieza de la tabla temporal: correctas.
 
 Limitación vigente: el descriptor SQL Server todavía no devuelve llaves ni
-índices, y el constructor visual SQL permanece deshabilitado.
+índices. El constructor visual y `query_sqlserver` ya están disponibles con
+`--features sqlserver-driver`.
 
 ### Fase 8 — suite con entorno de pruebas
 
@@ -370,10 +374,10 @@ PostgreSQL, MySQL, Oracle, SQL Server y Kafka cuentan con pruebas reales opt-in.
 ## Cierre de 9.5 y 9.6
 
 La prueba real PostgreSQL cubre el mismo contrato que usa la UI: exploración,
-descripción, compilación segura y ejecución del nodo `query_postgres`. La
-compilación TypeScript valida el traspaso del constructor al diseñador. La
-creación automática se limita deliberadamente a PostgreSQL porque el runtime
-todavía no contiene un procesador `query_mysql`.
+descripción, compilación segura y ejecución del nodo `query_postgres`. MySQL y
+SQL Server compilan al mismo contrato (`query_mysql` / `query_sqlserver`) y
+habilitan “Crear nodo Query” en la UI. La compilación TypeScript valida el
+traspaso del constructor al diseñador.
 
 ## Proveedores Real, Mock y Replay (9.7)
 

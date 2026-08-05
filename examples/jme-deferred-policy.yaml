@@ -1,0 +1,27 @@
+# Política JME Paso 3 — Hot + immediate + deferred flush.
+memory:
+  max_entries: 2000
+  max_pending_deferred: 128
+  defaults:
+    priority: normal
+  warm:
+    backend: none
+  classes:
+    telegram:
+      policy: volatile
+      ttl: 5m
+      priority: low
+    carrier:
+      policy: cache
+      temperature: warm
+      ttl: 30m
+      priority: high
+    inventory:
+      policy: deferred
+      temperature: cold
+      flush: 2s
+      priority: high
+    alarm:
+      policy: immediate
+      temperature: cold
+      priority: critical

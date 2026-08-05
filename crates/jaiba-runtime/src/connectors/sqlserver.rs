@@ -1,6 +1,7 @@
 use async_trait::async_trait;
-use serde_json::Value;
-use tiberius::{AuthMethod, Client, Config, ToSql};
+use futures_util::StreamExt;
+use serde_json::{Map, Number, Value};
+use tiberius::{AuthMethod, Client, ColumnData, Config, ToSql};
 use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 use url::Url;
@@ -62,6 +63,51 @@ impl SqlServerWriter {
         Client::connect(self.config.clone(), tcp.compat_write())
             .await
             .map_err(connector_error)
+    }
+
+    /// Ejecuta una consulta de lectura y convierte filas a objetos JSON por lotes.
+    ///
+    /// Tiberius es async: se hace stream de filas y se agrupan en memoria por
+    /// `batch_size`. Un resultado vacío emite un lote vacío (igual que Oracle).
+    pub async fn query_json_batches(
+        &self,
+        query: &str,
+        parameters: &[Value],
+        batch_size: usize,
+    ) -> Result<Vec<Vec<Value>>, FlowError> {
+        let batch_size = batch_size.max(1);
+        let binds = parameters
+            .iter()
+            .map(sqlserver_bind)
+            .collect::<Result<Vec<_>, _>>()?;
+        let bind_refs = binds
+            .iter()
+            .map(|value| value.as_ref() as &dyn ToSql)
+            .collect::<Vec<_>>();
+
+        let mut client = self.connect().await?;
+        let mut rows = client
+            .query(query, &bind_refs)
+            .await
+            .map_err(connector_error)?
+            .into_row_stream();
+
+        let mut batches = Vec::new();
+        let mut batch = Vec::with_capacity(batch_size);
+        while let Some(row) = rows.next().await {
+            let row = row.map_err(connector_error)?;
+            batch.push(sqlserver_row_to_json(&row)?);
+            if batch.len() == batch_size {
+                batches.push(std::mem::replace(
+                    &mut batch,
+                    Vec::with_capacity(batch_size),
+                ));
+            }
+        }
+        if !batch.is_empty() || batches.is_empty() {
+            batches.push(batch);
+        }
+        Ok(batches)
     }
 
     fn statement(&self, request: &WriteRequest) -> Result<String, FlowError> {
@@ -224,6 +270,127 @@ fn sqlserver_bind(value: &Value) -> Result<Box<dyn ToSql + Send + Sync>, FlowErr
     })
 }
 
+fn sqlserver_row_to_json(row: &tiberius::Row) -> Result<Value, FlowError> {
+    let mut object = Map::with_capacity(row.len());
+    for (column, data) in row.cells() {
+        object.insert(column.name().to_owned(), column_data_to_json(data)?);
+    }
+    Ok(Value::Object(object))
+}
+
+fn column_data_to_json(data: &ColumnData<'_>) -> Result<Value, FlowError> {
+    Ok(match data {
+        ColumnData::U8(value) => match value {
+            Some(value) => Value::from(*value),
+            None => Value::Null,
+        },
+        ColumnData::I16(value) => match value {
+            Some(value) => Value::from(*value),
+            None => Value::Null,
+        },
+        ColumnData::I32(value) => match value {
+            Some(value) => Value::from(*value),
+            None => Value::Null,
+        },
+        ColumnData::I64(value) => match value {
+            Some(value) => Value::from(*value),
+            None => Value::Null,
+        },
+        ColumnData::F32(value) => match value {
+            Some(value) => Number::from_f64(f64::from(*value))
+                .map(Value::Number)
+                .ok_or_else(|| {
+                    FlowError::DatabaseConnector("SQL Server returned a non-finite f32".to_owned())
+                })?,
+            None => Value::Null,
+        },
+        ColumnData::F64(value) => match value {
+            Some(value) => Number::from_f64(*value).map(Value::Number).ok_or_else(|| {
+                FlowError::DatabaseConnector("SQL Server returned a non-finite f64".to_owned())
+            })?,
+            None => Value::Null,
+        },
+        ColumnData::Bit(value) => match value {
+            Some(value) => Value::Bool(*value),
+            None => Value::Null,
+        },
+        ColumnData::String(value) => match value {
+            Some(value) => Value::String(value.to_string()),
+            None => Value::Null,
+        },
+        ColumnData::Guid(value) => match value {
+            Some(value) => Value::String(value.to_string()),
+            None => Value::Null,
+        },
+        ColumnData::Binary(value) => match value {
+            Some(bytes) => match String::from_utf8(bytes.to_vec()) {
+                Ok(text) => Value::String(text),
+                Err(error) => Value::String(base64_encode(error.as_bytes())),
+            },
+            None => Value::Null,
+        },
+        ColumnData::Numeric(value) => match value {
+            // Conservar precisión decimal como texto (igual que DECIMAL MySQL).
+            Some(value) => Value::String(value.to_string()),
+            None => Value::Null,
+        },
+        ColumnData::Xml(value) => match value {
+            Some(value) => Value::String(value.to_string()),
+            None => Value::Null,
+        },
+        // Tiberius sin feature chrono/time no expone Display; Debug conserva
+        // los campos TDS (días/fragmentos) de forma estable para hand-off JSON.
+        ColumnData::DateTime(value) => match value {
+            Some(value) => Value::String(format!("{value:?}")),
+            None => Value::Null,
+        },
+        ColumnData::SmallDateTime(value) => match value {
+            Some(value) => Value::String(format!("{value:?}")),
+            None => Value::Null,
+        },
+        ColumnData::Time(value) => match value {
+            Some(value) => Value::String(format!("{value:?}")),
+            None => Value::Null,
+        },
+        ColumnData::Date(value) => match value {
+            Some(value) => Value::String(format!("{value:?}")),
+            None => Value::Null,
+        },
+        ColumnData::DateTime2(value) => match value {
+            Some(value) => Value::String(format!("{value:?}")),
+            None => Value::Null,
+        },
+        ColumnData::DateTimeOffset(value) => match value {
+            Some(value) => Value::String(format!("{value:?}")),
+            None => Value::Null,
+        },
+    })
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        output.push(TABLE[((triple >> 18) & 0x3f) as usize] as char);
+        output.push(TABLE[((triple >> 12) & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(TABLE[((triple >> 6) & 0x3f) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if chunk.len() > 2 {
+            output.push(TABLE[(triple & 0x3f) as usize] as char);
+        } else {
+            output.push('=');
+        }
+    }
+    output
+}
+
 fn connector_error(error: impl std::fmt::Display) -> FlowError {
     FlowError::DatabaseConnector(error.to_string())
 }
@@ -277,5 +444,26 @@ mod tests {
         assert!(sql.contains("WITH (UPDLOCK, SERIALIZABLE)"));
         assert!(sql.contains("IF @@ROWCOUNT = 0 INSERT"));
         assert!(!sql.contains("MERGE"));
+    }
+
+    #[test]
+    fn maps_common_column_data_to_json() {
+        assert_eq!(
+            column_data_to_json(&ColumnData::I32(Some(42))).unwrap(),
+            Value::from(42)
+        );
+        assert_eq!(
+            column_data_to_json(&ColumnData::Bit(Some(true))).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            column_data_to_json(&ColumnData::String(Some("Ada".into()))).unwrap(),
+            Value::String("Ada".to_owned())
+        );
+        assert_eq!(
+            column_data_to_json(&ColumnData::I64(None)).unwrap(),
+            Value::Null
+        );
+        assert_eq!(base64_encode(&[0xff, 0x00, 0x01]), "/wAB");
     }
 }

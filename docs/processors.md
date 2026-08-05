@@ -15,7 +15,7 @@ config:
 ## `query_postgres`
 
 Ejecuta una consulta streaming y emite paquetes según `batch_size`. La consulta
-debe devolver una columna JSON.
+debe devolver una columna JSON (habitualmente `to_jsonb(...)`).
 
 ```yaml
 type: query_postgres
@@ -26,6 +26,40 @@ config:
     SELECT to_jsonb(row_data)
     FROM (SELECT * FROM public.customers) row_data
 ```
+
+## `query_mysql`
+
+Lee MySQL/MariaDB por lotes. Cada fila se convierte a un objeto JSON en el
+runtime (no hace falta envolver la SELECT). Placeholders `?`. Compatible con el
+constructor visual (`processor_type: query_mysql`).
+
+```yaml
+type: query_mysql
+config:
+  connection: main
+  batch_size: 1000
+  query: SELECT id, name FROM shop.customers WHERE active = ?
+  parameters: [true]
+```
+
+Ver [`examples/mysql-query.yaml`](../examples/mysql-query.yaml).
+
+## `query_sqlserver`
+
+Requiere `--features sqlserver-driver`. Lee SQL Server (Tiberius) por lotes y
+emite objetos JSON. Solo `SELECT`/`WITH`. Placeholders `@P1`, `@P2`, …. El
+compilador usa `TOP (n)` en lugar de `LIMIT`.
+
+```yaml
+type: query_sqlserver
+config:
+  connection: main
+  batch_size: 1000
+  query: SELECT TOP (100) [id], [name] FROM [dbo].[customers] WHERE [active] = @P1
+  parameters: [true]
+```
+
+Ver [`examples/sqlserver-query.yaml`](../examples/sqlserver-query.yaml).
 
 ## `query_mongodb`
 

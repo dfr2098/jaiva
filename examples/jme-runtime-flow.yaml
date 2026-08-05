@@ -1,0 +1,58 @@
+# Paso 7 — JME cableado al runtime (domain_memory + memory_upsert/get).
+id: jme-runtime-demo
+
+engine:
+  # Cadena source→tag→remember→recall→sink = 5 hops; el runtime exige
+  # max_concurrency >= longitud del camino de streaming más largo.
+  max_concurrency: 8
+  repository:
+    enabled: false
+  domain_memory:
+    enabled: true
+    policy_file: examples/jme-hot-policy.yaml
+
+processors:
+  - id: source
+    type: generate_records
+    config:
+      records:
+        - carrier_id: A12
+          lane: 3
+
+  - id: tag
+    type: rename_fields
+    config:
+      fields:
+        carrier_id: carrier.id
+
+  # generate_records deja el registro en content; memory_upsert usa records[0]
+  # si no hay value_attribute.
+  - id: remember
+    type: memory_upsert
+    config:
+      class: carrier
+      id_attribute: carrier.id
+
+  - id: recall
+    type: memory_get
+    config:
+      class: carrier
+      id_attribute: carrier.id
+      attribute: memory.value
+
+  - id: sink
+    type: log_records
+
+connections:
+  - from: source
+    relationship: success
+    to: tag
+  - from: tag
+    relationship: success
+    to: remember
+  - from: remember
+    relationship: success
+    to: recall
+  - from: recall
+    relationship: success
+    to: sink

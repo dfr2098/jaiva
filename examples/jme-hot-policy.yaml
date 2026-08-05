@@ -1,0 +1,23 @@
+# Política JME Paso 1 — solo Hot (volatile|cache en RAM).
+# Uso: cargar con MemoryManager::from_yaml (tests / futuros procesadores).
+memory:
+  max_entries: 1000
+  defaults:
+    priority: normal
+  warm:
+    backend: none
+  classes:
+    telegram:
+      policy: volatile
+      temperature: hot
+      ttl: 5m
+      priority: low
+    carrier:
+      policy: cache
+      temperature: warm
+      ttl: 30m
+      priority: high
+    session:
+      policy: volatile
+      ttl: 2m
+      priority: normal

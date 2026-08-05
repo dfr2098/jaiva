@@ -1,0 +1,19 @@
+[package]
+name = "jaiba-memory"
+description = "Jaiba Memory Engine: ciclo de vida de estado de dominio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+# WarmStore Redis opcional. CI y default compilan sin Redis.
+redis = ["dep:redis"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+redis = { version = "0.27", optional = true, default-features = true }

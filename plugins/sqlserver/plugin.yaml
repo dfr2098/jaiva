@@ -12,6 +12,7 @@ capabilities:
   - diagnostics
   - schema-explorer
   - query-builder
+  - query-node
 diagnostics:
   - ping
   - login

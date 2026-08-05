@@ -136,7 +136,7 @@ pub(crate) async fn list_metadata(
     Path(id): Path<String>,
     Query(query): Query<MetadataQuery>,
 ) -> Response {
-    if let Err(response) = authorize_perm(&state, &headers, Permission::Admin) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
         return response;
     }
     match state
@@ -154,7 +154,7 @@ pub(crate) async fn describe_metadata(
     headers: HeaderMap,
     Path((id, schema, name)): Path<(String, String, String)>,
 ) -> Response {
-    if let Err(response) = authorize_perm(&state, &headers, Permission::Admin) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
         return response;
     }
     let object = DatabaseObject {
@@ -174,7 +174,7 @@ pub(crate) async fn compile_query(
     Path(id): Path<String>,
     Json(specification): Json<QuerySpec>,
 ) -> Response {
-    if let Err(response) = authorize_perm(&state, &headers, Permission::Admin) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
         return response;
     }
     match state
@@ -263,7 +263,7 @@ pub(crate) async fn list_connections(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = authorize_perm(&state, &headers, Permission::Admin) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
         return response;
     }
     let profiles = state.connection_manager.list().await;
@@ -282,7 +282,7 @@ pub(crate) async fn get_connection(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Err(response) = authorize_perm(&state, &headers, Permission::Admin) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
         return response;
     }
     match state.connection_manager.get(&id).await {
@@ -497,7 +497,7 @@ pub(crate) async fn diagnose_connection(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Err(response) = authorize_perm(&state, &headers, Permission::Admin) {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
         return response;
     }
     match state.connection_manager.diagnose(&id).await {
@@ -1051,7 +1051,7 @@ struct MySqlConnectionPlugin {
 #[async_trait]
 impl ConnectionPlugin for MySqlConnectionPlugin {
     fn descriptor(&self) -> PluginDescriptor {
-        descriptor("jaiba.mysql", "MySQL / MariaDB", 3306, true, false)
+        descriptor("jaiba.mysql", "MySQL / MariaDB", 3306, true, true)
     }
 
     fn connection_type(&self) -> ConnectionType {
@@ -1308,7 +1308,12 @@ impl ConnectionPlugin for MySqlConnectionPlugin {
     }
 
     fn compile_query(&self, specification: &QuerySpec) -> Result<CompiledQuery, PluginError> {
-        crate::sql_builder::compile(specification, crate::sql_builder::Dialect::MySql)
+        let mut compiled =
+            crate::sql_builder::compile(specification, crate::sql_builder::Dialect::MySql)?;
+        // Rows become JSON objects in the runtime; no SQL wrapper is required.
+        compiled.processor_type = Some("query_mysql".to_owned());
+        compiled.execution_statement = Some(compiled.statement.clone());
+        Ok(compiled)
     }
 }
 
@@ -1719,7 +1724,7 @@ type SqlServerClient = Client<Compat<TcpStream>>;
 #[async_trait]
 impl ConnectionPlugin for SqlServerConnectionPlugin {
     fn descriptor(&self) -> PluginDescriptor {
-        descriptor("jaiba.sqlserver", "SQL Server", 1433, false, false)
+        descriptor("jaiba.sqlserver", "SQL Server", 1433, true, true)
     }
 
     fn connection_type(&self) -> ConnectionType {
@@ -1900,8 +1905,13 @@ impl ConnectionPlugin for SqlServerConnectionPlugin {
         Ok(description(object, columns))
     }
 
-    fn compile_query(&self, _specification: &QuerySpec) -> Result<CompiledQuery, PluginError> {
-        Err(PluginError::Unsupported("constructor SQL".to_owned()))
+    fn compile_query(&self, specification: &QuerySpec) -> Result<CompiledQuery, PluginError> {
+        let mut compiled =
+            crate::sql_builder::compile(specification, crate::sql_builder::Dialect::SqlServer)?;
+        // Rows become JSON objects in the runtime; no SQL wrapper is required.
+        compiled.processor_type = Some("query_sqlserver".to_owned());
+        compiled.execution_statement = Some(compiled.statement.clone());
+        Ok(compiled)
     }
 }
 
@@ -2255,6 +2265,49 @@ fn success(
             .unwrap_or_default()
             .as_secs() as i64,
         message: Some("Conexión validada".to_owned()),
+    }
+}
+
+#[cfg(all(test, feature = "sqlserver-driver"))]
+mod sqlserver_compile_tests {
+    use super::*;
+    use jaiba_plugin_sdk::{FilterOperator, QueryFilter, QuerySource, QuerySpec};
+    use serde_json::Value;
+
+    #[test]
+    fn sqlserver_plugin_wires_query_sqlserver_node() {
+        let compiled = SqlServerConnectionPlugin
+            .compile_query(&QuerySpec {
+                source: QuerySource {
+                    schema: Some("dbo".to_owned()),
+                    table: "items".to_owned(),
+                },
+                columns: vec!["id".to_owned()],
+                joins: vec![],
+                filters: vec![QueryFilter {
+                    field: "active".to_owned(),
+                    operator: FilterOperator::Eq,
+                    value: Value::Bool(true),
+                }],
+                group_by: vec![],
+                order_by: vec![],
+                limit: Some(5),
+            })
+            .expect("compile sqlserver query");
+
+        assert_eq!(
+            compiled.statement,
+            "SELECT TOP (5) [id] FROM [dbo].[items] WHERE [active] = @P1"
+        );
+        assert_eq!(compiled.parameters, vec![Value::Bool(true)]);
+        assert_eq!(compiled.processor_type.as_deref(), Some("query_sqlserver"));
+        assert_eq!(
+            compiled.execution_statement.as_deref(),
+            Some(compiled.statement.as_str())
+        );
+        let descriptor = SqlServerConnectionPlugin.descriptor();
+        assert!(descriptor.capabilities.iter().any(|c| c == "query_builder"));
+        assert!(descriptor.capabilities.iter().any(|c| c == "query_node"));
     }
 }
 
@@ -2668,6 +2721,11 @@ mod integration_tests {
              WHERE `active` = ? ORDER BY `id` ASC LIMIT 10"
         );
         assert_eq!(compiled.parameters, vec![Value::Bool(true)]);
+        assert_eq!(compiled.processor_type.as_deref(), Some("query_mysql"));
+        assert_eq!(
+            compiled.execution_statement.as_deref(),
+            Some(compiled.statement.as_str())
+        );
 
         let pool = mysql_pool(
             &endpoint,

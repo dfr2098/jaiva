@@ -1,0 +1,20 @@
+# JME Paso 5 — promote/demote + rebuild hooks.
+# cache+warm se demotea bajo presión; rebuild rehidrata tras miss Hot+Warm.
+memory:
+  max_entries: 64
+  warm:
+    backend: none
+  defaults:
+    priority: normal
+  classes:
+    telegram:
+      policy: volatile
+      temperature: hot
+      ttl: 5m
+      priority: low
+    carrier:
+      policy: cache
+      temperature: warm
+      ttl: 30m
+      priority: high
+      rebuild: query:carrier_by_id

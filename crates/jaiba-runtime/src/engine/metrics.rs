@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use jaiba_memory::MemorySnapshot;
 use serde::Serialize;
 
 #[derive(Clone, Default, Debug)]
@@ -51,6 +52,7 @@ struct MetricsInner {
     blocking_worker_limit: AtomicU64,
     processors: Mutex<HashMap<String, ProcessorMetrics>>,
     connection_queues: Mutex<HashMap<String, ConnectionQueueMetrics>>,
+    domain_memory: Mutex<Option<MemorySnapshot>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -120,6 +122,7 @@ pub struct FlowSummary {
     pub blocking_worker_limit: u64,
     pub processors: HashMap<String, ProcessorSummary>,
     pub connection_queues: HashMap<String, ConnectionQueueSummary>,
+    pub domain_memory: Option<MemorySnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,6 +139,14 @@ impl FlowMetrics {
     /// 0 stopped, 1 starting, 2 running, 3 paused, 4 draining, 5 failed.
     pub fn set_flow_status(&self, status: u64) {
         self.inner.flow_status.store(status, Ordering::Relaxed);
+    }
+
+    pub fn set_domain_memory(&self, snapshot: MemorySnapshot) {
+        *self
+            .inner
+            .domain_memory
+            .lock()
+            .expect("domain memory metrics poisoned") = Some(snapshot);
     }
 
     pub fn flow_succeeded(&self) {
@@ -447,6 +458,12 @@ impl FlowMetrics {
                     )
                 })
                 .collect(),
+            domain_memory: self
+                .inner
+                .domain_memory
+                .lock()
+                .expect("domain memory metrics poisoned")
+                .clone(),
         }
     }
 
@@ -589,6 +606,46 @@ impl FlowMetrics {
              # HELP jaiva_processor_saturation_ratio Active tasks divided by configured concurrency.\n\
              # TYPE jaiva_processor_saturation_ratio gauge\n",
         );
+        if let Some(jme) = &snapshot.domain_memory {
+            output.push_str(&format!(
+                "# HELP jaiba_memory_hot_objects JME objects in Hot.\n\
+                 # TYPE jaiba_memory_hot_objects gauge\n\
+                 jaiba_memory_hot_objects {}\n\
+                 # HELP jaiba_memory_warm_objects JME objects in Warm.\n\
+                 # TYPE jaiba_memory_warm_objects gauge\n\
+                 jaiba_memory_warm_objects {}\n\
+                 # HELP jaiba_memory_frozen_objects JME objects in Frozen.\n\
+                 # TYPE jaiba_memory_frozen_objects gauge\n\
+                 jaiba_memory_frozen_objects {}\n\
+                 # HELP jaiba_memory_evictions_total JME Hot evictions.\n\
+                 # TYPE jaiba_memory_evictions_total counter\n\
+                 jaiba_memory_evictions_total {}\n\
+                 # HELP jaiba_memory_persist_queue Deferred records pending persistence.\n\
+                 # TYPE jaiba_memory_persist_queue gauge\n\
+                 jaiba_memory_persist_queue {}\n\
+                 # HELP jaiba_memory_promotions_total JME promotions to Hot.\n\
+                 # TYPE jaiba_memory_promotions_total counter\n\
+                 jaiba_memory_promotions_total {}\n\
+                 # HELP jaiba_memory_demotions_total JME demotions from Hot.\n\
+                 # TYPE jaiba_memory_demotions_total counter\n\
+                 jaiba_memory_demotions_total {}\n\
+                 # HELP jaiba_memory_immediate_failures_total Immediate persistence failures.\n\
+                 # TYPE jaiba_memory_immediate_failures_total counter\n\
+                 jaiba_memory_immediate_failures_total {}\n\
+                 # HELP jaiba_memory_deferred_failures_total Deferred persistence failures.\n\
+                 # TYPE jaiba_memory_deferred_failures_total counter\n\
+                 jaiba_memory_deferred_failures_total {}\n",
+                jme.hot_objects,
+                jme.warm_objects,
+                jme.frozen_objects,
+                jme.evictions,
+                jme.persist_queue,
+                jme.promotions,
+                jme.demotions,
+                jme.immediate_failures,
+                jme.deferred_failures,
+            ));
+        }
         output.push_str(
             "# HELP jaiva_processor_records_total Records processed successfully.\n\
              # TYPE jaiva_processor_records_total counter\n\
@@ -676,6 +733,11 @@ mod tests {
         metrics.set_memory_budget(1_000);
         metrics.reserve_memory(400);
         metrics.backpressure();
+        metrics.set_domain_memory(MemorySnapshot {
+            hot_objects: 7,
+            persist_queue: 2,
+            ..MemorySnapshot::default()
+        });
         metrics.set_repository(5, 2, 1, 50_000);
         metrics.recovered(3);
         metrics.database_write(100, 2, 45);
@@ -705,6 +767,8 @@ mod tests {
         assert!(output.contains("jaiva_queue_depth 4"));
         assert!(output.contains("jaiva_active_tasks 3"));
         assert!(output.contains("jaiva_memory_used_bytes 400"));
+        assert!(output.contains("jaiba_memory_hot_objects 7"));
+        assert!(output.contains("jaiba_memory_persist_queue 2"));
         assert!(output.contains("jaiva_memory_budget_bytes 1000"));
         assert!(output.contains("jaiva_backpressure_total 1"));
         assert!(output.contains("jaiva_repository_pending_packets 5"));

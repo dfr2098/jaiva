@@ -1,0 +1,43 @@
+# Lectura SQL Server → JSON por lotes (requiere sqlserver-driver).
+# Requiere SQLSERVER_DATABASE_URL, p. ej.:
+#   sqlserver://sa:YourStrong!Passw0rd@127.0.0.1:1433/master?TrustServerCertificate=true
+#
+#   cargo run --features sqlserver-driver -- examples/sqlserver-query.yaml
+id: sqlserver-query-example
+
+database_connections:
+  source:
+    type: sqlserver
+    url_env: SQLSERVER_DATABASE_URL
+    max_connections: 1
+
+engine:
+  repository:
+    enabled: false
+
+processors:
+  - id: read_sqlserver
+    type: query_sqlserver
+    config:
+      connection: source
+      batch_size: 100
+      # Solo SELECT/WITH. Placeholders @P1, @P2, …
+      query: |
+        SELECT TOP (2)
+          CAST(1 AS INT) AS id,
+          CAST(N'Ada' AS NVARCHAR(64)) AS name,
+          CAST(1 AS BIT) AS active
+        UNION ALL
+        SELECT 2, N'Linus', 0
+    retry:
+      maximum_attempts: 3
+      initial_delay_ms: 250
+      maximum_delay_ms: 5000
+
+  - id: show_records
+    type: log_records
+
+connections:
+  - from: read_sqlserver
+    relationship: success
+    to: show_records

@@ -1,0 +1,27 @@
+# Política JME Paso 2 — Hot + immediate/persistent.
+# Requiere ImmediateSink (RecordingSink en tests, JsonlFileSink en demos).
+memory:
+  max_entries: 1000
+  defaults:
+    priority: normal
+  warm:
+    backend: none
+  classes:
+    telegram:
+      policy: volatile
+      temperature: hot
+      ttl: 5m
+      priority: low
+    carrier:
+      policy: cache
+      temperature: warm
+      ttl: 30m
+      priority: high
+    alarm:
+      policy: immediate
+      temperature: cold
+      priority: critical
+    configuration:
+      policy: persistent
+      temperature: cold
+      priority: critical

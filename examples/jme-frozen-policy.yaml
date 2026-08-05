@@ -1,0 +1,27 @@
+# JME Paso 6 — Frozen (archivo) + Warm none.
+# Redis: warm.backend: redis + feature `redis` + REDIS_URL.
+memory:
+  max_entries: 64
+  warm:
+    backend: none
+  frozen:
+    backend: file
+    path: ./output/jme-frozen
+  defaults:
+    priority: normal
+  classes:
+    telegram:
+      policy: volatile
+      temperature: hot
+      ttl: 5m
+      priority: low
+    carrier:
+      policy: cache
+      temperature: warm
+      ttl: 30m
+      priority: high
+    audit_event:
+      policy: cache
+      temperature: frozen
+      ttl: 1h
+      priority: low

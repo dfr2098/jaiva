@@ -156,6 +156,9 @@ pub struct EngineConfig {
     pub state_file: PathBuf,
     #[serde(default)]
     pub memory: MemoryConfig,
+    /// Jaiba Memory Engine (estado de dominio). Independiente de `memory` (RAM de paquetes).
+    #[serde(default)]
+    pub domain_memory: DomainMemoryConfig,
     #[serde(default)]
     pub repository: RepositoryConfig,
     #[serde(default)]
@@ -177,6 +180,7 @@ impl Default for EngineConfig {
             max_concurrency: default_concurrency(),
             state_file: default_state_file(),
             memory: MemoryConfig::default(),
+            domain_memory: DomainMemoryConfig::default(),
             repository: RepositoryConfig::default(),
             logging: LoggingConfig::default(),
             shutdown: ShutdownConfig::default(),
@@ -434,6 +438,29 @@ fn default_memory_percent() -> u8 {
     42
 }
 
+/// Configuración del Jaiba Memory Engine (ciclo de vida de dominio).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DomainMemoryConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// YAML de políticas JME (`memory.classes`, etc.).
+    #[serde(default = "default_domain_memory_policy_file")]
+    pub policy_file: PathBuf,
+}
+
+impl Default for DomainMemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            policy_file: default_domain_memory_policy_file(),
+        }
+    }
+}
+
+fn default_domain_memory_policy_file() -> PathBuf {
+    "examples/jme-hot-policy.yaml".into()
+}
+
 fn default_queue_capacity() -> usize {
     100
 }
@@ -593,5 +620,36 @@ impl FlowConfig {
             .iter()
             .map(|processor| (processor.id.as_str(), processor))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_domain_memory_separately_from_packet_memory() {
+        let config: FlowConfig = serde_yaml::from_str(
+            r#"
+id: jme-parse
+engine:
+  memory:
+    maximum_percent: 40
+  domain_memory:
+    enabled: true
+    policy_file: examples/jme-hot-policy.yaml
+processors:
+  - id: source
+    type: generate_records
+connections: []
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.engine.memory.maximum_percent, 40);
+        assert!(config.engine.domain_memory.enabled);
+        assert_eq!(
+            config.engine.domain_memory.policy_file,
+            PathBuf::from("examples/jme-hot-policy.yaml")
+        );
     }
 }

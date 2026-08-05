@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use super::{CircuitBreakers, ConnectionManager, FlowMetrics, StateStore};
+use super::{CircuitBreakers, ConnectionManager, DomainMemoryHandle, FlowMetrics, StateStore};
 
 #[derive(Debug, Clone)]
 pub struct ProcessorContext {
@@ -11,4 +11,6 @@ pub struct ProcessorContext {
     pub metrics: FlowMetrics,
     pub state: StateStore,
     pub circuits: CircuitBreakers,
+    /// Jaiba Memory Engine (None si `engine.domain_memory.enabled` es false).
+    pub domain_memory: Option<DomainMemoryHandle>,
 }

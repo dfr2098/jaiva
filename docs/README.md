@@ -39,6 +39,7 @@ notas sueltas en el código.
 | [priority-10a-tauri-sidecar.md](priority-10a-tauri-sidecar.md) | Fase 10A: sidecar `jaiba serve` + modo local/remoto |
 | [priority-10b-security.md](priority-10b-security.md) | Fase 10B: TLS, usuarios/roles, permisos por proyecto |
 | [priority-10c-plant-prep.md](priority-10c-plant-prep.md) | Fase 10C: Postgres/Oracle → AI Prep → CSV + manifest |
+| [priority-jme-memory-manager.md](priority-jme-memory-manager.md) | JME: Memory Engine / lifecycle de dominio (Paso 0 contrato) |
 
 ## Pruebas de integración (Fase 8 de producto)
 

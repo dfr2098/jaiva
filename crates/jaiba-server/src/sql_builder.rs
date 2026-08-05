@@ -3,8 +3,9 @@
 //! El objetivo es que la UI jamás construya SQL: envía una especificación
 //! neutral y el servidor genera la sentencia. Todos los identificadores se
 //! validan contra un patrón estricto y se citan según el dialecto; todos los
-//! valores viajan como parámetros ligados (`$1`, `?`), nunca interpolados. Así
-//! se evita la inyección tanto por identificadores como por valores.
+//! valores viajan como parámetros ligados (`$1`, `?`, `@P1`), nunca
+//! interpolados. Así se evita la inyección tanto por identificadores como por
+//! valores.
 
 use jaiba_plugin_sdk::{
     CompiledQuery, FilterOperator, JoinKind, PluginError, QueryFilter, QuerySource, QuerySpec,
@@ -16,6 +17,7 @@ use serde_json::Value;
 pub(crate) enum Dialect {
     Postgres,
     MySql,
+    SqlServer,
 }
 
 impl Dialect {
@@ -37,6 +39,7 @@ impl Dialect {
             parts.push(match self {
                 Dialect::Postgres => format!("\"{segment}\""),
                 Dialect::MySql => format!("`{segment}`"),
+                Dialect::SqlServer => format!("[{segment}]"),
             });
         }
         if parts.is_empty() {
@@ -48,7 +51,7 @@ impl Dialect {
     fn like_keyword(self) -> &'static str {
         match self {
             Dialect::Postgres => "ILIKE",
-            Dialect::MySql => "LIKE",
+            Dialect::MySql | Dialect::SqlServer => "LIKE",
         }
     }
 
@@ -56,6 +59,8 @@ impl Dialect {
         match self {
             Dialect::Postgres => format!("${index}"),
             Dialect::MySql => "?".to_owned(),
+            // Tiberius binds as `@P1`, `@P2`, …
+            Dialect::SqlServer => format!("@P{index}"),
         }
     }
 }
@@ -86,8 +91,14 @@ pub(crate) fn compile(spec: &QuerySpec, dialect: Dialect) -> Result<CompiledQuer
         .collect::<Result<Vec<_>, _>>()?
         .join(", ");
 
+    // SQL Server no admite `LIMIT`; el tope va como `TOP (n)` tras SELECT.
+    let top = match (dialect, spec.limit) {
+        (Dialect::SqlServer, Some(limit)) => format!("TOP ({limit}) "),
+        _ => String::new(),
+    };
+
     let mut statement = format!(
-        "SELECT {columns} FROM {}",
+        "SELECT {top}{columns} FROM {}",
         quote_source(dialect, &spec.source)?
     );
 
@@ -141,7 +152,10 @@ pub(crate) fn compile(spec: &QuerySpec, dialect: Dialect) -> Result<CompiledQuer
     }
 
     // `limit` es un entero sin signo, por lo que su interpolación es segura.
-    if let Some(limit) = spec.limit {
+    // SQL Server ya lo aplicó con `TOP` arriba.
+    if let Some(limit) = spec.limit
+        && !matches!(dialect, Dialect::SqlServer)
+    {
         statement.push_str(&format!(" LIMIT {limit}"));
     }
 
@@ -314,6 +328,64 @@ mod tests {
             "SELECT * FROM `shop`.`orders` WHERE `name` LIKE ?"
         );
         assert_eq!(compiled.parameters, vec![Value::String("%ana%".to_owned())]);
+    }
+
+    #[test]
+    fn sqlserver_uses_brackets_at_params_and_top() {
+        let spec = QuerySpec {
+            source: source("dbo", "orders"),
+            columns: vec!["id".to_owned(), "total".to_owned()],
+            joins: vec![QueryJoin {
+                kind: JoinKind::Left,
+                source: source("dbo", "customers"),
+                left: "orders.customer_id".to_owned(),
+                right: "customers.id".to_owned(),
+            }],
+            filters: vec![
+                QueryFilter {
+                    field: "total".to_owned(),
+                    operator: FilterOperator::GreaterThan,
+                    value: Value::from(100),
+                },
+                QueryFilter {
+                    field: "name".to_owned(),
+                    operator: FilterOperator::StartsWith,
+                    value: Value::from("Acme"),
+                },
+            ],
+            group_by: vec![],
+            order_by: vec![QueryOrder {
+                field: "total".to_owned(),
+                direction: SortDirection::Desc,
+            }],
+            limit: Some(25),
+        };
+        let compiled = compile(&spec, Dialect::SqlServer).expect("compila");
+        assert_eq!(
+            compiled.statement,
+            "SELECT TOP (25) [id], [total] FROM [dbo].[orders] \
+             LEFT JOIN [dbo].[customers] ON [orders].[customer_id] = [customers].[id] \
+             WHERE [total] > @P1 AND [name] LIKE @P2 ORDER BY [total] DESC"
+        );
+        assert_eq!(
+            compiled.parameters,
+            vec![Value::from(100), Value::String("Acme%".to_owned())]
+        );
+        assert!(!compiled.statement.contains("LIMIT"));
+    }
+
+    #[test]
+    fn sqlserver_rejects_injection_in_bracket_identifiers() {
+        let spec = QuerySpec {
+            source: source("dbo", "orders]; DROP TABLE users;--"),
+            columns: vec!["id".to_owned()],
+            joins: vec![],
+            filters: vec![],
+            group_by: vec![],
+            order_by: vec![],
+            limit: None,
+        };
+        assert!(compile(&spec, Dialect::SqlServer).is_err());
     }
 
     #[test]

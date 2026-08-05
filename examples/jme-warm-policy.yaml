@@ -1,0 +1,19 @@
+# JME Paso 4 — WarmStore con backend none (sin Redis).
+# Las clases `cache` + temperature warm espejan al trait WarmStore (noop por defecto).
+memory:
+  max_entries: 1000
+  warm:
+    backend: none
+  defaults:
+    priority: normal
+  classes:
+    telegram:
+      policy: volatile
+      temperature: hot
+      ttl: 5m
+      priority: low
+    carrier:
+      policy: cache
+      temperature: warm
+      ttl: 30m
+      priority: high

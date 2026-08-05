@@ -17,10 +17,11 @@ use crate::{
 };
 
 use super::{
-    CircuitBreakers, ConnectionManager, ConnectionResolver, DataPacket, FlowControl, FlowLifecycle,
-    FlowMetrics, FlowSummary, LocalPacketRepository, MemoryLimiter, MemoryReservation,
-    OutputSender, PacketRepository, Processor, ProcessorContext, ProcessorEmission,
-    ProcessorRegistry, ProvenanceEvent, StateStore, WorkerPools, referenced_db_aliases,
+    CircuitBreakers, ConnectionManager, ConnectionResolver, DataPacket, DomainMemoryHandle,
+    FlowControl, FlowLifecycle, FlowMetrics, FlowSummary, LocalPacketRepository, MemoryLimiter,
+    MemoryReservation, OutputSender, PacketRepository, Processor, ProcessorContext,
+    ProcessorEmission, ProcessorRegistry, ProvenanceEvent, StateStore, WorkerPools,
+    open_domain_memory, referenced_db_aliases,
 };
 
 struct WorkItem {
@@ -137,7 +138,15 @@ impl FlowEngine {
             blocking_threads = resolved_workers.blocking_threads,
             "worker limits resolved"
         );
-        let memory = MemoryLimiter::detect(&self.config.engine.memory, metrics.clone())?;
+        let domain_memory = open_domain_memory(
+            &self.config.engine.domain_memory,
+            &self.config.id,
+            metrics.clone(),
+        )?;
+        let mut memory = MemoryLimiter::detect(&self.config.engine.memory, metrics.clone())?;
+        if let Some(handle) = domain_memory.clone() {
+            memory = memory.with_domain_memory(handle);
+        }
         let state = StateStore::load(&self.config.engine.state_file)?;
         let repository = if self.config.engine.repository.enabled {
             Some(Arc::new(
@@ -215,6 +224,8 @@ impl FlowEngine {
         metrics.set_connection_queues(empty_connection_queues(&self.config.connections));
         metrics.set_flow_status(2);
         self.control.running();
+        let mut domain_memory_tick = tokio::time::interval(std::time::Duration::from_millis(250));
+        domain_memory_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             match self.control.state() {
@@ -256,6 +267,7 @@ impl FlowEngine {
                 circuits.clone(),
                 metrics.clone(),
                 state.clone(),
+                domain_memory.clone(),
                 emission_sender.clone(),
                 concurrency_limit,
                 memory.clone(),
@@ -281,6 +293,11 @@ impl FlowEngine {
             }
 
             tokio::select! {
+                _ = domain_memory_tick.tick(), if domain_memory.is_some() => {
+                    if let Some(jme) = &domain_memory {
+                        jme.maintain()?;
+                    }
+                }
                 joined = running.join_next(), if !running.is_empty() => {
                     match joined {
                         Some(Ok(completion)) => {
@@ -372,6 +389,7 @@ async fn schedule_available(
     circuits: CircuitBreakers,
     metrics: FlowMetrics,
     state: StateStore,
+    domain_memory: Option<DomainMemoryHandle>,
     emission_sender: mpsc::Sender<ProcessorEmission>,
     concurrency_limit: usize,
     memory: MemoryLimiter,
@@ -469,6 +487,7 @@ async fn schedule_available(
             metrics: metrics.clone(),
             state: state.clone(),
             circuits: circuits.clone(),
+            domain_memory: domain_memory.clone(),
         };
         let output = OutputSender::new(
             emission_sender.clone(),

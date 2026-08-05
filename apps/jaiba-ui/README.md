@@ -106,6 +106,7 @@ Tauri 2 en `src-tauri/`: modo **remoto** o **local** (sidecar `jaiba serve`).
 
 - 9B: [docs/priority-9b-tauri-desktop.md](../../docs/priority-9b-tauri-desktop.md)
 - 10A: [docs/priority-10a-tauri-sidecar.md](../../docs/priority-10a-tauri-sidecar.md)
+- Windows/WSL: [docs/windows-native-and-wsl.md](../../docs/windows-native-and-wsl.md)
 
 ```bash
 # Sidecar gestionado por la app (topbar → Motor · local)
@@ -116,6 +117,22 @@ npm run desktop:dev
 # O modo remoto (como 9B): motor aparte + Motor · remoto
 cargo run -- serve examples/visualisa-flow.yaml
 ```
+
+Los comandos `desktop:*` son multiplataforma. En Windows preparan y localizan
+`jaiba-<target-triple>.exe`; en Linux preparan el binario sin extensión y
+aplican el workaround X11 de WebKitGTK. Para un checkout nuevo se recomienda
+`npm ci` en lugar de `npm install`.
+
+Build de release:
+
+```bash
+cargo build -p jaiba-cli --bin jaiba --release
+cd apps/jaiba-ui
+npm run desktop:build
+```
+
+Si Tauri indica que falta `binaries/jaiba-<target-triple>`, ejecuta primero
+`npm run desktop:sidecar` desde este directorio.
 
 ```text
 React + TypeScript

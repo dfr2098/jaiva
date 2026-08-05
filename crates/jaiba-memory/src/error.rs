@@ -16,6 +16,8 @@ pub enum MemoryError {
     Persistence(String),
     #[error("warm store: {0}")]
     Warm(String),
+    #[error("cold store: {0}")]
+    Cold(String),
     #[error("frozen store: {0}")]
     Frozen(String),
     #[error("hot store lleno ({max_entries}); todas las entradas son critical")]

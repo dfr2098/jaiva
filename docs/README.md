@@ -13,8 +13,10 @@ notas sueltas en el código.
 | [project-vision.md](project-vision.md) | Alcance y límites del producto |
 | [configuration.md](configuration.md) | YAML de flujos, conexiones y features |
 | [processors.md](processors.md) | Catálogo de procesadores |
+| [jme-cold-memory.md](jme-cold-memory.md) | JME: política semántica, Cold segmentado, cuotas y recuperación |
 | [ai-data-prep.md](ai-data-prep.md) | Toolkit AI Prep (Rust, sin train in-process) |
 | [operations.md](operations.md) | Servir, features, observabilidad, UI |
+| [windows-native-and-wsl.md](windows-native-and-wsl.md) | Compilar, probar y ejecutar en Windows/WSL; Tauri y troubleshooting |
 
 ## Conexiones y bases de datos
 
@@ -39,7 +41,7 @@ notas sueltas en el código.
 | [priority-10a-tauri-sidecar.md](priority-10a-tauri-sidecar.md) | Fase 10A: sidecar `jaiba serve` + modo local/remoto |
 | [priority-10b-security.md](priority-10b-security.md) | Fase 10B: TLS, usuarios/roles, permisos por proyecto |
 | [priority-10c-plant-prep.md](priority-10c-plant-prep.md) | Fase 10C: Postgres/Oracle → AI Prep → CSV + manifest |
-| [priority-jme-memory-manager.md](priority-jme-memory-manager.md) | JME: Memory Engine / lifecycle de dominio (Paso 0 contrato) |
+| [priority-jme-memory-manager.md](priority-jme-memory-manager.md) | JME: Memory Engine / lifecycle de dominio (Pasos 0–8) |
 
 ## Pruebas de integración (Fase 8 de producto)
 

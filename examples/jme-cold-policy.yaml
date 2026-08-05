@@ -1,0 +1,27 @@
+# JME Cold segmentado: objetos cache se degradan de RAM a SSD por inactividad
+# o presión y se promueven transparentemente al volver a consultarlos.
+memory:
+  max_entries: 5000
+  cold:
+    backend: segmented
+    path: data/jme/cold
+    segment_max_bytes: 67108864 # 64 MiB por segmento
+    max_disk_bytes: 10737418240 # cuota total de 10 GiB por flujo
+    compression: lz4
+    mmap: true
+  defaults:
+    priority: normal
+  classes:
+    carrier:
+      policy: cache
+      temperature: cold
+      ttl: 24h
+      demote_after: 30m
+      priority: normal
+      rebuild: query:carrier_by_id
+    equipment:
+      policy: cache
+      temperature: cold
+      ttl: 7d
+      demote_after: 2h
+      priority: high

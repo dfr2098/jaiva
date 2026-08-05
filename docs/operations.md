@@ -161,6 +161,17 @@ El servidor y el modo de consola responden a `Ctrl+C` solicitando un drain. Las
 tareas activas disponen del plazo configurado; el trabajo persistido que no
 alcanzó a ejecutarse se recupera al reiniciar.
 
+## Operación de JME Cold
+
+El nivel Cold puede limitarse por flujo con `memory.cold.max_disk_bytes`. Al
+alcanzar la cuota, JME conserva el objeto en Hot y publica
+`jaiba_memory_cold_quota_rejections_total`; no elimina silenciosamente datos ni
+segmentos. La guía de dimensionamiento, alertas y recuperación está en
+[JME Cold Memory segmentado](jme-cold-memory.md#dimensionamiento-por-flujo).
+
+No se deben borrar archivos `.jmc` mientras Jaiba esté en ejecución. Cold es
+una caché reconstruible y nunca debe ser la única copia de datos críticos.
+
 ## Verificación
 
 ```bash

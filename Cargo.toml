@@ -32,6 +32,8 @@ cron = "0.15"
 csv = "1"
 futures-util = "0.3"
 mongodb = "3"
+lz4_flex = "0.11"
+memmap2 = "0.9"
 oracle = "0.6.3"
 rdkafka = { version = "0.39", features = ["cmake-build", "curl-static", "tokio"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

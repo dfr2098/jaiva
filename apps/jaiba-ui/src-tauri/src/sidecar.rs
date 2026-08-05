@@ -270,21 +270,27 @@ fn resolve_jaiba_binary(app: &AppHandle) -> Result<PathBuf, String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join("binaries").join("jaiba"));
+        push_binary_candidate(&mut candidates, resource_dir.join("binaries").join("jaiba"));
         if !triple.is_empty() {
-            candidates.push(resource_dir.join("binaries").join(format!("jaiba-{triple}")));
+            push_binary_candidate(
+                &mut candidates,
+                resource_dir.join("binaries").join(format!("jaiba-{triple}")),
+            );
         }
-        candidates.push(resource_dir.join("jaiba"));
+        push_binary_candidate(&mut candidates, resource_dir.join("jaiba"));
     }
 
     if let Ok(exe_dir) = app.path().executable_dir() {
-        candidates.push(exe_dir.join("jaiba"));
+        push_binary_candidate(&mut candidates, exe_dir.join("jaiba"));
         if !triple.is_empty() {
-            candidates.push(exe_dir.join(format!("jaiba-{triple}")));
+            push_binary_candidate(&mut candidates, exe_dir.join(format!("jaiba-{triple}")));
         }
-        candidates.push(exe_dir.join("../binaries/jaiba"));
+        push_binary_candidate(&mut candidates, exe_dir.join("../binaries/jaiba"));
         if !triple.is_empty() {
-            candidates.push(exe_dir.join(format!("../binaries/jaiba-{triple}")));
+            push_binary_candidate(
+                &mut candidates,
+                exe_dir.join(format!("../binaries/jaiba-{triple}")),
+            );
         }
     }
 
@@ -299,9 +305,12 @@ fn resolve_jaiba_binary(app: &AppHandle) -> Result<PathBuf, String> {
             "../../../target/release/jaiba",
         ] {
             let path = cwd.join(rel);
-            candidates.push(path);
+            push_binary_candidate(&mut candidates, path);
             if !triple.is_empty() && rel.starts_with("binaries/") {
-                candidates.push(cwd.join(format!("binaries/jaiba-{triple}")));
+                push_binary_candidate(
+                    &mut candidates,
+                    cwd.join(format!("binaries/jaiba-{triple}")),
+                );
             }
         }
     }
@@ -316,9 +325,16 @@ fn resolve_jaiba_binary(app: &AppHandle) -> Result<PathBuf, String> {
 
     Err(
         "no se encontró el binario `jaiba`. Define JAIBA_BIN, ejecuta \
-         scripts/prepare-desktop-sidecar.sh o instálalo en PATH."
+         npm run desktop:sidecar o instálalo en PATH."
             .to_owned(),
     )
+}
+
+fn push_binary_candidate(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+    candidates.push(path.clone());
+    if cfg!(windows) && path.extension().is_none() {
+        candidates.push(path.with_extension("exe"));
+    }
 }
 
 fn resolve_flow_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -453,6 +469,12 @@ fn which(name: &str) -> Option<PathBuf> {
         let candidate = dir.join(name);
         if candidate.is_file() {
             return Some(candidate);
+        }
+        if cfg!(windows) {
+            let executable = dir.join(format!("{name}.exe"));
+            if executable.is_file() {
+                return Some(executable);
+            }
         }
     }
     None

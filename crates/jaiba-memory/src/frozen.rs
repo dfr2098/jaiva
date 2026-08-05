@@ -125,6 +125,7 @@ impl FrozenStore for FileFrozenStore {
         })?;
         let file = fs::OpenOptions::new()
             .read(true)
+            .write(true)
             .open(&temp)
             .map_err(|error| {
                 MemoryError::Frozen(format!("abrir temporal {}: {error}", temp.display()))

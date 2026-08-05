@@ -9,10 +9,10 @@
     "typecheck": "tsc -b --pretty false",
     "preview": "vite preview",
     "tauri": "tauri",
-    "desktop:sidecar": "bash ../../scripts/prepare-desktop-sidecar.sh",
-    "desktop:dev": "npm run desktop:sidecar && env GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri dev",
-    "desktop:build": "bash ../../scripts/prepare-desktop-sidecar.sh release && tauri build",
-    "desktop:run": "env GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 ./src-tauri/target/debug/jaiba-desktop"
+    "desktop:sidecar": "node ../../scripts/prepare-desktop-sidecar.mjs",
+    "desktop:dev": "npm run desktop:sidecar && node ../../scripts/run-desktop.mjs dev",
+    "desktop:build": "npm run desktop:sidecar -- release && node ../../scripts/run-desktop.mjs build",
+    "desktop:run": "node ../../scripts/run-desktop.mjs run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

@@ -1,4 +1,4 @@
-# Fase JME — Jaiba Memory Engine (contrato / Paso 0)
+# Fase JME — Jaiba Memory Engine (Pasos 0–8)
 
 Motor de **ciclo de vida de datos de dominio**: clasifica, decide dónde vive
 cada dato y cuándo desaparece, se demote o se persiste.
@@ -7,8 +7,9 @@ No es un caché genérico ni un Redis. No sustituye el repositorio de paquetes d
 DAG (`PacketRepository`). Es una capa paralela para estado operativo
 (telegramas, carriers, alarmas, inventarios, configuración, …).
 
-> **Paso 0:** solo vocabulario, contratos y límites. Sin crate de producción
-> todavía. El código empieza en el Paso 1 (Hot RAM).
+> **Estado actual:** integrado al runtime con Hot RAM, Warm distribuido
+> opcional (Redis es un proveedor), Cold SSD segmentado con LZ4 y lectura bajo
+> demanda, Frozen y persistencia/rebuild.
 
 ## Motivación
 
@@ -24,7 +25,7 @@ Jaiba ya tiene:
 | Provenance / DLQ                 | Auditoría de **ejecución**             |
 
 
-Falta un clasificador de **estado de negocio** que responda:
+JME aporta el clasificador de **estado de negocio** que responde:
 
 - ¿Dónde vive?
 - ¿Cuánto vive?
@@ -42,18 +43,19 @@ decide el lifecycle del dato con semántica.
 ## Fuera de alcance (explícito)
 
 
-| Incluido en la visión JME                  | Fuera / no en Paso 0–3             |
-| ------------------------------------------ | ---------------------------------- |
-| Políticas declarativas YAML                | Allocator custom / arenas globales |
-| Hot en proceso (Paso 1)                    | Competir con Redis                 |
-| Warm como *trait* (backend `none` primero) | Cluster distribuido día uno        |
-| Cold vía writers existentes                | Mezclar con `PacketRepository`     |
-| Immediate para critical                    | Frozen completo (Paso 6)           |
-| Métricas de presión / eviction             | UI completa de gestión             |
+| Incluido en JME                            | Fuera de alcance                    |
+| ------------------------------------------ | ----------------------------------- |
+| Políticas declarativas YAML                | Allocator custom / arenas globales  |
+| Hot RAM y selección semántica de víctimas  | Sustituir el swap del sistema       |
+| Warm como *trait* (`none` o Redis opcional)| Cluster distribuido transparente    |
+| Cold local segmentado y sinks persistentes | Mezclar con `PacketRepository`      |
+| Frozen e immediate para datos críticos     | UI completa de gestión              |
+| Métricas de presión y lifecycle            | PostgreSQL embebido en el Cold local|
 
 
-Redis **puede** enchufarse más adelante como `WarmStore`; las políticas no
-mencionan Redis, solo temperatura / política.
+Redis se puede enchufar como proveedor `WarmStore` mediante la feature `redis`;
+no es un nivel fijo ni obligatorio. Valkey puede usarse cuando sea compatible
+con el protocolo configurado.
 
 ## Separación de capas (innegociable)
 
@@ -81,7 +83,7 @@ JME no es el almacén de cola del scheduler.
 | ----------- | ----------------------------------- | -------------------------------------------- |
 | `hot`       | Solo RAM del proceso                | Último telegrama, posición, sesión           |
 | `warm`      | RAM + backend opcional              | Consultas frecuentes (carrier, orden activa) |
-| `cold`      | Almacén durable (p. ej. PostgreSQL) | Casi no se consulta en caliente              |
+| `cold`      | SSD local segmentado                 | Casi no se consulta en caliente              |
 | `frozen`    | Archivo / objeto comprimido         | Auditoría, histórico                         |
 
 
@@ -144,7 +146,7 @@ Paso 1; obligatorio no es.
 # No confundir con engine.memory.maximum_percent (RAM de paquetes).
 memory:
   warm:
-    backend: none          # none | redis (futuro)
+    backend: none          # none | redis
     # url_env: REDIS_URL   # solo si backend: redis
 
   defaults:
@@ -188,7 +190,7 @@ memory:
 - `ttl` / `flush` solo con unidades explícitas (`s`, `m`, `h`).
 - `immediate` / `persistent` + `priority: critical` no admiten eviction.
 - `deferred` exige `flush` > 0.
-- `warm.backend: redis` sin feature/URL → error de configuración (cuando exista).
+- `warm.backend: redis` sin feature/URL → error de configuración.
 - Clases desconocidas en `upsert` → error (no silencio).
 
 
@@ -197,8 +199,9 @@ memory:
 
 ```text
 HotStore     → RamStore (Paso 1)          [obligatorio]
-WarmStore    → Noop | Redis (feature)     [trait Paso 4; redis Paso 6]
-ColdStore    → Sql/writer existente       [Paso 2–3]
+WarmStore    → Noop | Redis (feature)     [Pasos 4 y 6]
+ColdStore    → Segmented LZ4              [Paso 8; mmap es lectura opcional]
+PersistSink  → JSONL / writer durable     [Pasos 2–3]
 FrozenStore  → File archive               [Paso 6]
 ```
 
@@ -224,7 +227,14 @@ Nombres orientativos (Prometheus):
 | Métrica                                 | Significado                     |
 | --------------------------------------- | ------------------------------- |
 | `jaiba_memory_hot_objects`              | Objetos en Hot                  |
+| `jaiba_memory_hot_bytes`                | Bytes JSON estimados en Hot     |
 | `jaiba_memory_warm_objects`             | Objetos en Warm (0 si noop)     |
+| `jaiba_memory_cold_objects`             | Objetos indexados en Cold local |
+| `jaiba_memory_cold_bytes`               | Bytes de segmentos Cold         |
+| `jaiba_memory_cold_max_disk_bytes`      | Cuota Cold; cero = ilimitada     |
+| `jaiba_memory_cold_quota_rejections_total` | Demotions rechazadas por cuota |
+| `jaiba_memory_cold_hits_total`          | Lecturas resueltas desde Cold   |
+| `jaiba_memory_cold_misses_total`        | Fallos de búsqueda en Cold      |
 | `jaiba_memory_pressure_ratio`           | Uso vs presupuesto JME          |
 | `jaiba_memory_evictions_total`          | Evictions por clase/prioridad   |
 | `jaiba_memory_persist_queue`            | Pendientes de flush deferred    |
@@ -249,6 +259,8 @@ políticas están mal (todo Hot eterno, o todo yendo a Cold).
 | **5** | Promote/demote + rebuild hooks                    | Métricas promotion/demotion                |
 | **6** | Frozen + Redis opcional                           | Solo cuando duela de verdad                |
 | **7** | Cablear JME al runtime                            | Context + presión + procesadores finos     |
+| **8** | Cold SSD segmentado + política semántica          | Reinicio, cuota, LZ4, métricas y docs      |
+| **9** | Compactación + manifiesto durable                 | Rename atómico y recuperación de espacio   |
 
 
 “No se pierde” = durabilidad del sink configurado (Postgres, etc.), no magia
@@ -279,7 +291,7 @@ sin almacenamiento.
 - [x] Separación DAG vs dominio documentada
 - [x] Temperaturas, políticas y prioridades definidas
 - [x] YAML de ejemplo de clases
-- [x] Hueco Warm/`none` (Redis futuro) sin dependencia
+- [x] Hueco Warm/`none` sin dependencia obligatoria de Redis
 - [x] Métricas y roadmap por pasos
 - [x] Aceptación del vocabulario (equipo / producto)
 
@@ -311,7 +323,7 @@ sin almacenamiento.
 ## Checklist Paso 4 (WarmStore)
 
 - [x] Trait `WarmStore` + `NoopWarmStore` (`warm.backend: none`)
-- [x] `MemoryPolicy.warm_backend`; `redis` rechazado hasta Paso 6
+- [x] `MemoryPolicy.warm_backend`; Redis habilitado por feature desde Paso 6
 - [x] `cache` + `temperature: warm` espeja a Warm; Hot miss → promote ligero
 - [x] Snapshot: `warm_objects`, `warm_hits` / `misses`, `promotions`
 - [x] Ejemplo [`examples/jme-warm-policy.yaml`](../examples/jme-warm-policy.yaml)
@@ -343,6 +355,20 @@ sin almacenamiento.
 - [x] Métricas `jaiba_memory_*` expuestas por Prometheus
 - [x] Persistencia Cold separada por flujo en `data/jme/<flow_id>/persist.jsonl`
 - [x] Ejemplo [`examples/jme-runtime-flow.yaml`](../examples/jme-runtime-flow.yaml)
+
+## Checklist Paso 8 (Cold Memory segmentado)
+
+- [x] `ColdStore` y backend append-only segmentado por clase
+- [x] Payload LZ4, checksum SHA-256, tombstones y rotación configurable
+- [x] Lectura `mmap` opcional e índice reconstruido durante apertura
+- [x] Cuota `max_disk_bytes` por flujo; rechazo seguro conserva el objeto Hot
+- [x] Recuperación de cola parcial sin publicar registros incompletos
+- [x] Degradación por inactividad, frecuencia, tamaño y prioridad
+- [x] Lectura Hot → Warm → Cold → Frozen → rebuild con promoción a Hot
+- [x] Métricas de objetos, bytes, hits y misses Cold
+- [ ] Compactación, manifiesto durable y publicación por rename atómico (Paso 9)
+- [x] Guía [`jme-cold-memory.md`](jme-cold-memory.md) y ejemplo
+  [`examples/jme-cold-policy.yaml`](../examples/jme-cold-policy.yaml)
 
 Uso rápido (Hot only):
 

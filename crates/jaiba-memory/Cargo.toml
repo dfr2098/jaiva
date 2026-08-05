@@ -11,6 +11,8 @@ default = []
 redis = ["dep:redis"]
 
 [dependencies]
+lz4_flex.workspace = true
+memmap2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

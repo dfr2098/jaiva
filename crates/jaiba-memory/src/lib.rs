@@ -1,10 +1,12 @@
-//! Jaiba Memory Engine (JME) — Paso 6: Frozen + Redis opcional.
+//! Jaiba Memory Engine (JME) — lifecycle Hot/Warm/Cold/Frozen.
 //!
 //! Ciclo de vida de **estado de dominio** (no paquetes del DAG).
 //! Ver `docs/priority-jme-memory-manager.md`.
 //!
-//! Redis: compilar con `--features redis` y `warm.backend: redis`.
+//! Cold local: segmentos LZ4 con lectura bajo demanda (`mmap` opcional).
+//! Redis opcional: compilar con `--features redis` y `warm.backend: redis`.
 
+mod cold;
 mod deferred;
 mod duration;
 mod error;
@@ -19,6 +21,7 @@ mod warm;
 #[cfg(feature = "redis")]
 mod redis_warm;
 
+pub use cold::{ColdEntry, ColdStore, NoopColdStore, RecordingColdStore, SegmentedColdStore};
 pub use error::MemoryError;
 pub use frozen::{
     FileFrozenStore, FrozenEntry, FrozenStore, NoopFrozenStore, RecordingFrozenStore,
@@ -26,7 +29,8 @@ pub use frozen::{
 pub use hot::{HotEntry, HotMetrics, HotStore};
 pub use manager::{MemoryManager, MemorySnapshot};
 pub use policy::{
-    ClassPolicy, FrozenBackend, MemoryPolicy, Policy, Priority, Temperature, WarmBackend,
+    ClassPolicy, ColdBackend, FrozenBackend, MemoryPolicy, Policy, Priority, Temperature,
+    WarmBackend,
 };
 pub use rebuild::{MapRebuildHook, RebuildHook};
 pub use sink::{ImmediateSink, JsonlFileSink, PersistRecord, RecordingSink};

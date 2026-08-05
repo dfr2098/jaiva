@@ -479,6 +479,27 @@ ya escucha, se reutiliza sin segundo sidecar. Auth local `none` en loopback.
 **Prueba:** `scripts/prepare-desktop-sidecar.sh` + `npm run desktop:dev` →
 Motor · local → Arrancar → health en `:9090`.
 
+### Compatibilidad Windows nativo + WSL (2026-08-05)
+
+**Problema:** el flujo desktop dependía de `bash`, `env` y nombres de binario
+sin `.exe`; Tauri no encontraba el sidecar Windows. Además, `sync_all()` sobre
+un temporal abierto solo para lectura fallaba con `os error 5`, y Clippy
+rechazaba `Dialect::SqlServer` cuando el feature estaba desactivado.
+
+**Cambio:** preparación/lanzamiento multiplataforma en
+`scripts/prepare-desktop-sidecar.mjs` y `scripts/run-desktop.mjs`; resolución
+de `jaiba.exe` en `sidecar.rs`; temporal `frozen` abierto para escritura;
+`Dialect::SqlServer` condicionado a tests/feature; `*.sh` fijado a LF mediante
+`.gitattributes`. Guía operativa:
+[windows-native-and-wsl.md](windows-native-and-wsl.md).
+
+**Validación Windows:** 138 tests, Clippy `-D warnings`, SQL Server opcional,
+Tauri `cargo check`, typecheck y build Vite correctos. El sidecar se prepara
+como `jaiba-x86_64-pc-windows-msvc.exe`.
+
+**Validación WSL2:** 138 tests y preparación del sidecar Linux correctos. El
+check Tauri requiere instalar GTK/WebKitGTK en la distribución.
+
 ## Fase 10B — TLS, roles y proyectos
 
 **Problema:** un solo Bearer sin roles; HTTP sin TLS nativo; sin alcance por flujo.
@@ -521,6 +542,32 @@ typecheck UI) y `.github/workflows/phase8-integration.yml` (manual / label
 el CI de PR no levanta contenedores.
 
 **Prueba:** push/PR dispara CI; localmente los mismos comandos de `docs/ci.md`.
+
+## JME Paso 8 — Cold Memory segmentado (2026-08-05)
+
+**Problema:** JME podía degradar a Warm/Frozen o persistir mediante un sink,
+pero no tenía un nivel SSD local eficiente y consciente de objetos entre RAM y
+la base autoritativa.
+
+**Cambio:** `jaiba-memory` incorpora `ColdStore` y `SegmentedColdStore`,
+segmentos append-only por clase, compresión LZ4, checksum SHA-256, tombstones,
+rotación, reconstrucción del índice y lectura bajo demanda (`mmap` opcional). El manager consulta Hot →
+Warm → Cold → Frozen → rebuild y selecciona víctimas por prioridad, frecuencia,
+tamaño e inactividad (`demote_after`). El runtime aísla el directorio Cold por
+`flow_id`, aplica `max_disk_bytes` por flujo y publica métricas Cold.
+
+**Decisión:** Cold es caché local recuperable, no fuente autoritativa. Los datos
+críticos conservan `immediate`/`persistent`/`deferred` o un rebuild desde la
+base. Si falla una degradación o se agota la cuota, el objeto vuelve a Hot.
+
+**Prueba:** `cargo test -p jaiba-memory`, pruebas de métricas del runtime y suite
+completa del workspace. Se cubren reinicio, rotación, cola parcial, tombstones,
+promoción, degradación por inactividad y rechazo seguro por cuota.
+
+**Limitación:** la compactación, manifiestos durables y publicación mediante
+temporal + rename atómico quedan para el Paso 9. El esquema YAML actual también
+conserva compatibilidad histórica y aún agrupa parte de residencia y
+durabilidad dentro de `policy`; su separación será una migración versionada.
 
 ## Trabajo posterior a la fase 9 / 10A–10C
 

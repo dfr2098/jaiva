@@ -14,10 +14,12 @@ un núcleo DAG, un runtime desacoplado, plugins y una UI sin lógica de negocio.
 - [Bitácora técnica y memoria de implementación](docs/implementation-notes.md)
 - [Configuración](docs/configuration.md)
 - [Procesadores](docs/processors.md)
+- [JME Cold Memory: objetos RAM → SSD segmentado](docs/jme-cold-memory.md)
 - [AI Data Prep (Rust, sin train)](docs/ai-data-prep.md)
 - [Fase 9A: endurecimiento admin](docs/priority-9a-admin-hardening.md)
 - [Fase 9B: desktop Tauri](docs/priority-9b-tauri-desktop.md)
 - [Fase 10A: sidecar Tauri local/remoto](docs/priority-10a-tauri-sidecar.md)
+- [Desarrollo en Windows nativo y WSL](docs/windows-native-and-wsl.md)
 - [Fase 10B: TLS, roles y proyectos](docs/priority-10b-security.md)
 - [Fase 10C: flujo de planta AI Prep](docs/priority-10c-plant-prep.md)
 - [Operación y observabilidad](docs/operations.md)
@@ -103,6 +105,8 @@ consumir memoria sin control.
 - API administrativa autenticada para control, provenance y dead-letter.
 - Límite global estricto, workers CPU/bloqueantes y orden por partición.
 - Interfaz opcional `visualisa_jaiva` en un contenedor separado.
+- Estado de dominio JME con Hot local, Warm distribuido opcional, Cold SSD y
+  Frozen; Cold usa segmentos LZ4 y lectura bajo demanda (`mmap` opcional).
 
 ## Ejecutar
 

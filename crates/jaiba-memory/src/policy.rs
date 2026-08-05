@@ -26,7 +26,7 @@ impl Policy {
         }
     }
 
-    /// Paso 6: políticas de lifecycle (Warm/Frozen/rebuild son enchufes).
+    /// Políticas implementadas; Warm, Cold, Frozen y rebuild son enchufes.
     fn supported_now(self) -> bool {
         matches!(
             self,
@@ -61,6 +61,14 @@ pub enum WarmBackend {
     None,
     /// Requiere feature `redis` + URL en env al abrir el manager.
     Redis,
+}
+
+/// Backend Cold declarado en YAML (`memory.cold.backend`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColdBackend {
+    #[default]
+    None,
+    Segmented,
 }
 
 /// Backend Frozen declarado en YAML (`memory.frozen.backend`).
@@ -100,6 +108,8 @@ pub struct ClassPolicy {
     pub ttl: Option<Duration>,
     pub flush: Option<Duration>,
     pub priority: Priority,
+    /// Inactividad antes de degradar desde Hot durante mantenimiento.
+    pub demote_after: Option<Duration>,
     /// Token opcional para [`crate::RebuildHook`] (solo `cache`).
     pub rebuild: Option<String>,
 }
@@ -113,6 +123,11 @@ pub struct MemoryPolicy {
     /// Nombre de variable de entorno con URL Redis (default `REDIS_URL`).
     pub warm_url_env: String,
     pub warm_key_prefix: String,
+    pub cold_backend: ColdBackend,
+    pub cold_path: Option<PathBuf>,
+    pub cold_segment_max_bytes: u64,
+    pub cold_max_disk_bytes: Option<u64>,
+    pub cold_mmap: bool,
     pub frozen_backend: FrozenBackend,
     pub frozen_path: Option<PathBuf>,
     pub classes: BTreeMap<String, ClassPolicy>,
@@ -136,6 +151,8 @@ struct FileMemory {
     classes: BTreeMap<String, FileClass>,
     #[serde(default)]
     warm: Option<FileWarm>,
+    #[serde(default)]
+    cold: Option<FileCold>,
     #[serde(default)]
     frozen: Option<FileFrozen>,
 }
@@ -161,6 +178,34 @@ fn default_warm_backend() -> String {
 }
 
 #[derive(Debug, Deserialize)]
+struct FileCold {
+    #[serde(default = "default_cold_backend")]
+    backend: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    segment_max_bytes: Option<u64>,
+    #[serde(default)]
+    max_disk_bytes: Option<u64>,
+    #[serde(default = "default_true")]
+    mmap: bool,
+    #[serde(default = "default_cold_compression")]
+    compression: String,
+}
+
+fn default_cold_backend() -> String {
+    "none".to_owned()
+}
+
+fn default_cold_compression() -> String {
+    "lz4".to_owned()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
 struct FileFrozen {
     #[serde(default = "default_frozen_backend")]
     backend: String,
@@ -183,6 +228,8 @@ struct FileClass {
     priority: Option<Priority>,
     #[serde(default)]
     flush: Option<String>,
+    #[serde(default)]
+    demote_after: Option<String>,
     #[serde(default)]
     rebuild: Option<String>,
 }
@@ -255,6 +302,63 @@ impl MemoryPolicy {
             }
         };
 
+        let (cold_backend, cold_path, cold_segment_max_bytes, cold_max_disk_bytes, cold_mmap) =
+            match file.cold.as_ref() {
+                None => (ColdBackend::None, None, 64 * 1024 * 1024, None, true),
+                Some(cold) => {
+                    let backend = cold.backend.trim().to_ascii_lowercase();
+                    match backend.as_str() {
+                        "" | "none" => (ColdBackend::None, None, 64 * 1024 * 1024, None, cold.mmap),
+                        "segmented" | "file" => {
+                            let path = cold
+                                .path
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|path| !path.is_empty())
+                                .ok_or_else(|| {
+                                    MemoryError::Configuration(
+                                        "cold.backend 'segmented' requiere path".to_owned(),
+                                    )
+                                })?;
+                            if !cold.compression.trim().eq_ignore_ascii_case("lz4") {
+                                return Err(MemoryError::Configuration(format!(
+                                    "cold.compression '{}' no soportado (lz4)",
+                                    cold.compression
+                                )));
+                            }
+                            let segment_max_bytes =
+                                cold.segment_max_bytes.unwrap_or(64 * 1024 * 1024);
+                            if segment_max_bytes < 4096 {
+                                return Err(MemoryError::Configuration(
+                                    "cold.segment_max_bytes debe ser >= 4096".to_owned(),
+                                ));
+                            }
+                            if cold
+                                .max_disk_bytes
+                                .is_some_and(|limit| limit < segment_max_bytes)
+                            {
+                                return Err(MemoryError::Configuration(
+                                    "cold.max_disk_bytes debe ser >= cold.segment_max_bytes"
+                                        .to_owned(),
+                                ));
+                            }
+                            (
+                                ColdBackend::Segmented,
+                                Some(PathBuf::from(path)),
+                                segment_max_bytes,
+                                cold.max_disk_bytes,
+                                cold.mmap,
+                            )
+                        }
+                        other => {
+                            return Err(MemoryError::Configuration(format!(
+                                "cold.backend '{other}' no soportado (none|segmented)"
+                            )));
+                        }
+                    }
+                }
+            };
+
         let default_priority = file.defaults.priority.unwrap_or(Priority::Normal);
         let max_entries = file.max_entries.unwrap_or(10_000).max(1);
         let max_pending_deferred = file.max_pending_deferred.unwrap_or(1_024).max(1);
@@ -289,6 +393,10 @@ impl MemoryPolicy {
                 Some(raw) => Some(parse_duration(raw)?),
                 None => None,
             };
+            let demote_after = match class.demote_after.as_deref() {
+                Some(raw) => Some(parse_duration(raw)?),
+                None => None,
+            };
             if matches!(class.policy, Policy::Volatile | Policy::Cache) && ttl.is_none() {
                 return Err(MemoryError::Configuration(format!(
                     "clase '{name}': policy {} requiere ttl (p. ej. 5m)",
@@ -304,6 +412,22 @@ impl MemoryPolicy {
             {
                 return Err(MemoryError::Configuration(format!(
                     "clase '{name}': temperature frozen requiere memory.frozen.backend: file"
+                )));
+            }
+            if matches!(class.policy, Policy::Cache)
+                && matches!(temperature, Temperature::Cold)
+                && matches!(cold_backend, ColdBackend::None)
+            {
+                return Err(MemoryError::Configuration(format!(
+                    "clase '{name}': cache con temperature cold requiere memory.cold.backend: segmented"
+                )));
+            }
+            if demote_after.is_some()
+                && (!matches!(class.policy, Policy::Cache)
+                    || matches!(temperature, Temperature::Hot))
+            {
+                return Err(MemoryError::Configuration(format!(
+                    "clase '{name}': demote_after requiere policy cache y temperatura warm|cold|frozen"
                 )));
             }
             let priority = class.priority.unwrap_or(match class.policy {
@@ -337,6 +461,7 @@ impl MemoryPolicy {
                     ttl,
                     flush,
                     priority,
+                    demote_after,
                     rebuild,
                 },
             );
@@ -355,6 +480,11 @@ impl MemoryPolicy {
             warm_backend,
             warm_url_env,
             warm_key_prefix,
+            cold_backend,
+            cold_path,
+            cold_segment_max_bytes,
+            cold_max_disk_bytes,
+            cold_mmap,
             frozen_backend,
             frozen_path,
             classes,
@@ -457,6 +587,74 @@ memory:
             policy.frozen_path.as_deref(),
             Some(std::path::Path::new("/tmp/jme-frozen"))
         );
+    }
+
+    #[test]
+    fn loads_segmented_cold_backend_and_idle_policy() {
+        let policy = MemoryPolicy::from_yaml(
+            r#"
+memory:
+  cold:
+    backend: segmented
+    path: data/jme/cold
+    segment_max_bytes: 8192
+    max_disk_bytes: 1048576
+    compression: lz4
+    mmap: false
+  classes:
+    carrier:
+      policy: cache
+      temperature: cold
+      ttl: 24h
+      demote_after: 30m
+"#,
+        )
+        .unwrap();
+        assert_eq!(policy.cold_backend, ColdBackend::Segmented);
+        assert_eq!(policy.cold_segment_max_bytes, 8192);
+        assert_eq!(policy.cold_max_disk_bytes, Some(1_048_576));
+        assert!(!policy.cold_mmap);
+        assert_eq!(
+            policy.class("carrier").unwrap().demote_after,
+            Some(Duration::from_secs(30 * 60))
+        );
+    }
+
+    #[test]
+    fn cold_disk_quota_cannot_be_smaller_than_a_segment() {
+        let error = MemoryPolicy::from_yaml(
+            r#"
+memory:
+  cold:
+    backend: segmented
+    path: data/jme/cold
+    segment_max_bytes: 8192
+    max_disk_bytes: 4096
+  classes:
+    carrier:
+      policy: cache
+      temperature: cold
+      ttl: 1h
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("max_disk_bytes"));
+    }
+
+    #[test]
+    fn cache_cold_requires_backend() {
+        let error = MemoryPolicy::from_yaml(
+            r#"
+memory:
+  classes:
+    carrier:
+      policy: cache
+      temperature: cold
+      ttl: 24h
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("cold.backend"));
     }
 
     #[test]

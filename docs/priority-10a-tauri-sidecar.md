@@ -23,6 +23,20 @@ cargo build -p jaiba-cli
 scripts/prepare-desktop-sidecar.sh
 ```
 
+En Windows nativo usa PowerShell o CMD; los scripts de npm detectan la
+plataforma y preparan automáticamente el nombre `.exe` requerido por Tauri:
+
+```powershell
+cargo build -p jaiba-cli --bin jaiba
+cd apps/jaiba-ui
+npm run desktop:dev
+```
+
+La preparación multiplataforma también puede ejecutarse directamente con
+`node scripts/prepare-desktop-sidecar.mjs` desde la raíz del repositorio. La
+guía completa de plataforma y diagnóstico está en
+[windows-native-and-wsl.md](windows-native-and-wsl.md).
+
 Variables útiles:
 
 | Variable | Efecto |
@@ -76,9 +90,11 @@ cd apps/jaiba-ui
 npm run desktop:build
 ```
 
-`prepare-desktop-sidecar.sh release` copia `target/release/jaiba` a
-`src-tauri/binaries/jaiba-<target-triple>` (requerido por `bundle.externalBin`).
-El YAML local va en `bundle.resources`.
+`npm run desktop:build` llama al preparador Node en modo `release`. En Linux
+copia `target/release/jaiba` a `src-tauri/binaries/jaiba-<target-triple>`; en
+Windows copia `target/release/jaiba.exe` y conserva `.exe` en el destino. Ese
+nombre es requerido por `bundle.externalBin`. El YAML local va en
+`bundle.resources`.
 
 ## Comandos Tauri
 
@@ -100,8 +116,16 @@ apps/jaiba-ui/src-tauri/
   src/lib.rs           # setup + shutdown
   src/sidecar.rs       # EngineManager
   resources/desktop-local-flow.yaml
-  binaries/jaiba-<triple>   # generado, no versionado
+  binaries/jaiba-<triple>[.exe]   # generado, no versionado
 ```
+
+Los scripts que implementan esta ruta son:
+
+| Archivo | Responsabilidad |
+|---|---|
+| `scripts/prepare-desktop-sidecar.mjs` | Detectar plataforma/triple y copiar el sidecar |
+| `scripts/run-desktop.mjs` | Lanzar Tauri o el binario desktop sin comandos Unix |
+| `scripts/prepare-desktop-sidecar.sh` | Wrapper Linux/CI compatible con el flujo anterior |
 
 ## Seguridad
 

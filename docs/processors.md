@@ -299,6 +299,40 @@ config:
 
 El guardado debe colocarse después del commit del destino.
 
+## Estado de dominio JME
+
+Estos procesadores requieren `engine.domain_memory.enabled: true` y una
+`policy_file` válida. La clase debe existir en esa política.
+
+```yaml
+type: memory_upsert
+config:
+  class: carrier
+  id_attribute: carrier.id
+  # value_attribute: carrier.json  # opcional; si falta usa records[0]
+```
+
+```yaml
+type: memory_get
+config:
+  class: carrier
+  id_attribute: carrier.id
+  attribute: memory.value
+  miss_as_null: false
+```
+
+```yaml
+type: memory_remove
+config:
+  class: carrier
+  id_attribute: carrier.id
+```
+
+`memory_get` consulta Hot → Warm → Cold → Frozen → rebuild y promueve a Hot un
+objeto encontrado fuera de RAM. `memory_remove` escribe también el tombstone de
+Cold para que una eliminación sobreviva al reinicio. Detalle en
+[jme-cold-memory.md](jme-cold-memory.md).
+
 ## `log_records`
 
 Registra contenido estructurado o codificado mediante `tracing`. Es útil para

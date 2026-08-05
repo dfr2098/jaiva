@@ -17,6 +17,7 @@ use serde_json::Value;
 pub(crate) enum Dialect {
     Postgres,
     MySql,
+    #[cfg(any(test, feature = "sqlserver-driver"))]
     SqlServer,
 }
 
@@ -39,6 +40,7 @@ impl Dialect {
             parts.push(match self {
                 Dialect::Postgres => format!("\"{segment}\""),
                 Dialect::MySql => format!("`{segment}`"),
+                #[cfg(any(test, feature = "sqlserver-driver"))]
                 Dialect::SqlServer => format!("[{segment}]"),
             });
         }
@@ -51,7 +53,9 @@ impl Dialect {
     fn like_keyword(self) -> &'static str {
         match self {
             Dialect::Postgres => "ILIKE",
-            Dialect::MySql | Dialect::SqlServer => "LIKE",
+            Dialect::MySql => "LIKE",
+            #[cfg(any(test, feature = "sqlserver-driver"))]
+            Dialect::SqlServer => "LIKE",
         }
     }
 
@@ -60,6 +64,7 @@ impl Dialect {
             Dialect::Postgres => format!("${index}"),
             Dialect::MySql => "?".to_owned(),
             // Tiberius binds as `@P1`, `@P2`, …
+            #[cfg(any(test, feature = "sqlserver-driver"))]
             Dialect::SqlServer => format!("@P{index}"),
         }
     }
@@ -93,6 +98,7 @@ pub(crate) fn compile(spec: &QuerySpec, dialect: Dialect) -> Result<CompiledQuer
 
     // SQL Server no admite `LIMIT`; el tope va como `TOP (n)` tras SELECT.
     let top = match (dialect, spec.limit) {
+        #[cfg(any(test, feature = "sqlserver-driver"))]
         (Dialect::SqlServer, Some(limit)) => format!("TOP ({limit}) "),
         _ => String::new(),
     };
@@ -153,8 +159,13 @@ pub(crate) fn compile(spec: &QuerySpec, dialect: Dialect) -> Result<CompiledQuer
 
     // `limit` es un entero sin signo, por lo que su interpolación es segura.
     // SQL Server ya lo aplicó con `TOP` arriba.
+    let uses_top = match dialect {
+        Dialect::Postgres | Dialect::MySql => false,
+        #[cfg(any(test, feature = "sqlserver-driver"))]
+        Dialect::SqlServer => true,
+    };
     if let Some(limit) = spec.limit
-        && !matches!(dialect, Dialect::SqlServer)
+        && !uses_top
     {
         statement.push_str(&format!(" LIMIT {limit}"));
     }

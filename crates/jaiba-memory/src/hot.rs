@@ -1,4 +1,7 @@
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use serde_json::Value;
 
@@ -14,11 +17,15 @@ pub struct HotEntry {
     pub priority: Priority,
     pub expires_at: Option<Instant>,
     pub last_access: Instant,
+    pub access_count: u64,
+    pub demote_after: Option<Duration>,
+    pub size_bytes: usize,
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct HotMetrics {
     pub objects: u64,
+    pub bytes: u64,
     pub evictions: u64,
     pub expired_removals: u64,
 }
@@ -53,6 +60,11 @@ impl HotStore {
     pub fn metrics(&self) -> HotMetrics {
         HotMetrics {
             objects: self.entries.len() as u64,
+            bytes: self
+                .entries
+                .iter()
+                .map(|(key, entry)| key.len().saturating_add(entry.size_bytes) as u64)
+                .sum(),
             evictions: self.evictions,
             expired_removals: self.expired_removals,
         }
@@ -81,6 +93,7 @@ impl HotStore {
             }
         }
         let expires_at = class.ttl.map(|ttl| now + ttl);
+        let size_bytes = serde_json::to_vec(&value).map_or(0, |bytes| bytes.len());
         self.entries.insert(
             key,
             HotEntry {
@@ -89,6 +102,9 @@ impl HotStore {
                 priority: class.priority,
                 expires_at,
                 last_access: now,
+                access_count: 1,
+                demote_after: class.demote_after,
+                size_bytes,
             },
         );
         Ok(evicted)
@@ -103,6 +119,7 @@ impl HotStore {
             return None;
         }
         entry.last_access = now;
+        entry.access_count = entry.access_count.saturating_add(1);
         Some(entry.value.clone())
     }
 
@@ -120,6 +137,48 @@ impl HotStore {
         self.evict_one()
     }
 
+    /// Extrae hasta `limit` entradas cuya ventana de inactividad venció.
+    pub fn reclaim_idle(&mut self, now: Instant, limit: usize) -> Vec<(String, HotEntry)> {
+        self.purge_expired(now);
+        let mut candidates = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| {
+                entry.priority < Priority::Critical
+                    && entry.demote_after.is_some_and(|idle| {
+                        now.checked_duration_since(entry.last_access)
+                            .is_some_and(|elapsed| elapsed >= idle)
+                    })
+            })
+            .map(|(key, entry)| {
+                (
+                    key.clone(),
+                    entry.priority,
+                    entry.access_count,
+                    entry.size_bytes,
+                    entry.last_access,
+                )
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| {
+            left.1
+                .cmp(&right.1)
+                .then_with(|| left.2.cmp(&right.2))
+                .then_with(|| right.3.cmp(&left.3))
+                .then_with(|| left.4.cmp(&right.4))
+        });
+        candidates
+            .into_iter()
+            .take(limit)
+            .filter_map(|(key, _, _, _, _)| {
+                self.entries.remove(&key).map(|entry| {
+                    self.evictions += 1;
+                    (key, entry)
+                })
+            })
+            .collect()
+    }
+
     fn purge_expired(&mut self, now: Instant) {
         let before = self.entries.len();
         self.entries
@@ -135,6 +194,8 @@ impl HotStore {
             .min_by(|(_, left), (_, right)| {
                 left.priority
                     .cmp(&right.priority)
+                    .then_with(|| left.access_count.cmp(&right.access_count))
+                    .then_with(|| right.size_bytes.cmp(&left.size_bytes))
                     .then_with(|| left.last_access.cmp(&right.last_access))
             })
             .map(|(key, _)| key.clone())?;

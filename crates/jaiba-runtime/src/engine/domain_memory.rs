@@ -77,8 +77,9 @@ pub fn open_domain_memory(
             config.policy_file.display()
         ))
     })?;
-    let policy = MemoryPolicy::from_yaml(&yaml)
+    let mut policy = MemoryPolicy::from_yaml(&yaml)
         .map_err(|error| FlowError::Configuration(format!("domain_memory policy: {error}")))?;
+    scope_cold_path(&mut policy, flow_id);
     let manager = if policy.requires_persist_sink() {
         let path = persist_sink_path(flow_id);
         if let Some(parent) = path.parent() {
@@ -97,7 +98,23 @@ pub fn open_domain_memory(
 fn persist_sink_path(flow_id: &str) -> PathBuf {
     let data_dir =
         PathBuf::from(std::env::var("JAIBA_DATA_DIR").unwrap_or_else(|_| "data".to_owned()));
-    let safe_flow_id: String = flow_id
+    let safe_flow_id = safe_flow_id(flow_id);
+    data_dir
+        .join("jme")
+        .join(safe_flow_id)
+        .join("persist.jsonl")
+}
+
+/// En runtime, `memory.cold.path` es un directorio base. Cada flujo recibe un
+/// subdirectorio propio para evitar writers concurrentes sobre los segmentos.
+fn scope_cold_path(policy: &mut MemoryPolicy, flow_id: &str) {
+    if let Some(base) = policy.cold_path.take() {
+        policy.cold_path = Some(base.join(safe_flow_id(flow_id)));
+    }
+}
+
+fn safe_flow_id(flow_id: &str) -> String {
+    flow_id
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') {
@@ -106,11 +123,7 @@ fn persist_sink_path(flow_id: &str) -> PathBuf {
                 '_'
             }
         })
-        .collect();
-    data_dir
-        .join("jme")
-        .join(safe_flow_id)
-        .join("persist.jsonl")
+        .collect()
 }
 
 #[cfg(test)]
@@ -169,5 +182,28 @@ memory:
         }
         handle.notify_pressure_budget(4).unwrap();
         assert_eq!(handle.lock().unwrap().snapshot().hot_objects, 0);
+    }
+
+    #[test]
+    fn cold_path_is_scoped_and_flow_id_is_sanitized() {
+        let mut policy = MemoryPolicy::from_yaml(
+            r#"
+memory:
+  cold:
+    backend: segmented
+    path: data/jme/cold
+  classes:
+    carrier:
+      policy: cache
+      temperature: cold
+      ttl: 1h
+"#,
+        )
+        .unwrap();
+        scope_cold_path(&mut policy, "plant/a 1");
+        assert_eq!(
+            policy.cold_path,
+            Some(PathBuf::from("data/jme/cold/plant_a_1"))
+        );
     }
 }

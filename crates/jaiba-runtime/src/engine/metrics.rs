@@ -611,9 +611,30 @@ impl FlowMetrics {
                 "# HELP jaiba_memory_hot_objects JME objects in Hot.\n\
                  # TYPE jaiba_memory_hot_objects gauge\n\
                  jaiba_memory_hot_objects {}\n\
+                 # HELP jaiba_memory_hot_bytes Estimated JME bytes in Hot.\n\
+                 # TYPE jaiba_memory_hot_bytes gauge\n\
+                 jaiba_memory_hot_bytes {}\n\
                  # HELP jaiba_memory_warm_objects JME objects in Warm.\n\
                  # TYPE jaiba_memory_warm_objects gauge\n\
                  jaiba_memory_warm_objects {}\n\
+                 # HELP jaiba_memory_cold_objects JME objects in segmented Cold.\n\
+                 # TYPE jaiba_memory_cold_objects gauge\n\
+                 jaiba_memory_cold_objects {}\n\
+                 # HELP jaiba_memory_cold_bytes JME bytes used by Cold segments.\n\
+                 # TYPE jaiba_memory_cold_bytes gauge\n\
+                 jaiba_memory_cold_bytes {}\n\
+                 # HELP jaiba_memory_cold_max_disk_bytes Configured JME Cold disk quota; zero means unlimited.\n\
+                 # TYPE jaiba_memory_cold_max_disk_bytes gauge\n\
+                 jaiba_memory_cold_max_disk_bytes {}\n\
+                 # HELP jaiba_memory_cold_quota_rejections_total JME Cold writes rejected by disk quota.\n\
+                 # TYPE jaiba_memory_cold_quota_rejections_total counter\n\
+                 jaiba_memory_cold_quota_rejections_total {}\n\
+                 # HELP jaiba_memory_cold_hits_total JME Cold read hits.\n\
+                 # TYPE jaiba_memory_cold_hits_total counter\n\
+                 jaiba_memory_cold_hits_total {}\n\
+                 # HELP jaiba_memory_cold_misses_total JME Cold read misses.\n\
+                 # TYPE jaiba_memory_cold_misses_total counter\n\
+                 jaiba_memory_cold_misses_total {}\n\
                  # HELP jaiba_memory_frozen_objects JME objects in Frozen.\n\
                  # TYPE jaiba_memory_frozen_objects gauge\n\
                  jaiba_memory_frozen_objects {}\n\
@@ -636,7 +657,14 @@ impl FlowMetrics {
                  # TYPE jaiba_memory_deferred_failures_total counter\n\
                  jaiba_memory_deferred_failures_total {}\n",
                 jme.hot_objects,
+                jme.hot_bytes,
                 jme.warm_objects,
+                jme.cold_objects,
+                jme.cold_bytes,
+                jme.cold_max_disk_bytes,
+                jme.cold_quota_rejections,
+                jme.cold_hits,
+                jme.cold_misses,
                 jme.frozen_objects,
                 jme.evictions,
                 jme.persist_queue,

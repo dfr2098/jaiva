@@ -85,8 +85,10 @@ Jaiva detecta el menor valor entre la RAM física y el límite cgroup. De forma
 predeterminada reserva el 42% para paquetes. Las reservas se liberan
 automáticamente cuando el paquete deja de estar en cola o en procesamiento.
 
-El ciclo de vida de **estado de dominio** (Hot/Warm/Cold/Frozen) es una capa
-paralela documentada en
+El ciclo de vida de **estado de dominio** es una capa paralela: Hot es RAM
+local, Warm es distribución opcional, Cold es caché SSD y Frozen es archivo de
+auditoría. No forman una escalera de durabilidad obligatoria. El diseño se
+documenta en
 [`priority-jme-memory-manager.md`](priority-jme-memory-manager.md); no sustituye
 este limiter ni el `PacketRepository`.
 

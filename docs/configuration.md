@@ -78,6 +78,7 @@ engine:
   activas durante el apagado.
 - `shutdown.force_after_timeout`: permite cancelar la ejecución al agotar el
   plazo; los paquetes persistidos se recuperan después.
+
 - `circuit_breaker.failure_threshold`: errores consecutivos antes de abrir el
   circuito de esa conexión.
 - `circuit_breaker.open_seconds`: espera antes de probar el destino otra vez.
@@ -90,6 +91,46 @@ engine:
   automáticamente la mitad de los CPU visibles.
 - `workers.blocking_threads`: concurrencia para archivo y drivers bloqueantes;
   cero selecciona automáticamente aproximadamente una cuarta parte.
+
+### Memoria de dominio JME
+
+`engine.memory` limita la RAM de paquetes. `engine.domain_memory` habilita, de
+forma independiente, el ciclo de vida de objetos de negocio:
+
+```yaml
+engine:
+  domain_memory:
+    enabled: true
+    policy_file: examples/jme-cold-policy.yaml
+```
+
+El archivo de política define clases, TTL, prioridad y niveles Hot, Warm, Cold
+y Frozen. Para Cold local segmentado:
+
+```yaml
+memory:
+  cold:
+    backend: segmented
+    path: data/jme/cold
+    segment_max_bytes: 67108864
+    max_disk_bytes: 10737418240
+    compression: lz4
+    mmap: true
+  classes:
+    carrier:
+      policy: cache
+      temperature: cold
+      demote_after: 30m
+      ttl: 24h
+```
+
+Consulta [jme-cold-memory.md](jme-cold-memory.md) para el formato, recuperación,
+métricas y límites de durabilidad.
+
+`max_disk_bytes` limita el espacio Cold del flujo (el runtime crea un
+subdirectorio por `flow_id`). Si una degradación excedería la cuota, JME no
+publica el registro y conserva el objeto en Hot. Este límite no sustituye la
+compactación: las versiones antiguas siguen ocupando espacio hasta el Paso 9.
 
 Los eventos continúan apareciendo en consola y se escriben de forma no
 bloqueante en archivos. La depuración solo elimina archivos `jaiva.log` o con

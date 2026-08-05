@@ -3,21 +3,25 @@ use std::time::Instant;
 use serde_json::Value;
 
 use crate::{
+    cold::{ColdEntry, ColdStore, NoopColdStore, SegmentedColdStore},
     deferred::DeferredQueue,
     error::MemoryError,
     frozen::{FileFrozenStore, FrozenEntry, FrozenStore, NoopFrozenStore},
     hot::{HotEntry, HotMetrics, HotStore},
-    policy::{ClassPolicy, FrozenBackend, MemoryPolicy, Policy, Temperature, WarmBackend},
+    policy::{
+        ClassPolicy, ColdBackend, FrozenBackend, MemoryPolicy, Policy, Temperature, WarmBackend,
+    },
     rebuild::RebuildHook,
     sink::{ImmediateSink, PersistRecord},
     warm::{NoopWarmStore, WarmEntry, WarmStore},
 };
 
-/// Motor JME Paso 6: Hot/Warm/Frozen + promote/demote/rebuild + Redis opcional.
+/// Motor JME: Hot/Warm/Cold/Frozen + promote/demote/rebuild.
 pub struct MemoryManager {
     policy: MemoryPolicy,
     hot: HotStore,
     warm: Box<dyn WarmStore>,
+    cold: Box<dyn ColdStore>,
     frozen: Box<dyn FrozenStore>,
     persist: Option<Box<dyn ImmediateSink>>,
     rebuild: Option<Box<dyn RebuildHook>>,
@@ -29,6 +33,9 @@ pub struct MemoryManager {
     warm_puts: u64,
     warm_hits: u64,
     warm_misses: u64,
+    cold_puts: u64,
+    cold_hits: u64,
+    cold_misses: u64,
     frozen_puts: u64,
     frozen_hits: u64,
     frozen_misses: u64,
@@ -44,13 +51,22 @@ pub struct MemoryManager {
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct MemorySnapshot {
     pub hot_objects: u64,
+    pub hot_bytes: u64,
     pub warm_objects: u64,
+    pub cold_objects: u64,
     pub frozen_objects: u64,
     pub warm_backend: &'static str,
+    pub cold_backend: &'static str,
     pub frozen_backend: &'static str,
     pub warm_puts: u64,
     pub warm_hits: u64,
     pub warm_misses: u64,
+    pub cold_puts: u64,
+    pub cold_hits: u64,
+    pub cold_misses: u64,
+    pub cold_bytes: u64,
+    pub cold_max_disk_bytes: u64,
+    pub cold_quota_rejections: u64,
     pub frozen_puts: u64,
     pub frozen_hits: u64,
     pub frozen_misses: u64,
@@ -84,6 +100,7 @@ impl MemoryManager {
             policy,
             None,
             Box::new(NoopWarmStore),
+            Box::new(NoopColdStore),
             None,
             Box::new(NoopFrozenStore),
         ))
@@ -95,8 +112,9 @@ impl MemoryManager {
             return Err(MemoryError::MissingImmediateSink);
         }
         let warm = Self::build_warm_backend(&policy)?;
+        let cold = Self::build_cold_backend(&policy)?;
         let frozen = Self::build_frozen_backend(&policy)?;
-        Ok(Self::build(policy, None, warm, None, frozen))
+        Ok(Self::build(policy, None, warm, cold, None, frozen))
     }
 
     pub fn open_with_sink(
@@ -104,11 +122,13 @@ impl MemoryManager {
         sink: impl ImmediateSink + 'static,
     ) -> Result<Self, MemoryError> {
         let warm = Self::build_warm_backend(&policy)?;
+        let cold = Self::build_cold_backend(&policy)?;
         let frozen = Self::build_frozen_backend(&policy)?;
         Ok(Self::build(
             policy,
             Some(Box::new(sink)),
             warm,
+            cold,
             None,
             frozen,
         ))
@@ -119,6 +139,7 @@ impl MemoryManager {
             policy,
             Some(Box::new(sink)),
             Box::new(NoopWarmStore),
+            Box::new(NoopColdStore),
             None,
             Box::new(NoopFrozenStore),
         )
@@ -136,6 +157,24 @@ impl MemoryManager {
             policy,
             None,
             Box::new(warm),
+            Box::new(NoopColdStore),
+            None,
+            Box::new(NoopFrozenStore),
+        ))
+    }
+
+    pub fn with_cold_store(
+        policy: MemoryPolicy,
+        cold: impl ColdStore + 'static,
+    ) -> Result<Self, MemoryError> {
+        if policy.requires_persist_sink() {
+            return Err(MemoryError::MissingImmediateSink);
+        }
+        Ok(Self::build(
+            policy,
+            None,
+            Box::new(NoopWarmStore),
+            Box::new(cold),
             None,
             Box::new(NoopFrozenStore),
         ))
@@ -152,6 +191,7 @@ impl MemoryManager {
             policy,
             None,
             Box::new(NoopWarmStore),
+            Box::new(NoopColdStore),
             None,
             Box::new(frozen),
         ))
@@ -169,6 +209,7 @@ impl MemoryManager {
             policy,
             None,
             Box::new(warm),
+            Box::new(NoopColdStore),
             None,
             Box::new(frozen),
         ))
@@ -183,6 +224,7 @@ impl MemoryManager {
             policy,
             Some(Box::new(sink)),
             Box::new(warm),
+            Box::new(NoopColdStore),
             None,
             Box::new(NoopFrozenStore),
         )
@@ -199,6 +241,7 @@ impl MemoryManager {
             policy,
             None,
             Box::new(NoopWarmStore),
+            Box::new(NoopColdStore),
             Some(Box::new(rebuild)),
             Box::new(NoopFrozenStore),
         ))
@@ -216,6 +259,7 @@ impl MemoryManager {
             policy,
             None,
             Box::new(warm),
+            Box::new(NoopColdStore),
             Some(Box::new(rebuild)),
             Box::new(NoopFrozenStore),
         ))
@@ -225,6 +269,7 @@ impl MemoryManager {
         policy: MemoryPolicy,
         persist: Option<Box<dyn ImmediateSink>>,
         warm: Box<dyn WarmStore>,
+        cold: Box<dyn ColdStore>,
         rebuild: Option<Box<dyn RebuildHook>>,
         frozen: Box<dyn FrozenStore>,
     ) -> Self {
@@ -234,6 +279,7 @@ impl MemoryManager {
             policy,
             hot: HotStore::new(max_entries),
             warm,
+            cold,
             frozen,
             persist,
             rebuild,
@@ -245,6 +291,9 @@ impl MemoryManager {
             warm_puts: 0,
             warm_hits: 0,
             warm_misses: 0,
+            cold_puts: 0,
+            cold_hits: 0,
+            cold_misses: 0,
             frozen_puts: 0,
             frozen_hits: 0,
             frozen_misses: 0,
@@ -292,6 +341,25 @@ impl MemoryManager {
         }
     }
 
+    fn build_cold_backend(policy: &MemoryPolicy) -> Result<Box<dyn ColdStore>, MemoryError> {
+        match policy.cold_backend {
+            ColdBackend::None => Ok(Box::new(NoopColdStore)),
+            ColdBackend::Segmented => {
+                let path = policy.cold_path.as_ref().ok_or_else(|| {
+                    MemoryError::Configuration(
+                        "cold.backend segmented sin path (bug de validación)".to_owned(),
+                    )
+                })?;
+                Ok(Box::new(SegmentedColdStore::open_with_limit(
+                    path,
+                    policy.cold_segment_max_bytes,
+                    policy.cold_mmap,
+                    policy.cold_max_disk_bytes,
+                )?))
+            }
+        }
+    }
+
     pub fn from_yaml(text: &str) -> Result<Self, MemoryError> {
         Self::open(MemoryPolicy::from_yaml(text)?)
     }
@@ -335,7 +403,8 @@ impl MemoryManager {
     /// - `deferred`: Hot primero, luego cola; flush por intervalo o tope.
     /// - `cache` con temperatura `warm`: Hot + mirror en WarmStore.
     /// - temperatura `frozen`: archiva en FrozenStore (además de Hot).
-    /// - Bajo presión: warm → WarmStore; frozen → FrozenStore.
+    /// - Bajo presión/inactividad: warm → WarmStore, cold → segmentos SSD,
+    ///   frozen → FrozenStore.
     pub fn upsert(
         &mut self,
         key: impl Into<String>,
@@ -428,6 +497,9 @@ impl MemoryManager {
         if let Some(value) = self.promote_from_warm(key, now) {
             return Some(value);
         }
+        if let Some(value) = self.promote_from_cold(key, now) {
+            return Some(value);
+        }
         if let Some(value) = self.promote_from_frozen(key, now) {
             return Some(value);
         }
@@ -437,8 +509,9 @@ impl MemoryManager {
     pub fn remove(&mut self, key: &str) -> bool {
         let hot = self.hot.remove(key);
         let warm = self.warm.remove(key).unwrap_or(false);
+        let cold = self.cold.remove(key).unwrap_or(false);
         let frozen = self.frozen.remove(key).unwrap_or(false);
-        hot || warm || frozen
+        hot || warm || cold || frozen
     }
 
     pub fn upsert_keyed(&mut self, class: &str, id: &str, value: Value) -> Result<(), MemoryError> {
@@ -471,24 +544,37 @@ impl MemoryManager {
 
     /// Flush de registros cuyo intervalo ya venció.
     pub fn poll(&mut self) -> Result<usize, MemoryError> {
-        self.flush_deferred_at(Instant::now(), false)
+        let now = Instant::now();
+        let written = self.flush_deferred_at(now, false)?;
+        self.demote_idle_at(now, 64)?;
+        Ok(written)
     }
 
     pub fn snapshot(&self) -> MemorySnapshot {
         let HotMetrics {
             objects,
+            bytes,
             evictions,
             expired_removals,
         } = self.hot.metrics();
         MemorySnapshot {
             hot_objects: objects,
+            hot_bytes: bytes,
             warm_objects: self.warm.len() as u64,
+            cold_objects: self.cold.len() as u64,
             frozen_objects: self.frozen.len() as u64,
             warm_backend: self.warm.name(),
+            cold_backend: self.cold.name(),
             frozen_backend: self.frozen.name(),
             warm_puts: self.warm_puts,
             warm_hits: self.warm_hits,
             warm_misses: self.warm_misses,
+            cold_puts: self.cold_puts,
+            cold_hits: self.cold_hits,
+            cold_misses: self.cold_misses,
+            cold_bytes: self.cold.bytes_on_disk(),
+            cold_max_disk_bytes: self.cold.max_disk_bytes().unwrap_or(0),
+            cold_quota_rejections: self.cold.quota_rejections(),
             frozen_puts: self.frozen_puts,
             frozen_hits: self.frozen_hits,
             frozen_misses: self.frozen_misses,
@@ -521,6 +607,10 @@ impl MemoryManager {
         matches!(class.temperature, Temperature::Frozen)
     }
 
+    fn should_archive_cold(&self, class: &ClassPolicy) -> bool {
+        matches!(class.policy, Policy::Cache) && matches!(class.temperature, Temperature::Cold)
+    }
+
     fn hot_upsert(
         &mut self,
         key: String,
@@ -533,9 +623,13 @@ impl MemoryManager {
     }
 
     fn apply_demotions(&mut self, victims: Vec<(String, HotEntry)>) -> Result<(), MemoryError> {
-        for (key, entry) in victims {
+        let mut victims = victims.into_iter();
+        while let Some((key, entry)) = victims.next() {
             if let Err(error) = self.demote_or_drop(&key, entry.clone()) {
                 self.hot.restore(key, entry);
+                for (pending_key, pending_entry) in victims {
+                    self.hot.restore(pending_key, pending_entry);
+                }
                 return Err(error);
             }
         }
@@ -558,6 +652,25 @@ impl MemoryManager {
                 Ok(()) => {
                     self.frozen_puts += 1;
                     self.freezes += 1;
+                    self.demotions += 1;
+                    Ok(())
+                }
+                Err(error) => {
+                    self.demotion_failures += 1;
+                    Err(error)
+                }
+            };
+        }
+        if self.should_archive_cold(&class) {
+            return match self.cold.put(
+                key,
+                ColdEntry {
+                    class: entry.class,
+                    value: entry.value,
+                },
+            ) {
+                Ok(()) => {
+                    self.cold_puts += 1;
                     self.demotions += 1;
                     Ok(())
                 }
@@ -601,6 +714,13 @@ impl MemoryManager {
         Ok(())
     }
 
+    fn demote_idle_at(&mut self, now: Instant, limit: usize) -> Result<usize, MemoryError> {
+        let victims = self.hot.reclaim_idle(now, limit);
+        let count = victims.len();
+        self.apply_demotions(victims)?;
+        Ok(count)
+    }
+
     /// Hot miss → Warm hit → rehidrata Hot (promote).
     fn promote_from_warm(&mut self, key: &str, now: Instant) -> Option<Value> {
         let entry = match self.warm.get(key) {
@@ -615,6 +735,26 @@ impl MemoryManager {
             }
         };
         self.warm_hits += 1;
+        if let Ok(class_policy) = self.policy.class(&entry.class).cloned()
+            && self
+                .hot_upsert(key.to_owned(), entry.value.clone(), &class_policy, now)
+                .is_ok()
+        {
+            self.promotions += 1;
+        }
+        Some(entry.value)
+    }
+
+    /// Hot+Warm miss → Cold hit → rehidrata Hot.
+    fn promote_from_cold(&mut self, key: &str, now: Instant) -> Option<Value> {
+        let entry = match self.cold.get(key) {
+            Ok(Some(entry)) => entry,
+            Ok(None) | Err(_) => {
+                self.cold_misses += 1;
+                return None;
+            }
+        };
+        self.cold_hits += 1;
         if let Ok(class_policy) = self.policy.class(&entry.class).cloned()
             && self
                 .hot_upsert(key.to_owned(), entry.value.clone(), &class_policy, now)
@@ -725,6 +865,7 @@ impl Drop for MemoryManager {
 mod tests {
     use super::*;
     use crate::{
+        cold::RecordingColdStore,
         sink::RecordingSink,
         warm::{RecordingWarmStore, WarmEntry, WarmStore},
     };
@@ -812,6 +953,218 @@ memory:
                 .is_some()
         );
         assert!(mm.snapshot().evictions >= 1);
+    }
+
+    #[test]
+    fn access_frequency_breaks_lru_ties() {
+        let mut mm = hot_only(2);
+        let t0 = Instant::now();
+        mm.upsert_at("carrier:hot", json!("hot"), "carrier", t0)
+            .unwrap();
+        mm.upsert_at(
+            "carrier:cold",
+            json!("cold"),
+            "carrier",
+            t0 + Duration::from_millis(1),
+        )
+        .unwrap();
+        let _ = mm.get_at("carrier:hot", t0 + Duration::from_millis(2));
+        let _ = mm.get_at("carrier:hot", t0 + Duration::from_millis(3));
+        mm.upsert_at(
+            "carrier:new",
+            json!("new"),
+            "carrier",
+            t0 + Duration::from_millis(4),
+        )
+        .unwrap();
+        assert!(
+            mm.get_at("carrier:hot", t0 + Duration::from_secs(1))
+                .is_some()
+        );
+        assert!(
+            mm.get_at("carrier:cold", t0 + Duration::from_secs(1))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn idle_cache_demotes_to_cold_and_promotes_on_access() {
+        let policy = MemoryPolicy::from_yaml(
+            r#"
+memory:
+  cold:
+    backend: segmented
+    path: target/not-opened-in-custom-test
+  classes:
+    carrier:
+      policy: cache
+      temperature: cold
+      ttl: 1h
+      demote_after: 5s
+      priority: normal
+"#,
+        )
+        .unwrap();
+        let mut mm = MemoryManager::with_cold_store(policy, RecordingColdStore::default()).unwrap();
+        let t0 = Instant::now();
+        mm.upsert_at("carrier:A12", json!({"lane": 3}), "carrier", t0)
+            .unwrap();
+        assert_eq!(
+            mm.demote_idle_at(t0 + Duration::from_secs(4), 10).unwrap(),
+            0
+        );
+        assert_eq!(
+            mm.demote_idle_at(t0 + Duration::from_secs(6), 10).unwrap(),
+            1
+        );
+        assert_eq!(mm.snapshot().hot_objects, 0);
+        assert_eq!(mm.snapshot().cold_objects, 1);
+        assert_eq!(
+            mm.get_at("carrier:A12", t0 + Duration::from_secs(7)),
+            Some(json!({"lane": 3}))
+        );
+        assert_eq!(mm.snapshot().cold_hits, 1);
+        assert_eq!(mm.snapshot().promotions, 1);
+    }
+
+    #[test]
+    fn failed_idle_batch_restores_every_unprocessed_victim() {
+        struct FailColdStore;
+        impl ColdStore for FailColdStore {
+            fn get(&self, _: &str) -> Result<Option<ColdEntry>, MemoryError> {
+                Ok(None)
+            }
+
+            fn put(&mut self, _: &str, _: ColdEntry) -> Result<(), MemoryError> {
+                Err(MemoryError::Cold("disk full".to_owned()))
+            }
+
+            fn remove(&mut self, _: &str) -> Result<bool, MemoryError> {
+                Ok(false)
+            }
+
+            fn len(&self) -> usize {
+                0
+            }
+
+            fn bytes_on_disk(&self) -> u64 {
+                0
+            }
+
+            fn name(&self) -> &'static str {
+                "failing"
+            }
+        }
+
+        let policy = MemoryPolicy::from_yaml(
+            r#"
+memory:
+  cold:
+    backend: segmented
+    path: target/not-opened-in-custom-test
+  classes:
+    carrier:
+      policy: cache
+      temperature: cold
+      ttl: 1h
+      demote_after: 1s
+"#,
+        )
+        .unwrap();
+        let mut mm = MemoryManager::with_cold_store(policy, FailColdStore).unwrap();
+        let t0 = Instant::now();
+        for id in ["a", "b", "c"] {
+            mm.upsert_at(format!("carrier:{id}"), json!(id), "carrier", t0)
+                .unwrap();
+        }
+
+        assert!(mm.demote_idle_at(t0 + Duration::from_secs(2), 10).is_err());
+        assert_eq!(mm.snapshot().hot_objects, 3);
+        for id in ["a", "b", "c"] {
+            assert!(
+                mm.get_at(&format!("carrier:{id}"), t0 + Duration::from_secs(3))
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn segmented_cold_survives_manager_restart() {
+        let dir = test_scratch_dir("manager-cold");
+        let yaml = format!(
+            r#"
+memory:
+  max_entries: 4
+  cold:
+    backend: segmented
+    path: {}
+    segment_max_bytes: 4096
+    compression: lz4
+    mmap: true
+  classes:
+    carrier:
+      policy: cache
+      temperature: cold
+      ttl: 24h
+      priority: normal
+"#,
+            dir.display()
+        );
+        {
+            let mut mm = MemoryManager::from_yaml(&yaml).unwrap();
+            mm.upsert_keyed("carrier", "A12", json!({"lane": 3}))
+                .unwrap();
+            assert!(mm.notify_pressure().unwrap());
+            assert_eq!(mm.snapshot().cold_objects, 1);
+        }
+        {
+            let mut reopened = MemoryManager::from_yaml(&yaml).unwrap();
+            assert_eq!(
+                reopened.get_keyed("carrier", "A12"),
+                Some(json!({"lane": 3}))
+            );
+            assert_eq!(reopened.snapshot().cold_hits, 1);
+            assert_eq!(reopened.snapshot().hot_objects, 1);
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cold_quota_failure_keeps_the_object_hot() {
+        let dir = test_scratch_dir("manager-cold-quota");
+        let yaml = format!(
+            r#"
+memory:
+  max_entries: 4
+  cold:
+    backend: segmented
+    path: {}
+    segment_max_bytes: 4096
+    max_disk_bytes: 4096
+    mmap: false
+  classes:
+    telemetry:
+      policy: cache
+      temperature: cold
+      ttl: 1h
+"#,
+            dir.display()
+        );
+        let mut mm = MemoryManager::from_yaml(&yaml).unwrap();
+        let payload = (0..8_000)
+            .map(|index| format!("{index:08x}"))
+            .collect::<Vec<_>>();
+        mm.upsert_keyed("telemetry", "large", json!(payload))
+            .unwrap();
+
+        let error = mm.notify_pressure().unwrap_err();
+        assert!(error.to_string().contains("cuota de disco Cold"));
+        let snapshot = mm.snapshot();
+        assert_eq!(snapshot.hot_objects, 1);
+        assert_eq!(snapshot.cold_objects, 0);
+        assert_eq!(snapshot.cold_quota_rejections, 1);
+        assert!(mm.get_keyed("telemetry", "large").is_some());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

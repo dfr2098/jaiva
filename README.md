@@ -9,6 +9,7 @@ un núcleo DAG, un runtime desacoplado, plugins y una UI sin lógica de negocio.
 Índice completo: [docs/README.md](docs/README.md)
 
 - [Arquitectura](docs/architecture.md)
+- [Modelo matemático del DAG](docs/dag-mathematical-model.md)
 - [Visión y límites del proyecto](docs/project-vision.md)
 - [Ruta de modularización](docs/modular-roadmap.md)
 - [Bitácora técnica y memoria de implementación](docs/implementation-notes.md)

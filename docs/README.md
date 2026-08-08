@@ -10,6 +10,7 @@ notas sueltas en el código.
 | [../README.md](../README.md) | Visión rápida, ejecutar, capacidades |
 | [ci.md](ci.md) | GitHub Actions: CI mínimo + Phase 8 opcional |
 | [architecture.md](architecture.md) | Componentes y flujo de datos |
+| [dag-mathematical-model.md](dag-mathematical-model.md) | Modelo formal del DAG, routing, colas y concurrencia |
 | [project-vision.md](project-vision.md) | Alcance y límites del producto |
 | [configuration.md](configuration.md) | YAML de flujos, conexiones y features |
 | [processors.md](processors.md) | Catálogo de procesadores |

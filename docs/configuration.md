@@ -1,5 +1,8 @@
 # Configuración de Jaiva
 
+> **Si eres nuevo:** [guia-para-nuevos.md](guia-para-nuevos.md). Empieza por la
+> estructura mínima de abajo; el resto de secciones es configuración avanzada.
+
 ## Estructura mínima
 
 ```yaml
@@ -182,7 +185,7 @@ kafka_connections:
 Kafka se compila mediante `--features kafka-driver`. Solo admite
 `PLAINTEXT` por ahora; los brokers siempre proceden de una variable de
 entorno. Detalle de `publish_kafka` / `consume_kafka` en
-[priority-4-3-kafka.md](priority-4-3-kafka.md).
+[priority-4-3-kafka.md](history/priority-4-3-kafka.md).
 
 ## Ejecución continua (`schedule`)
 

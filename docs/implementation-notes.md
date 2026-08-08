@@ -271,7 +271,7 @@ Realiza: smoke publish/consume Kafka (incluido el procesador `consume_kafka`),
 throughput de 100 mensajes, fallo controlado de broker, retry→DLQ→requeue, el
 flujo Postgres del Connection Manager, MongoDB (metadatos +
 `query_mongodb`→`put_mongodb`) y SQL Server (diagnóstico + metadatos). Detalle en
-[priority-8-integration-tests.md](priority-8-integration-tests.md).
+[priority-8-integration-tests.md](history/priority-8-integration-tests.md).
 
 Estado comprobado el 1 de agosto de 2026: harness verde con Postgres `:55432`,
 Kafka `:29092`, MongoDB `:27018` y SQL Server `:11433`.
@@ -428,7 +428,7 @@ y posibles fugas de DSN/password en errores de driver.
 `authorize` en tiempo constante; `/runtime` y `/ws*` gated fuera de loopback;
 `redact_sensitive` + `client_message`; `duplicate` clona `secret_ref`;
 `audit_action` en validate y CRUD/test de conexiones.
-Docs: [priority-9a-admin-hardening.md](priority-9a-admin-hardening.md).
+Docs: [priority-9a-admin-hardening.md](history/priority-9a-admin-hardening.md).
 
 **Nota:** la política admin se fija al **arranque del proceso** (env + YAML
 semilla) y no se reescribe al desplegar otro flujo.
@@ -441,7 +441,7 @@ el frontend ni embeber el motor en el WebView.
 **Cambio:** `apps/jaiba-ui/src-tauri/` (crate `jaiba-desktop`, Tauri 2). Modo
 remoto por defecto a `http://127.0.0.1:9090`; comando `api_base` y resolución
 en `src/api.ts`. Scripts `npm run desktop:dev` / `desktop:build`.
-Docs: [priority-9b-tauri-desktop.md](priority-9b-tauri-desktop.md).
+Docs: [priority-9b-tauri-desktop.md](history/priority-9b-tauri-desktop.md).
 
 **Decisión:** sidecar de `jaiba serve` aplazado; CSP limitada a loopback.
 
@@ -471,7 +471,7 @@ paquetes (Fase B). Sin Parquet ni train in-process.
 **Cambio:** `apps/jaiba-ui/src-tauri/src/sidecar.rs` gestiona spawn/stop del
 binario `jaiba`, conmutación local/remoto, YAML embebido y `externalBin`.
 UI: `EngineControl` en el topbar. Docs:
-[priority-10a-tauri-sidecar.md](priority-10a-tauri-sidecar.md).
+[priority-10a-tauri-sidecar.md](history/priority-10a-tauri-sidecar.md).
 
 **Decisión:** proceso hijo vía `std::process` (no plugin-shell); si el puerto
 ya escucha, se reutiliza sin segundo sidecar. Auth local `none` en loopback.
@@ -507,7 +507,7 @@ check Tauri requiere instalar GTK/WebKitGTK en la distribución.
 **Cambio:** `crates/jaiba-server/src/auth.rs` (roles viewer/operator/admin,
 `JAIBA_ADMIN_USERS_FILE`, allowlist `projects`), HTTPS opcional con
 `JAIBA_TLS_*` vía `axum-server`, `GET /api/v1/whoami`. UI muestra actor/rol.
-Docs: [priority-10b-security.md](priority-10b-security.md). Ejemplo:
+Docs: [priority-10b-security.md](history/priority-10b-security.md). Ejemplo:
 `examples/admin-users.json`.
 
 **Decisión:** sin SSO; token de entorno sigue siendo admin global; permisos por
@@ -522,7 +522,7 @@ Docs: [priority-10b-security.md](priority-10b-security.md). Ejemplo:
 **Cambio:** `examples/ai-prep-plant.yaml` (Postgres VALUES → `ai_*` → CSV +
 manifest con paths); `shuffle`/`seed` en split; `optional` en webhook;
 `scripts/mock-ml-webhook.py`. Docs:
-[priority-10c-plant-prep.md](priority-10c-plant-prep.md).
+[priority-10c-plant-prep.md](history/priority-10c-plant-prep.md).
 
 **Decisión:** VALUES evita DDL en demos; Oracle se documenta como sustitución
 del nodo de lectura.

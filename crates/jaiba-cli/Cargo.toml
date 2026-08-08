@@ -8,6 +8,9 @@ default-run = "jaiva-flow"
 
 [features]
 default = []
+# Perfil de release mínima: sin drivers opcionales (Postgres/SQLite van en el runtime base).
+# Uso: `cargo test -p jaiba-cli --features release-core` / `scripts/smoke-release-core.sh`
+release-core = []
 oracle-driver = ["jaiba-runtime/oracle-driver", "jaiba-server/oracle-driver"]
 sqlserver-driver = ["jaiba-runtime/sqlserver-driver", "jaiba-server/sqlserver-driver"]
 kafka-driver = ["jaiba-runtime/kafka-driver", "jaiba-server/kafka-driver"]

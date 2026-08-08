@@ -1,0 +1,35 @@
+# Fixture de regresión: mantiene RUNNING con pg_sleep para pause/resume.
+# Requiere DATABASE_URL (Compose release-core lo inyecta).
+
+id: smoke-continuous
+
+database_connections:
+  lab_pg:
+    type: postgres
+    url_env: DATABASE_URL
+    max_connections: 2
+
+engine:
+  max_concurrency: 2
+  repository:
+    enabled: true
+    database_path: /data/smoke-continuous/repository.db
+    content_path: /data/smoke-continuous/content
+    abandoned_after_seconds: 0
+    completed_retention_hours: 24
+
+processors:
+  - id: hold
+    type: query_postgres
+    config:
+      connection: lab_pg
+      batch_size: 1
+      query: |
+        SELECT 1 AS n FROM pg_sleep(45)
+  - id: destination
+    type: log_records
+
+connections:
+  - from: hold
+    relationship: success
+    to: destination

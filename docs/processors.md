@@ -254,7 +254,7 @@ config:
 ```
 
 Requiere `--features kafka-driver`. Consulta
-`docs/priority-4-3-kafka.md` para garantías y observabilidad.
+`docs/history/priority-4-3-kafka.md` para garantías y observabilidad.
 
 ## `consume_kafka`
 
@@ -274,7 +274,7 @@ config:
   decode: json
 ```
 
-Requiere `--features kafka-driver`. Detalle en `docs/priority-4-3-kafka.md`.
+Requiere `--features kafka-driver`. Detalle en `docs/history/priority-4-3-kafka.md`.
 
 ## Checkpoints
 

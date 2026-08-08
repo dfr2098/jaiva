@@ -8,6 +8,8 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
     "preview": "vite preview",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
     "tauri": "tauri",
     "desktop:sidecar": "node ../../scripts/prepare-desktop-sidecar.mjs",
     "desktop:dev": "npm run desktop:sidecar && node ../../scripts/run-desktop.mjs dev",
@@ -22,6 +24,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tauri-apps/cli": "^2.11.4",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",

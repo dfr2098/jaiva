@@ -1,13 +1,15 @@
 # Arquitectura interna del runtime Jaiba
 
+> **Si eres nuevo:** primero [guia-para-nuevos.md](guia-para-nuevos.md). Este
+> documento es denso a propósito (cómo funciona el motor por dentro).
+
 ## Propósito
 
-Este documento describe el runtime. La arquitectura completa de la plataforma
-se encuentra en [`project-vision.md`](project-vision.md).
+Describe el **runtime** (quien ejecuta el flow). La visión de producto está en
+[`project-vision.md`](project-vision.md).
 
-Jaiba es un motor independiente de integración y movimiento de datos escrito en
-Rust. Otros sistemas pueden utilizarlo mediante flujos y plugins; el núcleo no
-conoce tablas ni reglas de negocio ajenas.
+Jaiba mueve datos con flujos y plugins. El núcleo **no** conoce tablas ni reglas
+de negocio de un cliente concreto.
 
 ## Componentes
 
@@ -89,7 +91,7 @@ El ciclo de vida de **estado de dominio** es una capa paralela: Hot es RAM
 local, Warm es distribución opcional, Cold es caché SSD y Frozen es archivo de
 auditoría. No forman una escalera de durabilidad obligatoria. El diseño se
 documenta en
-[`priority-jme-memory-manager.md`](priority-jme-memory-manager.md); no sustituye
+[`history/priority-jme-memory-manager.md`](history/priority-jme-memory-manager.md); no sustituye
 este limiter ni el `PacketRepository`.
 
 ## Persistencia
@@ -109,4 +111,4 @@ el scheduler.
 `ProcessorRegistry` permite registrar procesadores externos. Los conectores de
 base se separarán por driver y declararán capacidades comunes. El diseño
 multi-base de escritura está en
-[`priority-4-database-writes.md`](priority-4-database-writes.md).
+[`history/priority-4-database-writes.md`](history/priority-4-database-writes.md).

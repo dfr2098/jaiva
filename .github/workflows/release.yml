@@ -1,0 +1,125 @@
+# Publica binario Linux + imagen Docker `jaiba-serve` en tags v*.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag a publicar (solo workflow_dispatch; p. ej. v0.2.1)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+  IMAGE_NAME: jaiba-serve
+
+jobs:
+  binary:
+    name: Linux binary (release-core)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: |
+          cargo build --release -p jaiba-cli --features release-core --bin jaiba
+          strip target/release/jaiba
+          tar -C target/release -czf "jaiba-linux-x86_64.tar.gz" jaiba
+          shasum -a 256 jaiba-linux-x86_64.tar.gz > jaiba-linux-x86_64.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jaiba-linux-x86_64
+          path: |
+            jaiba-linux-x86_64.tar.gz
+            jaiba-linux-x86_64.sha256
+
+  image:
+    name: Docker jaiba-serve
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,prefix=sha-,format=short
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.jaiba-serve
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  github-release:
+    name: GitHub Release
+    needs: [binary, image]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: jaiba-linux-x86_64
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            jaiba-linux-x86_64.tar.gz
+            jaiba-linux-x86_64.sha256
+          body: |
+            ## Artefactos
+            - Binario Linux x86_64 (`release-core`): `jaiba-linux-x86_64.tar.gz`
+            - Imagen: `ghcr.io/${{ github.repository_owner }}/jaiba-serve:${{ github.ref_name }}`
+
+            ```bash
+            docker pull ghcr.io/${{ github.repository_owner }}/jaiba-serve:${{ github.ref_name }}
+            docker run --rm -p 127.0.0.1:9090:9090 \
+              -e JAIBA_MASTER_KEY=change-me \
+              -e JAIBA_ADMIN_TOKEN=change-me \
+              ghcr.io/${{ github.repository_owner }}/jaiba-serve:${{ github.ref_name }}
+            ```

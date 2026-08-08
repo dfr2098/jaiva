@@ -1,34 +1,52 @@
 # Jaiba
 
-Plataforma open source en Rust para diseñar, ejecutar, monitorear y simular
-flujos de procesamiento de datos. Jaiba no intenta copiar Apache NiFi: utiliza
-un núcleo DAG, un runtime desacoplado, plugins y una UI sin lógica de negocio.
+Motor open source en **Rust** para mover y transformar datos con flujos en YAML
+(pasos conectados en un grafo). Incluye runtime, API/servidor, plugins de
+conexión y una UI que **no** guarda contraseñas ni carga drivers.
 
-## Documentación
+¿Primera vez en el repo? **Única puerta:**
+**[docs/guia-para-nuevos.md](docs/guia-para-nuevos.md)**
+(`cargo run -- serve examples/basic-flow.yaml` + checklist de 5 líneas).
+Índice del resto: [docs/README.md](docs/README.md).
 
-Índice completo: [docs/README.md](docs/README.md)
+## Madurez (resumen)
 
-- [Arquitectura](docs/architecture.md)
-- [Modelo matemático del DAG](docs/dag-mathematical-model.md)
-- [Visión y límites del proyecto](docs/project-vision.md)
-- [Ruta de modularización](docs/modular-roadmap.md)
-- [Bitácora técnica y memoria de implementación](docs/implementation-notes.md)
-- [Configuración](docs/configuration.md)
-- [Procesadores](docs/processors.md)
-- [JME Cold Memory: objetos RAM → SSD segmentado](docs/jme-cold-memory.md)
-- [AI Data Prep (Rust, sin train)](docs/ai-data-prep.md)
-- [Fase 9A: endurecimiento admin](docs/priority-9a-admin-hardening.md)
-- [Fase 9B: desktop Tauri](docs/priority-9b-tauri-desktop.md)
-- [Fase 10A: sidecar Tauri local/remoto](docs/priority-10a-tauri-sidecar.md)
-- [Desarrollo en Windows nativo y WSL](docs/windows-native-and-wsl.md)
-- [Fase 10B: TLS, roles y proyectos](docs/priority-10b-security.md)
-- [Fase 10C: flujo de planta AI Prep](docs/priority-10c-plant-prep.md)
-- [Operación y observabilidad](docs/operations.md)
-- [Administrador de conexiones](docs/connection-manager.md) (MongoDB por URL, SQL Server, …)
-- [Fase 8: pruebas de integración](docs/priority-8-integration-tests.md) (Postgres, Kafka, Mongo, SQL Server)
-- [Diseño de escritura multi-base](docs/priority-4-database-writes.md)
-- [Fase 7: control y endurecimiento operativo](docs/priority-7-control-plane.md)
-- [Fase 7.8: ejecución paralela por procesador](docs/priority-7-8-parallel-workers.md)
+| Capacidad | Estado |
+| --- | --- |
+| PostgreSQL → CSV (recorrido oficial) | **Estable** (CI automático en `main` + cron) |
+| MySQL / MongoDB / Kafka | Beta |
+| Oracle / SQL Server / JME | Experimental |
+| Plugins externos / Tauri | Preview / Beta |
+
+Detalle y ciclos: [docs/product-roadmap.md](docs/product-roadmap.md).
+**Freeze:** sin `priority-11+` hasta 2 semanas verdes de smoke + release-core
+([docs/release-core.md](docs/release-core.md#congelar-roadmap)).
+
+```bash
+# Flow canónico (sin Docker / sin DB externas)
+cargo run -p jaiba-cli --features release-core -- examples/smoke.yaml
+
+# Stack Estable + CSV + suite de regresión (~14 e2e)
+./scripts/release-core-up.sh
+./scripts/smoke-stable-path.sh
+./scripts/smoke-regression.sh
+# UI: http://127.0.0.1:19080  · API: http://127.0.0.1:19090
+```
+
+La verdad del primer comando y del smoke CI es [`examples/smoke.yaml`](examples/smoke.yaml).
+El recorrido de producto Postgres→CSV es [`examples/stable-postgres-to-csv.yaml`](examples/stable-postgres-to-csv.yaml).
+
+## Documentación (atajos)
+
+| Quiero… | Documento |
+| --- | --- |
+| Entender y correr algo hoy | [docs/guia-para-nuevos.md](docs/guia-para-nuevos.md) |
+| Roadmap y madurez | [docs/product-roadmap.md](docs/product-roadmap.md) |
+| Escribir un flow YAML | [docs/configuration.md](docs/configuration.md) |
+| Ver qué nodos existen | [docs/processors.md](docs/processors.md) |
+| Usar el servidor / UI | [docs/operations.md](docs/operations.md) |
+| Conectar bases de datos | [docs/connection-manager.md](docs/connection-manager.md) |
+| Ver el diseño interno | [docs/architecture.md](docs/architecture.md) |
 
 ## Diagrama de flujo
 
@@ -112,8 +130,10 @@ consumir memoria sin control.
 ## Ejecutar
 
 ```bash
-cargo run -- examples/basic-flow.yaml
+cargo run -- examples/smoke.yaml
 ```
+
+(`examples/basic-flow.yaml` sigue disponible como alias histórico del mismo patrón.)
 
 Para leer PostgreSQL:
 
@@ -148,21 +168,21 @@ docker compose up -d --build
 La interfaz se abre en `http://127.0.0.1:9080`. Detener su contenedor no detiene
 Jaiva ni sus flujos. El alcance del monitor, diseñador, publicación y
 trazabilidad está documentado en
-[`docs/priority-8-visual-console.md`](docs/priority-8-visual-console.md).
+[`docs/history/priority-8-visual-console.md`](docs/history/priority-8-visual-console.md).
 
 ## Observabilidad, Grafana y WebSocket
 
 Inicia el servidor de observabilidad y, opcionalmente, un flujo:
 
 ```bash
-cargo run -- serve examples/basic-flow.yaml
+cargo run -- serve examples/smoke.yaml
 ```
 
 La dirección predeterminada es `127.0.0.1:9090`. Puede cambiarse:
 
 ```bash
 export JAIBA_SERVER_ADDR='0.0.0.0:9090'
-cargo run -- serve examples/basic-flow.yaml
+cargo run -- serve examples/smoke.yaml
 ```
 
 Endpoints:
@@ -172,8 +192,8 @@ Endpoints:
 | `GET /health` | Estado del servicio |
 | `GET /ready` | Readiness del flujo |
 | `GET /metrics` | Métricas Prometheus para Grafana |
-| `GET /ws` | WebSocket con un snapshot JSON por segundo |
-| `GET /ws/v1` | WebSocket de estado completo para Visualisa |
+| `GET /ws` | WebSocket de métricas (solo si cambian; ver `JAIBA_WS_POLL_MS`) |
+| `GET /ws/v1` | WebSocket multi-flujo para la UI (dirty-check) |
 | `/api/v1/*` | Administración autenticada |
 
 Grafana normalmente no consume el WebSocket directamente. La integración
@@ -349,12 +369,12 @@ trabajo abandonado y reconstruye las colas. Esto ofrece entrega
 Los elementos `DEAD_LETTER` conservan el error y el intento final. Se pueden
 consultar y preparar para reproceso con `dead-letter list` y
 `dead-letter replay`. La fase completa está en
-[`docs/priority-5-dead-letter.md`](docs/priority-5-dead-letter.md).
+[`docs/history/priority-5-dead-letter.md`](docs/history/priority-5-dead-letter.md).
 
 La procedencia registra la ruta, intentos, duración, tamaños, errores y estados
 de cada paquete. Puede consultarse con `provenance recent` o
 `provenance packet`; consulta
-[`docs/priority-6-provenance.md`](docs/priority-6-provenance.md).
+[`docs/history/priority-6-provenance.md`](docs/history/priority-6-provenance.md).
 
 El repositorio es infraestructura interna y no depende del conector utilizado.
 Los orígenes y destinos pueden ser PostgreSQL, Oracle, MySQL/MariaDB, SQL
@@ -536,7 +556,7 @@ cargo run --features kafka-driver -- examples/kafka-publish.yaml
 
 El productor espera confirmación del broker, usa `acks=all` e idempotencia y
 expone topic, partición y offset en atributos de procedencia. Consulta
-[`docs/priority-4-3-kafka.md`](docs/priority-4-3-kafka.md).
+[`docs/history/priority-4-3-kafka.md`](docs/history/priority-4-3-kafka.md).
 
 ## Próximas integraciones
 
@@ -546,4 +566,4 @@ expone topic, partición y offset en atributos de procedencia. Consulta
 - API administrativa y editor visual.
 
 El diseño previo de escritura multi-base está documentado en
-[`docs/priority-4-database-writes.md`](docs/priority-4-database-writes.md).
+[`docs/history/priority-4-database-writes.md`](docs/history/priority-4-database-writes.md).

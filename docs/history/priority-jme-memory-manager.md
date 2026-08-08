@@ -279,10 +279,10 @@ sin almacenamiento.
 
 ## Relación con el resto del proyecto
 
-- Runtime / memoria de paquetes: `[architecture.md](architecture.md)`
+- Runtime / memoria de paquetes: `[architecture.md](../architecture.md)`
 - Escrituras / batch: `[priority-4-database-writes.md](priority-4-database-writes.md)`
 - Métricas: `[priority-9-metrics.md](priority-9-metrics.md)`
-- Visión: `[project-vision.md](project-vision.md)`
+- Visión: `[project-vision.md](../project-vision.md)`
 - Laboratorio / integración con DMA: carpeta hermana `DMA_JAIVA/` (fuera de este repo)
 
 
@@ -368,7 +368,7 @@ sin almacenamiento.
 - [x] Lectura Hot → Warm → Cold → Frozen → rebuild con promoción a Hot
 - [x] Métricas de objetos, bytes, hits y misses Cold
 - [ ] Compactación, manifiesto durable y publicación por rename atómico (Paso 9)
-- [x] Guía [`jme-cold-memory.md`](jme-cold-memory.md) y ejemplo
+- [x] Guía [`jme-cold-memory.md`](../jme-cold-memory.md) y ejemplo
   [`examples/jme-cold-policy.yaml`](../examples/jme-cold-policy.yaml)
 
 Uso rápido (Hot only):

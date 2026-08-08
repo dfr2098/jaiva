@@ -32,6 +32,9 @@ jobs:
       - name: cargo test (workspace, default features)
         run: cargo test --workspace --all-targets
 
+      - name: smoke release-core
+        run: bash scripts/smoke-release-core.sh
+
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 

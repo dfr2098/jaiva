@@ -4,13 +4,19 @@
 
 | Workflow | Archivo | Cuándo | Qué hace |
 |---|---|---|---|
-| **CI · Rust** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | formato, tests del workspace y Clippy con warnings como error |
+| **CI · Rust** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | formato, tests, **smoke release-core**, Clippy `-D warnings` |
 | **CI · Desktop** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | build del sidecar y `cargo check` del shell Tauri en Linux |
 | **CI · UI** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | Node 22, `npm ci`, typecheck y build Vite |
+| **Stable path** | `.github/workflows/stable-path.yml` | push a `main`/`master`, cron laborable, label `stable-path`, o manual | Compose + smoke CSV + regresión Playwright (recorrido **Estable**) |
+| **Release** | `.github/workflows/release.yml` | tag `v*` | binario Linux + imagen GHCR `jaiba-serve` |
 | **Phase 8** | `.github/workflows/phase8-integration.yml` | manual (`workflow_dispatch`) o PR con label `phase8` | `scripts/phase8-integration.sh` contra entorno real |
 
 El CI **no** levanta Postgres/Kafka/Mongo/SQL Server. Los tests opt-in que
 requieren servicios se omiten en ese job.
+
+**Freeze de roadmap:** mientras smoke + release-core no lleven 2 semanas
+seguidas en verde, no se abren fases `priority-11+`. Ver
+[release-core.md § Congelar roadmap](release-core.md#congelar-roadmap).
 
 ## Phase 8 (opcional)
 
@@ -21,7 +27,7 @@ requieren servicios se omiten en ese job.
    - `JAIBA_TEST_MONGODB_PASSWORD`
    - `JAIBA_TEST_SQLSERVER_PASSWORD`
 3. Variables opcionales (`vars.*`) para host/puerto; defaults en
-   [priority-8-integration-tests.md](priority-8-integration-tests.md).
+   [priority-8-integration-tests.md](history/priority-8-integration-tests.md).
 4. Actions → **Phase 8 integration** → Run workflow  
    o etiqueta el PR con `phase8`.
 
@@ -39,6 +45,7 @@ export JAIBA_TEST_SQLSERVER_PASSWORD=...
 ```bash
 cargo fmt --all -- --check
 cargo test --workspace --all-targets
+./scripts/smoke-release-core.sh
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build -p jaiba-cli --bin jaiba
 

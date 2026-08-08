@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1
+# Imagen slim de producto: `jaiba serve` (release-core, sin drivers opcionales).
+# Tags sugeridos: jaiba-serve:latest / ghcr.io/<org>/jaiba-serve:<version>
+FROM rust:1.88-bookworm AS build
+WORKDIR /src
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY simulator ./simulator
+RUN cargo build --release -p jaiba-cli --features release-core --bin jaiba \
+    && strip /src/target/release/jaiba
+
+FROM debian:bookworm-slim
+LABEL org.opencontainers.image.title="jaiba-serve" \
+      org.opencontainers.image.description="Jaiba observability + admin server (release-core)" \
+      org.opencontainers.image.source="https://github.com/jaiba-project/jaiba"
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libssl3 curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/jaiba /usr/local/bin/jaiba
+RUN mkdir -p /data /output /flows /work \
+    && useradd --system --uid 10001 --home /work --shell /usr/sbin/nologin jaiba \
+    && chown -R jaiba:jaiba /data /output /flows /work
+USER jaiba
+WORKDIR /work
+EXPOSE 9090
+ENV JAIBA_SERVER_ADDR=0.0.0.0:9090 \
+    JAIBA_DATA_DIR=/data
+HEALTHCHECK --interval=10s --timeout=3s --retries=12 \
+  CMD curl -fsS http://127.0.0.1:9090/health || exit 1
+ENTRYPOINT ["jaiba"]
+CMD ["serve"]

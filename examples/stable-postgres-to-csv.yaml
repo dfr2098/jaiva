@@ -1,0 +1,75 @@
+# Recorrido oficial Estable: PostgreSQL → encode_csv → write_file
+# Requiere DATABASE_URL y tabla public.stable_items (seed en deploy/postgres/init).
+
+id: stable-postgres-to-csv
+
+parameters:
+  source_table: public.stable_items
+  output_file: /output/stable-items.csv
+
+database_connections:
+  stable_pg:
+    type: postgres
+    url_env: DATABASE_URL
+    max_connections: 4
+
+engine:
+  queue_capacity: 100
+  max_concurrency: 4
+  memory:
+    maximum_percent: 42
+  repository:
+    enabled: true
+    database_path: /data/repository.db
+    content_path: /data/content
+    abandoned_after_seconds: 0
+    completed_retention_hours: 24
+  logging:
+    enabled: true
+    directory: /data/logs
+    rotation: daily
+
+processors:
+  - id: read
+    type: query_postgres
+    config:
+      connection: stable_pg
+      batch_size: 1000
+      query: |
+        SELECT to_jsonb(row_data) AS data
+        FROM (
+          SELECT code, name
+          FROM ${source_table}
+          ORDER BY code
+        ) AS row_data
+
+  - id: encode
+    type: encode_csv
+    config:
+      headers: true
+      delimiter: ","
+
+  - id: write
+    type: write_file
+    config:
+      path: ${output_file}
+
+  - id: errors
+    type: log_records
+
+connections:
+  - from: read
+    relationship: success
+    to: encode
+  - from: read
+    relationship: failure
+    to: errors
+  - from: encode
+    relationship: success
+    to: write
+  - from: encode
+    relationship: failure
+    to: errors
+  - from: write
+    relationship: failure
+    to: errors

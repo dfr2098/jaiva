@@ -1,0 +1,35 @@
+# Fixture de regresión: reintentos agotados → dead-letter.
+# write_file exige contenido encoded; al recibir Records falla de forma
+# determinista (sin depender de /dev ni permisos de host).
+
+id: smoke-dlq
+
+engine:
+  repository:
+    enabled: true
+    database_path: /data/smoke-dlq/repository.db
+    content_path: /data/smoke-dlq/content
+    abandoned_after_seconds: 0
+    completed_retention_hours: 24
+
+processors:
+  - id: source
+    type: generate_records
+    config:
+      records:
+        - id: 1
+          label: intentional-fail
+
+  - id: boom
+    type: write_file
+    config:
+      path: /tmp/jaiba-smoke-dlq-never-written.bin
+    retry:
+      maximum_attempts: 2
+      initial_delay_ms: 20
+      maximum_delay_ms: 40
+
+connections:
+  - from: source
+    relationship: success
+    to: boom

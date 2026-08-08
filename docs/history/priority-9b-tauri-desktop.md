@@ -7,7 +7,7 @@ de escritorio. El contrato React sigue siendo la API administrativa + WebSocket;
 > Esta fase describe el MVP remoto original. El sidecar local ya está
 > implementado en [priority-10a-tauri-sidecar.md](priority-10a-tauri-sidecar.md)
 > y la ejecución multiplataforma en
-> [windows-native-and-wsl.md](windows-native-and-wsl.md).
+> [windows-native-and-wsl.md](../windows-native-and-wsl.md).
 
 ## Alcance del MVP
 

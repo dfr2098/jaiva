@@ -106,8 +106,8 @@ instancia de Jaiba, por lo que primero drena el supervisor anterior.
 
 Tauri 2 en `src-tauri/`: modo **remoto** o **local** (sidecar `jaiba serve`).
 
-- 9B: [docs/priority-9b-tauri-desktop.md](../../docs/priority-9b-tauri-desktop.md)
-- 10A: [docs/priority-10a-tauri-sidecar.md](../../docs/priority-10a-tauri-sidecar.md)
+- 9B: [docs/history/priority-9b-tauri-desktop.md](../../docs/history/priority-9b-tauri-desktop.md)
+- 10A: [docs/history/priority-10a-tauri-sidecar.md](../../docs/history/priority-10a-tauri-sidecar.md)
 - Windows/WSL: [docs/windows-native-and-wsl.md](../../docs/windows-native-and-wsl.md)
 
 ```bash

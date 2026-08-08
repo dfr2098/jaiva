@@ -212,10 +212,11 @@ export default function App() {
             <small>Data Flow Platform</small>
           </span>
         </a>
-        <nav className="top-nav">
+        <nav className="top-nav" data-testid="top-nav">
           <button
             type="button"
             className={view === "monitor" ? "active" : ""}
+            data-testid="nav-monitor"
             onClick={() => setView("monitor")}
           >
             Monitor
@@ -223,6 +224,7 @@ export default function App() {
           <button
             type="button"
             className={view === "builder" ? "active" : ""}
+            data-testid="nav-builder"
             onClick={() => setView("builder")}
           >
             Diseñar flujo
@@ -230,6 +232,7 @@ export default function App() {
           <button
             type="button"
             className={view === "connections" ? "active" : ""}
+            data-testid="nav-connections"
             onClick={() => setView("connections")}
           >
             Conexiones

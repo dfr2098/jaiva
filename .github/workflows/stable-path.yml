@@ -1,0 +1,55 @@
+# Recorrido oficial Estable: Postgres → CSV (Compose + smoke + Playwright).
+# Evidencia sostenida: corre en main, laborables (cron) y bajo demanda.
+name: Stable path
+
+on:
+  push:
+    branches: [main, master]
+  schedule:
+    # Laborables 06:00 UTC — evidencia repetida sin depender de un label.
+    - cron: "0 6 * * 1-5"
+  workflow_dispatch:
+  pull_request:
+    types: [labeled, opened, synchronize, reopened]
+
+concurrency:
+  group: stable-path-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stable-path:
+    name: Postgres → CSV + regresión
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.labels.*.name, 'stable-path')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Stack up
+        run: bash scripts/release-core-up.sh
+
+      - name: Smoke Postgres → CSV
+        run: bash scripts/smoke-stable-path.sh
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/jaiba-ui/package-lock.json
+
+      - name: Playwright regression
+        working-directory: apps/jaiba-ui
+        env:
+          JAIBA_ADMIN_TOKEN: jaiba-stable-admin-token
+          JAIBA_E2E_BASE_URL: http://127.0.0.1:19080
+          JAIBA_E2E_API_URL: http://127.0.0.1:19090
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run e2e

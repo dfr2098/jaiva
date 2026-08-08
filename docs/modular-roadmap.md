@@ -1,5 +1,9 @@
 # Ruta modular de Jaiba
 
+> **Congelar producto nuevo:** no abrir fases `priority-11+` hasta que smoke +
+> release-core lleven **2 semanas seguidas en verde**. Ver
+> [release-core.md § Congelar roadmap](release-core.md#congelar-roadmap).
+
 | Fase | Resultado | Estado |
 |---|---|---|
 | 9.1 | Cargo workspace, Core, Runtime, Server y CLI | Implementado |

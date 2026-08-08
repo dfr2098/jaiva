@@ -279,7 +279,7 @@ export function ConnectionManagerView({
   };
 
   return (
-    <section className="connection-manager">
+    <section className="connection-manager" data-testid="connection-manager">
       <header className="connections-hero">
         <div>
           <p className="eyebrow">CONNECTION MANAGER</p>
@@ -289,7 +289,12 @@ export function ConnectionManagerView({
             nombre de la conexión; nunca la contraseña.
           </p>
         </div>
-        <button className="button primary" type="button" onClick={() => setModal("drivers")}>
+        <button
+          className="button primary"
+          type="button"
+          data-testid="connection-new"
+          onClick={() => setModal("drivers")}
+        >
           + Nueva conexión
         </button>
       </header>
@@ -352,7 +357,10 @@ export function ConnectionManagerView({
               <div className="connection-health">
                 <div>
                   <span>Estado</span>
-                  <strong className={`health-${current.status.availability}`}>
+                  <strong
+                    className={`health-${current.status.availability}`}
+                    data-testid="connection-availability"
+                  >
                     {statusLabel(current.status.availability)}
                   </strong>
                 </div>
@@ -383,6 +391,7 @@ export function ConnectionManagerView({
                 ) : null}
                 <button
                   className="button primary"
+                  data-testid="connection-test"
                   disabled={busy === current.id}
                   type="button"
                   onClick={() => void test(current)}
@@ -424,11 +433,16 @@ export function ConnectionManagerView({
         </article>
       </div>
 
-      <div className={`connection-message ${error ? "error" : ""}`}>{error ?? message}</div>
+      <div
+        className={`connection-message ${error ? "error" : ""}`}
+        data-testid="connection-message"
+      >
+        {error ?? message}
+      </div>
 
       {modal === "drivers" ? (
         <Modal title="Conectar a una base de datos" onClose={() => setModal(null)}>
-          <div className="driver-picker">
+          <div className="driver-picker" data-testid="driver-picker">
             <div>
               <strong>Selecciona el motor</strong>
               <p>Solo los drivers activos pueden crear perfiles comprobables.</p>
@@ -436,6 +450,7 @@ export function ConnectionManagerView({
             <input
               autoFocus
               className="driver-search"
+              data-testid="driver-search"
               placeholder="Buscar PostgreSQL, Oracle, SQL Server…"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -446,6 +461,7 @@ export function ConnectionManagerView({
                   key={driver.id}
                   className="driver-card"
                   type="button"
+                  data-testid={`driver-${driver.id}`}
                   onClick={() => chooseDriver(driver)}
                 >
                   <span className={`db-mark large db-${driver.id}`}>{driverMark(driver.id)}</span>
@@ -466,8 +482,22 @@ export function ConnectionManagerView({
           footer={
             <>
               <button className="button subtle" type="button" onClick={() => setModal(null)}>Cancelar</button>
-              <button className="button subtle" disabled={busy === "save"} type="button" onClick={() => void save(false)}>Guardar</button>
-              <button className="button primary" disabled={busy === "save"} type="button" onClick={() => void save(true)}>
+              <button
+                className="button subtle"
+                data-testid="connection-save"
+                disabled={busy === "save"}
+                type="button"
+                onClick={() => void save(false)}
+              >
+                Guardar
+              </button>
+              <button
+                className="button primary"
+                data-testid="connection-save-test"
+                disabled={busy === "save"}
+                type="button"
+                onClick={() => void save(true)}
+              >
                 {busy === "save" ? "Validando…" : "Guardar y probar"}
               </button>
             </>
@@ -496,8 +526,20 @@ function ConnectionForm({
   const isMongo = form.connection_type === "mongodb";
   const hasMongoUrl = Boolean(form.url?.trim());
   return (
-    <form className="connection-form" onSubmit={(event) => event.preventDefault()}>
-      <label className="wide">Nombre del perfil<input required value={form.name} onChange={(event) => field("name", event.target.value)} /></label>
+    <form
+      className="connection-form"
+      data-testid="connection-form"
+      onSubmit={(event) => event.preventDefault()}
+    >
+      <label className="wide">
+        Nombre del perfil
+        <input
+          required
+          data-testid="connection-name"
+          value={form.name}
+          onChange={(event) => field("name", event.target.value)}
+        />
+      </label>
       {isMongo ? (
         <label className="wide">
           URL de conexión
@@ -510,11 +552,63 @@ function ConnectionForm({
           <small>Opcional. Al pegar una URI se rellenan host, puerto, base y credenciales. También admite mongodb+srv://.</small>
         </label>
       ) : null}
-      <label>Host<input required={!hasMongoUrl} value={form.host} onChange={(event) => field("host", event.target.value)} /></label>
-      <label>Puerto<input required={!hasMongoUrl} min={1} max={65535} type="number" value={form.port} onChange={(event) => field("port", Number(event.target.value))} /></label>
-      <label>Base / servicio<input value={form.database} onChange={(event) => field("database", event.target.value)} /></label>
-      <label>Usuario<input required={!hasMongoUrl} autoComplete="username" value={form.username} onChange={(event) => field("username", event.target.value)} /></label>
-      <label className="wide">Contraseña<input required={!editing && !hasMongoUrl} autoComplete="new-password" type="password" value={form.password ?? ""} placeholder={editing ? "Vacío conserva la contraseña actual" : hasMongoUrl ? "Vacío usa la de la URL" : ""} onChange={(event) => field("password", event.target.value)} /></label>
+      <label>
+        Host
+        <input
+          required={!hasMongoUrl}
+          data-testid="connection-host"
+          value={form.host}
+          onChange={(event) => field("host", event.target.value)}
+        />
+      </label>
+      <label>
+        Puerto
+        <input
+          required={!hasMongoUrl}
+          min={1}
+          max={65535}
+          type="number"
+          data-testid="connection-port"
+          value={form.port}
+          onChange={(event) => field("port", Number(event.target.value))}
+        />
+      </label>
+      <label>
+        Base / servicio
+        <input
+          data-testid="connection-database"
+          value={form.database}
+          onChange={(event) => field("database", event.target.value)}
+        />
+      </label>
+      <label>
+        Usuario
+        <input
+          required={!hasMongoUrl}
+          autoComplete="username"
+          data-testid="connection-username"
+          value={form.username}
+          onChange={(event) => field("username", event.target.value)}
+        />
+      </label>
+      <label className="wide">
+        Contraseña
+        <input
+          required={!editing && !hasMongoUrl}
+          autoComplete="new-password"
+          type="password"
+          data-testid="connection-password"
+          value={form.password ?? ""}
+          placeholder={
+            editing
+              ? "Vacío conserva la contraseña actual"
+              : hasMongoUrl
+                ? "Vacío usa la de la URL"
+                : ""
+          }
+          onChange={(event) => field("password", event.target.value)}
+        />
+      </label>
       <label>Pool mínimo<input min={0} type="number" value={form.pool_min} onChange={(event) => field("pool_min", Number(event.target.value))} /></label>
       <label>Pool máximo<input min={1} type="number" value={form.pool_max} onChange={(event) => field("pool_max", Number(event.target.value))} /></label>
       <label>Timeout (ms)<input min={250} type="number" value={form.timeout_ms} onChange={(event) => field("timeout_ms", Number(event.target.value))} /></label>

@@ -1,0 +1,57 @@
+# Verdad canónica del README: flow offline sin bases externas.
+# Uso:
+#   cargo run -p jaiba-cli --features release-core -- examples/smoke.yaml
+#   ./scripts/smoke-release-core.sh
+#
+# Recorrido Estable con Postgres: examples/stable-postgres-to-csv.yaml
+
+id: smoke
+
+engine:
+  queue_capacity: 64
+  max_concurrency: 4
+  repository:
+    enabled: true
+    database_path: .jaiva/smoke-repository.db
+    content_path: .jaiva/smoke-content
+    abandoned_after_seconds: 0
+    completed_retention_hours: 24
+  logging:
+    enabled: true
+    directory: .jaiva/smoke-logs
+    rotation: daily
+
+processors:
+  - id: source
+    type: generate_records
+    config:
+      records:
+        - customer_id: 1
+          customer_name: Ada
+        - customer_id: 2
+          customer_name: Linus
+
+  - id: transform
+    type: rename_fields
+    config:
+      fields:
+        customer_id: id
+        customer_name: name
+
+  - id: encode
+    type: encode_json
+    config: {}
+
+  - id: destination
+    type: log_records
+
+connections:
+  - from: source
+    relationship: success
+    to: transform
+  - from: transform
+    relationship: success
+    to: encode
+  - from: encode
+    relationship: success
+    to: destination

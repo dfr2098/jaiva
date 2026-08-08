@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1
+# Imagen release-core: CLI/server sin drivers opcionales (Oracle/Kafka/…).
+FROM rust:1.88-bookworm AS build
+WORKDIR /src
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY simulator ./simulator
+RUN cargo build --release -p jaiba-cli --features release-core --bin jaiba
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libssl3 curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/jaiba /usr/local/bin/jaiba
+RUN mkdir -p /data /output /flows
+WORKDIR /work
+EXPOSE 9090
+HEALTHCHECK --interval=10s --timeout=3s --retries=12 \
+  CMD curl -fsS http://127.0.0.1:9090/health || exit 1
+ENTRYPOINT ["jaiba"]
+CMD ["serve"]

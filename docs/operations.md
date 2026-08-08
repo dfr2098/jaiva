@@ -59,13 +59,15 @@ export JAIBA_SERVER_ADDR=0.0.0.0:9090
 - `GET /ready`: preparación real del flujo según su ciclo de vida.
 - `GET /runtime`: instantánea actual del flujo, siempre con estado HTTP `200`.
 - `GET /metrics`: Prometheus.
-- `GET /ws`: snapshot JSON cada segundo.
+- `GET /ws` / `GET /ws/v1`: eventos de runtime; sondeo cada
+  `JAIBA_WS_POLL_MS` (default 250 ms) y **solo envía si el JSON cambió**
+  (throttle + dirty-check). Ver [packaging.md](packaging.md).
 - `/api/v1/*`: control autenticado, provenance y dead-letter.
 
 Grafana debe consultar Prometheus, no el WebSocket directamente.
 
 Las métricas etiquetadas y sus reglas de cardinalidad están documentadas en
-[Paso 9: métricas Prometheus](priority-9-metrics.md).
+[Paso 9: métricas Prometheus](history/priority-9-metrics.md).
 
 Para habilitar la API administrativa:
 
@@ -77,7 +79,7 @@ curl -H "Authorization: Bearer $JAIBA_ADMIN_TOKEN" \
 ```
 
 La referencia completa está en
-[Fase 7: control y endurecimiento operativo](priority-7-control-plane.md).
+[Fase 7: control y endurecimiento operativo](history/priority-7-control-plane.md).
 
 ### PC se traba con muchos contenedores
 
@@ -120,7 +122,7 @@ export JAIBA_TEST_SQLSERVER_PASSWORD='...'
 ```
 
 Detalle, variables y cobertura:
-[priority-8-integration-tests.md](priority-8-integration-tests.md).
+[priority-8-integration-tests.md](history/priority-8-integration-tests.md).
 
 Perfiles Mongo con URI (`mongodb://` / `mongodb+srv://`) y SQL Server en la UI:
 [connection-manager.md](connection-manager.md).

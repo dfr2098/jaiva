@@ -7,6 +7,9 @@
 **/dist/
 **/*.tsbuildinfo
 **/.vite/
+**/test-results/
+**/playwright-report/
+**/blob-report/
 
 # Runtime data
 /.jaiva/

@@ -122,24 +122,60 @@ type ConnectionStores = (
     Option<Arc<dyn AuditSink>>,
 );
 
+/// Interpreta flags de entorno tipo booleano (`1` / `true` / `yes` / `on`).
+fn env_flag_enabled(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+/// ¿Se exige `JAIBA_MASTER_KEY` (sin caer a memoria)?
+///
+/// - `JAIBA_REQUIRE_MASTER_KEY=1` → siempre.
+/// - Bind no-loopback → sí, salvo `JAIBA_ALLOW_INMEMORY_SECRETS=1`.
+/// - Loopback → no (dev local), salvo el flag de require.
+fn master_key_required(bind: SocketAddr) -> bool {
+    if env_flag_enabled("JAIBA_REQUIRE_MASTER_KEY") {
+        return true;
+    }
+    if !bind.ip().is_loopback() && !env_flag_enabled("JAIBA_ALLOW_INMEMORY_SECRETS") {
+        return true;
+    }
+    false
+}
+
 /// Construye el almacén de secretos y la persistencia de conexiones según el
 /// entorno.
 ///
 /// - `JAIBA_MASTER_KEY`: passphrase para derivar (Argon2id) la clave AES-256-GCM.
 ///   Si está presente, los perfiles y secretos se persisten y auditan en disco.
 /// - `JAIBA_DATA_DIR`: carpeta de datos (por defecto `data`).
+/// - `JAIBA_REQUIRE_MASTER_KEY`: falla si falta la clave (sin memoria).
+/// - Bind no-loopback: exige clave salvo `JAIBA_ALLOW_INMEMORY_SECRETS=1`.
+/// - Si ya existe `secrets.enc` y falta la clave: **error** (no se cae a memoria).
 ///
-/// Sin clave maestra se usa un almacén en memoria (solo desarrollo).
-fn build_connection_stores() -> Result<ConnectionStores, FlowError> {
+/// Sin clave maestra (y si está permitido y no hay almacén en disco) se usa
+/// memoria (solo desarrollo).
+fn build_connection_stores(bind: SocketAddr) -> Result<ConnectionStores, FlowError> {
+    let base =
+        std::path::PathBuf::from(env::var("JAIBA_DATA_DIR").unwrap_or_else(|_| "data".to_owned()));
+    let secrets_path = base.join("secrets.enc");
+    let persistent_store_present = secrets_path.is_file();
+
     match env::var("JAIBA_MASTER_KEY") {
         Ok(master_key) if !master_key.trim().is_empty() => {
-            let base = std::path::PathBuf::from(
-                env::var("JAIBA_DATA_DIR").unwrap_or_else(|_| "data".to_owned()),
-            );
-            let store = EncryptedFileSecretStore::open(base.join("secrets.enc"), &master_key)
-                .map_err(|error| {
+            let store =
+                EncryptedFileSecretStore::open(&secrets_path, &master_key).map_err(|error| {
                     FlowError::Configuration(format!(
-                        "no se pudo abrir el almacén de secretos cifrado: {error}"
+                        "no se pudo abrir el almacén de secretos cifrado ({}): {error}. \
+                         Comprueba JAIBA_MASTER_KEY (misma passphrase que creó el archivo)",
+                        secrets_path.display()
                     ))
                 })?;
             tracing::info!(
@@ -154,10 +190,24 @@ fn build_connection_stores() -> Result<ConnectionStores, FlowError> {
             let audit: Arc<dyn AuditSink> = Arc::new(FileAuditSink::new(base.join("audit.log")));
             Ok((secrets, Some(persistence), Some(audit)))
         }
+        _ if persistent_store_present => Err(FlowError::Configuration(format!(
+            "modo persistente detectado: existe {} pero falta JAIBA_MASTER_KEY. \
+             Exporta la passphrase (export JAIBA_MASTER_KEY='…') o, solo en desarrollo \
+             y aceptando perder esos secretos, elimina el archivo y vuelve a arrancar",
+            secrets_path.display()
+        ))),
+        _ if master_key_required(bind) => Err(FlowError::Configuration(
+            "JAIBA_MASTER_KEY es obligatoria en este arranque (bind no-loopback o \
+             JAIBA_REQUIRE_MASTER_KEY=1). Defina la clave: export JAIBA_MASTER_KEY='…' \
+             o, solo en desarrollo explícito, JAIBA_ALLOW_INMEMORY_SECRETS=1 \
+             (los perfiles se perderán al reiniciar)"
+                .to_owned(),
+        )),
         _ => {
             tracing::warn!(
                 target: "jaiba.connections",
-                "JAIBA_MASTER_KEY no configurada: usando almacén en memoria; los perfiles y secretos se perderán al reiniciar"
+                "JAIBA_MASTER_KEY no configurada: usando almacén en memoria; los perfiles y secretos se perderán al reiniciar. \
+                 Para persistir: export JAIBA_MASTER_KEY='…'"
             );
             Ok((Arc::new(InMemorySecretStore::default()), None, None))
         }
@@ -212,7 +262,7 @@ impl ObservabilityServer {
     }
 
     pub async fn serve(self, address: SocketAddr) -> Result<(), FlowError> {
-        let (connection_secrets, persistence, audit) = build_connection_stores()?;
+        let (connection_secrets, persistence, audit) = build_connection_stores(address)?;
         let connection_manager = crate::connection_api::connection_manager(
             connection_secrets.clone(),
             persistence,
@@ -1478,17 +1528,48 @@ fn configuration_error(error: FlowError) -> Response {
         .into_response()
 }
 
+/// Intervalo de sondeo WS (`JAIBA_WS_POLL_MS`, default 250).
+/// Solo se envía si el JSON cambió desde el último envío exitoso (dirty-check).
+fn ws_poll_interval() -> Duration {
+    let ms = env::var("JAIBA_WS_POLL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(250)
+        .clamp(50, 5_000);
+    Duration::from_millis(ms)
+}
+
+/// Devuelve el payload si cambió respecto a `last` (aún no actualiza `last`).
+fn ws_changed_payload(last: &Option<String>, payload: String) -> Option<String> {
+    if last.as_ref() == Some(&payload) {
+        None
+    } else {
+        Some(payload)
+    }
+}
+
 async fn stream_metrics(mut socket: WebSocket, state: AppState) {
-    let mut ticker = interval(Duration::from_secs(1));
+    let mut ticker = interval(ws_poll_interval());
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last: Option<String> = None;
     loop {
         ticker.tick().await;
         let summary = state.registry.primary_snapshot().await.map(|s| s.metrics);
         let Ok(message) = serde_json::to_string(&summary) else {
             break;
         };
-        if socket.send(Message::Text(message.into())).await.is_err() {
+        let Some(message) = ws_changed_payload(&last, message) else {
+            continue;
+        };
+        // Backpressure: un solo send en vuelo; ticks perdidos se omiten.
+        if socket
+            .send(Message::Text(message.clone().into()))
+            .await
+            .is_err()
+        {
             break;
         }
+        last = Some(message);
     }
 }
 
@@ -1500,7 +1581,9 @@ struct RuntimeEvent {
 }
 
 async fn stream_runtime(mut socket: WebSocket, state: AppState) {
-    let mut ticker = interval(Duration::from_secs(1));
+    let mut ticker = interval(ws_poll_interval());
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last: Option<String> = None;
     loop {
         ticker.tick().await;
         let flows = state.registry.snapshots().await;
@@ -1512,9 +1595,17 @@ async fn stream_runtime(mut socket: WebSocket, state: AppState) {
         let Ok(message) = serde_json::to_string(&event) else {
             break;
         };
-        if socket.send(Message::Text(message.into())).await.is_err() {
+        let Some(message) = ws_changed_payload(&last, message) else {
+            continue;
+        };
+        if socket
+            .send(Message::Text(message.clone().into()))
+            .await
+            .is_err()
+        {
             break;
         }
+        last = Some(message);
     }
 }
 
@@ -1543,6 +1634,19 @@ fn validate_admin_exposure(
 mod tests {
     use super::*;
 
+    /// Candado compartido: varios tests mutan variables de entorno.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn ws_skips_unchanged_payload() {
+        let mut last = None;
+        let first = ws_changed_payload(&last, r#"{"a":1}"#.to_owned()).expect("emit first");
+        last = Some(first.clone());
+        assert!(ws_changed_payload(&last, first).is_none());
+        let next = ws_changed_payload(&last, r#"{"a":2}"#.to_owned()).expect("emit change");
+        assert_eq!(next, r#"{"a":2}"#);
+    }
+
     #[test]
     fn unauthenticated_admin_is_limited_to_loopback() {
         assert!(
@@ -1565,7 +1669,6 @@ mod tests {
 
     #[test]
     fn bearer_without_token_fails_even_on_loopback() {
-        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = ENV_LOCK.lock().unwrap();
         let previous = std::env::var("JAIBA_ADMIN_TOKEN").ok();
         let previous_legacy = std::env::var("JAIVA_ADMIN_TOKEN").ok();
@@ -1665,5 +1768,198 @@ processors:
         )
         .unwrap_err();
         assert!(error.to_string().contains("between 1 and 90"));
+    }
+
+    #[test]
+    fn require_master_key_fails_without_key() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous_require = env::var("JAIBA_REQUIRE_MASTER_KEY").ok();
+        let previous_allow = env::var("JAIBA_ALLOW_INMEMORY_SECRETS").ok();
+        let previous_key = env::var("JAIBA_MASTER_KEY").ok();
+        let previous_data = env::var("JAIBA_DATA_DIR").ok();
+        let dir = env::temp_dir().join(format!(
+            "jaiba-require-key-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp data dir");
+        // SAFETY: restored before releasing ENV_LOCK.
+        unsafe {
+            env::set_var("JAIBA_REQUIRE_MASTER_KEY", "1");
+            env::remove_var("JAIBA_ALLOW_INMEMORY_SECRETS");
+            env::remove_var("JAIBA_MASTER_KEY");
+            env::set_var("JAIBA_DATA_DIR", &dir);
+        }
+        let bind: SocketAddr = "127.0.0.1:9090".parse().unwrap();
+        let err = match build_connection_stores(bind) {
+            Ok(_) => panic!("expected fail-fast without master key"),
+            Err(error) => error,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("JAIBA_MASTER_KEY"),
+            "unexpected error: {message}"
+        );
+        unsafe {
+            match previous_require {
+                Some(value) => env::set_var("JAIBA_REQUIRE_MASTER_KEY", value),
+                None => env::remove_var("JAIBA_REQUIRE_MASTER_KEY"),
+            }
+            match previous_allow {
+                Some(value) => env::set_var("JAIBA_ALLOW_INMEMORY_SECRETS", value),
+                None => env::remove_var("JAIBA_ALLOW_INMEMORY_SECRETS"),
+            }
+            match previous_key {
+                Some(value) => env::set_var("JAIBA_MASTER_KEY", value),
+                None => env::remove_var("JAIBA_MASTER_KEY"),
+            }
+            match previous_data {
+                Some(value) => env::set_var("JAIBA_DATA_DIR", value),
+                None => env::remove_var("JAIBA_DATA_DIR"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn existing_secrets_file_requires_master_key() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous_require = env::var("JAIBA_REQUIRE_MASTER_KEY").ok();
+        let previous_allow = env::var("JAIBA_ALLOW_INMEMORY_SECRETS").ok();
+        let previous_key = env::var("JAIBA_MASTER_KEY").ok();
+        let previous_data = env::var("JAIBA_DATA_DIR").ok();
+        let dir = env::temp_dir().join(format!(
+            "jaiba-persist-present-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp data dir");
+        std::fs::write(dir.join("secrets.enc"), b"not-a-real-store").expect("stub secrets");
+        unsafe {
+            env::remove_var("JAIBA_REQUIRE_MASTER_KEY");
+            env::remove_var("JAIBA_ALLOW_INMEMORY_SECRETS");
+            env::remove_var("JAIBA_MASTER_KEY");
+            env::set_var("JAIBA_DATA_DIR", &dir);
+        }
+        let bind: SocketAddr = "127.0.0.1:9090".parse().unwrap();
+        let err = match build_connection_stores(bind) {
+            Ok(_) => panic!("expected error when secrets.enc exists without key"),
+            Err(error) => error,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("modo persistente") && message.contains("JAIBA_MASTER_KEY"),
+            "unexpected error: {message}"
+        );
+        unsafe {
+            match previous_require {
+                Some(value) => env::set_var("JAIBA_REQUIRE_MASTER_KEY", value),
+                None => env::remove_var("JAIBA_REQUIRE_MASTER_KEY"),
+            }
+            match previous_allow {
+                Some(value) => env::set_var("JAIBA_ALLOW_INMEMORY_SECRETS", value),
+                None => env::remove_var("JAIBA_ALLOW_INMEMORY_SECRETS"),
+            }
+            match previous_key {
+                Some(value) => env::set_var("JAIBA_MASTER_KEY", value),
+                None => env::remove_var("JAIBA_MASTER_KEY"),
+            }
+            match previous_data {
+                Some(value) => env::set_var("JAIBA_DATA_DIR", value),
+                None => env::remove_var("JAIBA_DATA_DIR"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn non_loopback_requires_master_key_unless_explicit_inmemory() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous_require = env::var("JAIBA_REQUIRE_MASTER_KEY").ok();
+        let previous_allow = env::var("JAIBA_ALLOW_INMEMORY_SECRETS").ok();
+        let previous_key = env::var("JAIBA_MASTER_KEY").ok();
+        unsafe {
+            env::remove_var("JAIBA_REQUIRE_MASTER_KEY");
+            env::remove_var("JAIBA_ALLOW_INMEMORY_SECRETS");
+            env::remove_var("JAIBA_MASTER_KEY");
+        }
+        let bind: SocketAddr = "0.0.0.0:9090".parse().unwrap();
+        let err = match build_connection_stores(bind) {
+            Ok(_) => panic!("expected master key on non-loopback"),
+            Err(error) => error,
+        };
+        assert!(err.to_string().contains("JAIBA_MASTER_KEY"));
+        unsafe {
+            env::set_var("JAIBA_ALLOW_INMEMORY_SECRETS", "1");
+        }
+        let allowed = build_connection_stores(bind);
+        unsafe {
+            match previous_require {
+                Some(value) => env::set_var("JAIBA_REQUIRE_MASTER_KEY", value),
+                None => env::remove_var("JAIBA_REQUIRE_MASTER_KEY"),
+            }
+            match previous_allow {
+                Some(value) => env::set_var("JAIBA_ALLOW_INMEMORY_SECRETS", value),
+                None => env::remove_var("JAIBA_ALLOW_INMEMORY_SECRETS"),
+            }
+            match previous_key {
+                Some(value) => env::set_var("JAIBA_MASTER_KEY", value),
+                None => env::remove_var("JAIBA_MASTER_KEY"),
+            }
+        }
+        if let Err(error) = allowed {
+            panic!("inmemory allow should open stores: {error}");
+        }
+    }
+
+    #[test]
+    fn require_master_key_opens_encrypted_store() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous_require = env::var("JAIBA_REQUIRE_MASTER_KEY").ok();
+        let previous_key = env::var("JAIBA_MASTER_KEY").ok();
+        let previous_data = env::var("JAIBA_DATA_DIR").ok();
+        let dir = env::temp_dir().join(format!(
+            "jaiba-key-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp data dir");
+        unsafe {
+            env::set_var("JAIBA_REQUIRE_MASTER_KEY", "true");
+            env::set_var("JAIBA_MASTER_KEY", "release-core-test-key");
+            env::set_var("JAIBA_DATA_DIR", &dir);
+        }
+        let bind: SocketAddr = "127.0.0.1:9090".parse().unwrap();
+        let result = build_connection_stores(bind);
+        unsafe {
+            match previous_require {
+                Some(value) => env::set_var("JAIBA_REQUIRE_MASTER_KEY", value),
+                None => env::remove_var("JAIBA_REQUIRE_MASTER_KEY"),
+            }
+            match previous_key {
+                Some(value) => env::set_var("JAIBA_MASTER_KEY", value),
+                None => env::remove_var("JAIBA_MASTER_KEY"),
+            }
+            match previous_data {
+                Some(value) => env::set_var("JAIBA_DATA_DIR", value),
+                None => env::remove_var("JAIBA_DATA_DIR"),
+            }
+        }
+        let (_secrets, persistence, audit) = match result {
+            Ok(stores) => stores,
+            Err(error) => panic!("encrypted store should open: {error}"),
+        };
+        assert!(persistence.is_some());
+        assert!(audit.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

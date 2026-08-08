@@ -68,6 +68,6 @@ Misma cadena AI Prep; origen `generate_records`.
 
 ## Relación
 
-- Toolkit: [ai-data-prep.md](ai-data-prep.md)
+- Toolkit: [ai-data-prep.md](../ai-data-prep.md)
 - UI split handles: builder (fase punto 4)
 - Seguridad / desktop: 10A / 10B (independientes)

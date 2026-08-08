@@ -1,21 +1,31 @@
 # Administrador de conexiones
 
-Jaiba UI incluye un módulo independiente para crear y comprobar perfiles de
-conexión reutilizables. Se abre desde **Conexiones** en la barra principal.
+> **Si eres nuevo:** [guia-para-nuevos.md](guia-para-nuevos.md). Resumen:
+> creas un **perfil** (host, user, password) en la UI o API; en el YAML del flow
+> solo pones el **alias**. Nunca la contraseña.
+
+Jaiba UI tiene la sección **Conexiones** para crear y probar perfiles
+reutilizables.
 
 ## Separación de responsabilidades
 
-- La UI captura la configuración y consume la API administrativa.
-- `jaiba-server` valida los datos y nunca devuelve la contraseña.
-- `jaiba-connection-manager` conserva perfiles, estado y referencias a secretos.
-- Los plugins de conexión realizan la prueba específica del motor.
-- Los flujos deben referirse al **alias** (`connection: postgres_dma`), no a una
-  URL embebida en el procesador.
+- La UI captura datos y llama a la API; **no** abre la base ni guarda el password
+  en el flow.
+- `jaiba-server` valida y **nunca** devuelve la contraseña en las respuestas.
+- `jaiba-connection-manager` guarda perfiles y referencias a secretos.
+- Los plugins hacen el “test connection” de cada motor.
+- En el YAML usa alias (`connection: postgres_dma`), no URLs con password.
 
-El proveedor predeterminado actual es `InMemorySecretStore`, pensado para
-desarrollo local. Los perfiles y secretos desaparecen al reiniciar el motor. En
-producción debe reemplazarse por Vault, Kubernetes Secrets o un almacén cifrado
-con una clave externa; no se debe persistir el mapa en memoria como JSON.
+### ¿Se pierden los perfiles al reiniciar?
+
+| Situación | Qué pasa |
+| --- | --- |
+| Loopback sin `JAIBA_MASTER_KEY` | Memoria → se pierden al cerrar (solo dev) |
+| `JAIBA_REQUIRE_MASTER_KEY=1` o bind no-loopback sin clave | **No arranca** (salvo `JAIBA_ALLOW_INMEMORY_SECRETS=1`) |
+| Existe `data/secrets.enc` y falta `JAIBA_MASTER_KEY` | **No arranca** (error “modo persistente”; no cae a memoria) |
+| Con `JAIBA_MASTER_KEY` | AES-GCM en `JAIBA_DATA_DIR` → persisten |
+
+Ver [release-core.md](release-core.md). No guardes passwords como JSON en claro.
 
 ## Adaptadores extensibles
 
@@ -210,7 +220,7 @@ cargo test -p jaiba-server --features mongodb-driver \
 ```
 
 La suite Fase 8 incluye Mongo (metadatos + flujo query→upsert). Ver
-[priority-8-integration-tests.md](priority-8-integration-tests.md).
+[priority-8-integration-tests.md](history/priority-8-integration-tests.md).
 
 Ejemplo de copia: [`examples/mongodb-copy.yaml`](../examples/mongodb-copy.yaml).
 
@@ -296,5 +306,5 @@ sequenceDiagram
 ## Referencias
 
 - Bitácora: [implementation-notes.md](implementation-notes.md)
-- Suite Fase 8: [priority-8-integration-tests.md](priority-8-integration-tests.md)
+- Suite Fase 8: [priority-8-integration-tests.md](history/priority-8-integration-tests.md)
 - Operación / features: [operations.md](operations.md)

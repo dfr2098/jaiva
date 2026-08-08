@@ -1,5 +1,10 @@
 # AI Data Prep Toolkit
 
+> **Política:** capacidad **Experimental**. Integraciones de planta / DMA se
+> maduran en el lab `DMA_JAIVA/` (fuera de este repo). Al OSS solo se porta lo
+> estable. No forma parte del recorrido [Estable](product-roadmap.md) ni de
+> [guia-para-nuevos.md](guia-para-nuevos.md).
+
 Jaiba prepara datasets tabulares para IA en **Rust puro**. No entrena ni despliega
 modelos: el flujo termina en export (CSV/JSON) listo para Azure ML, Fabric,
 SageMaker u otra plataforma externa.
@@ -18,7 +23,7 @@ SageMaker u otra plataforma externa.
 cargo run -- examples/ai-prep-conveyor.yaml
 
 # Planta: Postgres → prep → CSV + manifest (+ webhook opcional)
-# Ver docs/priority-10c-plant-prep.md
+# Ver docs/history/priority-10c-plant-prep.md
 export DATABASE_URL=postgres://...
 cargo run -- examples/ai-prep-plant.yaml
 ```

@@ -1,5 +1,9 @@
 # JME Cold Memory segmentado
 
+> **Política:** JME es **Experimental**. El lab de integración (DMA) vive en
+> `DMA_JAIVA/` fuera de este repo; al OSS solo se porta lo estable. No es el
+> recorrido [Estable](product-roadmap.md).
+
 Cold Memory es el nivel SSD local del Jaiba Memory Engine. No es swap del
 sistema operativo: JME mueve objetos completos porque conoce su clase,
 criticidad, frecuencia y tiempo desde el último acceso.

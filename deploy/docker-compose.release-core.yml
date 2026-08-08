@@ -1,0 +1,69 @@
+# Producto mínimo Estable: Postgres + Jaiba serve + UI
+# Uso: ./scripts/release-core-up.sh
+name: jaiba-release-core
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: jaiba_stable_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-jaiba}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jaiba_stable}
+      POSTGRES_DB: ${POSTGRES_DB:-jaiba_stable}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - jaiba_stable_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jaiba} -d ${POSTGRES_DB:-jaiba_stable}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  jaiba:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.jaiba
+    container_name: jaiba_stable_server
+    restart: unless-stopped
+    environment:
+      JAIBA_SERVER_ADDR: ${JAIBA_SERVER_ADDR:-0.0.0.0:9090}
+      JAIBA_MASTER_KEY: ${JAIBA_MASTER_KEY:-jaiba-stable-master-key-change-me}
+      JAIBA_REQUIRE_MASTER_KEY: "1"
+      JAIBA_ADMIN_TOKEN: ${JAIBA_ADMIN_TOKEN:-jaiba-stable-admin-token}
+      JAIBA_ADMIN_AUTH: bearer
+      JAIBA_DATA_DIR: /data
+      DATABASE_URL: postgres://${POSTGRES_USER:-jaiba}:${POSTGRES_PASSWORD:-jaiba_stable}@postgres:5432/${POSTGRES_DB:-jaiba_stable}
+    ports:
+      - "127.0.0.1:${JAIBA_API_PORT:-9090}:9090"
+    volumes:
+      - jaiba_stable_data:/data
+      - jaiba_stable_output:/output
+      - ../examples:/flows:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ui:
+    build:
+      context: ../apps/jaiba-ui
+      dockerfile: Dockerfile
+    container_name: jaiba_stable_ui
+    restart: unless-stopped
+    environment:
+      VISUALISA_PORT: "9080"
+      JAIBA_API_UPSTREAM: http://jaiba:9090
+      JAIVA_API_UPSTREAM: http://jaiba:9090
+      NGINX_ENVSUBST_FILTER: "VISUALISA_PORT|JAIBA_API_UPSTREAM|JAIVA_API_UPSTREAM"
+    ports:
+      - "127.0.0.1:${UI_PORT:-9080}:9080"
+    depends_on:
+      jaiba:
+        condition: service_healthy
+
+volumes:
+  jaiba_stable_pg:
+  jaiba_stable_data:
+  jaiba_stable_output:

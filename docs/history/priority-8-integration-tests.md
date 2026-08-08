@@ -101,12 +101,12 @@ cargo test -p jaiba-runtime prefers_stored_mongodb_connection_url
 ## CI
 
 Workflow opcional: `.github/workflows/phase8-integration.yml`
-(`workflow_dispatch` o label `phase8`). Detalle en [ci.md](ci.md).
+(`workflow_dispatch` o label `phase8`). Detalle en [ci.md](../ci.md).
 
 ## Documentación relacionada
 
-- [ci.md](ci.md) — CI mínimo y Phase 8 en GitHub Actions
-- [connection-manager.md](connection-manager.md) — perfiles Mongo (URL) y SQL Server
-- [operations.md](operations.md) — features al servir
-- [implementation-notes.md](implementation-notes.md) — bitácora de validación
+- [ci.md](../ci.md) — CI mínimo y Phase 8 en GitHub Actions
+- [connection-manager.md](../connection-manager.md) — perfiles Mongo (URL) y SQL Server
+- [operations.md](../operations.md) — features al servir
+- [implementation-notes.md](../implementation-notes.md) — bitácora de validación
 - [docs/README.md](README.md) — índice general

@@ -1,5 +1,8 @@
 # Visión del proyecto Jaiba
 
+> **Si eres nuevo:** empieza por [guia-para-nuevos.md](guia-para-nuevos.md).
+> Aquí están los principios del producto (el “por qué”), no el tutorial.
+
 ## Propósito
 
 Jaiba es una plataforma open source escrita en Rust para diseñar, ejecutar,

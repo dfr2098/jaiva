@@ -39,9 +39,13 @@ export function Status({
   label: string;
 }) {
   return (
-    <div className="connection-status">
+    <div
+      className="connection-status"
+      data-testid="engine-status"
+      data-online={online ? "true" : "false"}
+    >
       <span className={`status-light ${online ? "online" : "offline"}`} />
-      <span>{label}</span>
+      <span data-testid="engine-status-label">{label}</span>
     </div>
   );
 }
@@ -71,7 +75,7 @@ export function AdminAccess() {
   }, [saved, refreshWhoAmI]);
 
   return (
-    <details className="token-control">
+    <details className="token-control" data-testid="admin-access">
       <summary title="Credencial administrativa">
         {identity ? `Acceso · ${identity}` : "Acceso"}
       </summary>
@@ -81,6 +85,7 @@ export function AdminAccess() {
           <input
             autoComplete="off"
             className="builder-input"
+            data-testid="admin-token-input"
             onChange={(event) => {
               setToken(event.target.value);
               setSaved(false);
@@ -93,6 +98,7 @@ export function AdminAccess() {
         <div>
           <button
             className="button subtle"
+            data-testid="admin-token-save"
             onClick={() => {
               if (token) window.sessionStorage.setItem("jaiba.admin.token", token);
               else window.sessionStorage.removeItem("jaiba.admin.token");
@@ -331,6 +337,7 @@ export function FlowControls({
           return (
             <button
               className={`button action-${action}`}
+              data-testid={`flow-action-${action}`}
               disabled={disabled || busy !== null || !valid}
               key={action}
               onClick={() => onAction(action)}

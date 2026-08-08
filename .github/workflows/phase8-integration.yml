@@ -3,7 +3,7 @@
 #
 # Requisitos del runner:
 #   - Postgres, Kafka, MongoDB y SQL Server accesibles (defaults del harness)
-#   - Secrets / variables: ver docs/priority-8-integration-tests.md
+#   - Secrets / variables: ver docs/history/priority-8-integration-tests.md
 #
 # En GitHub: Settings → Secrets and variables → Actions
 #   JAIBA_TEST_POSTGRES_PASSWORD

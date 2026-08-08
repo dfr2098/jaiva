@@ -35,7 +35,7 @@ npm run desktop:dev
 La preparación multiplataforma también puede ejecutarse directamente con
 `node scripts/prepare-desktop-sidecar.mjs` desde la raíz del repositorio. La
 guía completa de plataforma y diagnóstico está en
-[windows-native-and-wsl.md](windows-native-and-wsl.md).
+[windows-native-and-wsl.md](../windows-native-and-wsl.md).
 
 Variables útiles:
 

@@ -283,6 +283,7 @@ sin almacenamiento.
 - Escrituras / batch: `[priority-4-database-writes.md](priority-4-database-writes.md)`
 - Métricas: `[priority-9-metrics.md](priority-9-metrics.md)`
 - Visión: `[project-vision.md](project-vision.md)`
+- Laboratorio / integración con DMA: carpeta hermana `DMA_JAIVA/` (fuera de este repo)
 
 
 

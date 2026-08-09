@@ -49,6 +49,9 @@ Stack Estable (Postgres + serve + UI) y smoke CSV:
 Ver también [product-roadmap.md](product-roadmap.md). Recorrido Estable
 Postgres→CSV: workflow **Stable path** (automático en `main` + cron laborable).
 
+Carga sostenida y chaos (stress / soak / v1 / v2 / `net_flap`):
+[stable-stack-tests.md](stable-stack-tests.md).
+
 ## Congelar roadmap
 
 **Vigente:** no abrir fases `priority-11+` de producto hasta que **smoke +

@@ -47,4 +47,7 @@ done
 
 echo "UI:  http://127.0.0.1:${UI_PORT:-9080}"
 echo "API: http://127.0.0.1:${JAIBA_API_PORT:-9090}"
+echo "Grafana:    http://127.0.0.1:${GRAFANA_PORT:-13000}"
+echo "Prometheus: http://127.0.0.1:${PROMETHEUS_PORT:-19091}"
+echo "Grafana user: ${GRAFANA_ADMIN_USER:-admin}"
 echo "Siguiente: ./scripts/smoke-stable-path.sh"

@@ -1,0 +1,47 @@
+# Carga acotada para el stack release-core. El script stress-stable-stack.sh
+# reemplaza __ROWS__ antes de desplegarla por la API.
+id: stable-runtime-stress
+
+database_connections:
+  stable_pg:
+    type: postgres
+    url_env: DATABASE_URL
+    max_connections: 8
+
+engine:
+  queue_capacity: 256
+  max_concurrency: 12
+  memory:
+    maximum_percent: 42
+  repository:
+    enabled: false
+
+processors:
+  - id: generate
+    type: query_postgres
+    config:
+      connection: stable_pg
+      batch_size: 500
+      query: |
+        SELECT jsonb_build_object(
+                 'id', n,
+                 'checksum', md5(n::text),
+                 'payload', repeat('x', 128)
+               ) AS data
+        FROM generate_series(1, __ROWS__) AS n
+    # Recuperación ante partición de red / Postgres momentáneamente inalcanzable.
+    retry:
+      maximum_attempts: 8
+      initial_delay_ms: 500
+      maximum_delay_ms: 10000
+    scheduling:
+      timeout_ms: 120000
+
+  - id: encode
+    type: encode_json
+    config: {}
+
+connections:
+  - from: generate
+    relationship: success
+    to: encode

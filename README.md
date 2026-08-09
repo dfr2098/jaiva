@@ -45,6 +45,7 @@ El recorrido de producto Postgres→CSV es [`examples/stable-postgres-to-csv.yam
 | Escribir un flow YAML | [docs/configuration.md](docs/configuration.md) |
 | Ver qué nodos existen | [docs/processors.md](docs/processors.md) |
 | Usar el servidor / UI | [docs/operations.md](docs/operations.md) |
+| Stress / soak / chaos (condiciones PASS/FAIL) | [docs/stable-stack-tests.md](docs/stable-stack-tests.md) |
 | Conectar bases de datos | [docs/connection-manager.md](docs/connection-manager.md) |
 | Ver el diseño interno | [docs/architecture.md](docs/architecture.md) |
 
@@ -206,6 +207,10 @@ scrape_configs:
     static_configs:
       - targets: ["jaiva:9090"]
 ```
+
+El stack estable ya incluye Prometheus y Grafana aprovisionados. Se inicia con
+`./scripts/release-core-up.sh`; el dashboard **Jaiba Runtime + JME** queda en
+`http://127.0.0.1:13000` (puerto configurable en `deploy/.env`).
 
 El WebSocket queda disponible para la futura interfaz de Jaiva:
 

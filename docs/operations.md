@@ -66,7 +66,43 @@ export JAIBA_SERVER_ADDR=0.0.0.0:9090
 
 Grafana debe consultar Prometheus, no el WebSocket directamente.
 
-Las métricas etiquetadas y sus reglas de cardinalidad están documentadas en
+### Stack integrado Prometheus + Grafana
+
+El despliegue estable incluye ambos servicios con configuración automática:
+
+```bash
+./scripts/release-core-up.sh
+```
+
+- Grafana: `http://127.0.0.1:13000`
+- Prometheus: `http://127.0.0.1:19091`
+- Métricas Jaiba: `http://127.0.0.1:19090/metrics`
+
+Grafana carga el datasource `Prometheus` y el dashboard **Jaiba Runtime + JME**.
+Las credenciales y puertos se controlan con `GRAFANA_ADMIN_USER`,
+`GRAFANA_ADMIN_PASSWORD`, `GRAFANA_PORT` y `PROMETHEUS_PORT` en `deploy/.env`.
+En Prometheus, `up{job="jaiba"}` debe devolver `1`. Las gráficas JME aparecen
+cuando el flujo tiene `engine.domain_memory.enabled: true`.
+
+Para generar carga y validar resiliencia del stack Estable (stress → soak →
+chaos v1/v2, variables, acciones, PASS/FAIL y `net_flap`/DNS):
+
+**[Pruebas del stack Estable](stable-stack-tests.md)**
+
+Atajos:
+
+```bash
+STRESS_ROWS=250000 ./scripts/stress-stable-stack.sh
+
+SOAK_DURATION_SECONDS=3600 SOAK_ROWS_PER_CYCLE=250000 \
+  ./scripts/soak-stable-stack.sh
+
+CHAOS_SEED=42 ./scripts/chaos-soak-stable-stack.sh
+CHAOS_PROFILE=v2 CHAOS_SEED=7 ./scripts/chaos-soak-stable-stack.sh
+```
+
+Grafana: dashboard `jaiba-runtime-jme`. Las métricas etiquetadas y sus
+reglas de cardinalidad están en
 [Paso 9: métricas Prometheus](history/priority-9-metrics.md).
 
 Para habilitar la API administrativa:

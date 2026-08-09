@@ -489,12 +489,19 @@ async fn schedule_available(
             circuits: circuits.clone(),
             domain_memory: domain_memory.clone(),
         };
+        let routed_relationships: HashSet<String> = config
+            .connections
+            .iter()
+            .filter(|connection| connection.from == processor_id)
+            .map(|connection| connection.relationship.clone())
+            .collect();
         let output = OutputSender::new(
             emission_sender.clone(),
             processor_id.clone(),
             memory.clone(),
             metrics.clone(),
-        );
+        )
+        .with_routed_relationships(routed_relationships);
         let queue_id = item.queue_id.clone();
         let provenance_repository = repository.cloned();
         let execution_mode = match definition.scheduling.execution_mode {
@@ -1150,6 +1157,7 @@ mod tests {
 
     struct SlowSource;
     struct Sink;
+    struct ForwardingCpuSink;
     struct BurstSource;
     struct AlwaysFail;
     struct ConcurrencyProbe {
@@ -1179,6 +1187,22 @@ mod tests {
             _: &OutputSender,
         ) -> Result<(), FlowError> {
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Processor for ForwardingCpuSink {
+        fn execution_mode(&self) -> ExecutionMode {
+            ExecutionMode::Cpu
+        }
+
+        async fn execute(
+            &self,
+            packet: DataPacket,
+            _: &ProcessorContext,
+            output: &OutputSender,
+        ) -> Result<(), FlowError> {
+            output.success(packet).await
         }
     }
 
@@ -1621,6 +1645,42 @@ connections:
         .expect("streaming pipeline must not deadlock")
         .unwrap();
         assert_eq!(summary.processed, 7);
+    }
+
+    #[tokio::test]
+    async fn terminal_cpu_output_cannot_deadlock_a_full_upstream_queue() {
+        let config = parse(
+            r#"
+id: terminal-output
+engine:
+  max_concurrency: 2
+  queue_capacity: 2
+processors:
+  - { id: source, type: burst_source }
+  - { id: terminal, type: forwarding_cpu_sink }
+connections:
+  - from: source
+    relationship: success
+    to: terminal
+    queue: { capacity: 2 }
+"#,
+        );
+        let mut registry = ProcessorRegistry::default();
+        registry.register("burst_source", |_| Ok(Arc::new(BurstSource)));
+        registry.register("forwarding_cpu_sink", |_| Ok(Arc::new(ForwardingCpuSink)));
+
+        let summary = tokio::time::timeout(
+            Duration::from_secs(2),
+            FlowEngine::new(config)
+                .unwrap()
+                .with_registry(registry)
+                .run(),
+        )
+        .await
+        .expect("terminal output must bypass the full routing channel")
+        .unwrap();
+        assert_eq!(summary.processed, 7);
+        assert_eq!(summary.failed, 0);
     }
 
     #[test]

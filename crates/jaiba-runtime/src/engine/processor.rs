@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    collections::HashSet,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use async_trait::async_trait;
@@ -30,6 +33,7 @@ pub struct OutputSender {
     memory: MemoryLimiter,
     metrics: FlowMetrics,
     emitted_records: Arc<AtomicU64>,
+    routed_relationships: Option<Arc<HashSet<String>>>,
 }
 
 impl OutputSender {
@@ -45,7 +49,15 @@ impl OutputSender {
             memory,
             metrics,
             emitted_records: Arc::new(AtomicU64::new(0)),
+            routed_relationships: None,
         }
+    }
+
+    /// Declara qué relaciones tienen una arista de salida. Las emisiones
+    /// terminales se contabilizan localmente y no ocupan el canal global.
+    pub(crate) fn with_routed_relationships(mut self, relationships: HashSet<String>) -> Self {
+        self.routed_relationships = Some(Arc::new(relationships));
+        self
     }
 
     /// Emits a packet through an arbitrary relationship.
@@ -59,6 +71,17 @@ impl OutputSender {
             .records()
             .map(|records| records.len() as u64)
             .unwrap_or(1);
+        if self
+            .routed_relationships
+            .as_ref()
+            .is_some_and(|relationships| !relationships.contains(&relationship))
+        {
+            if relationship != "failure" {
+                self.emitted_records.fetch_add(records, Ordering::Relaxed);
+                self.metrics.processor_records(&self.processor_id, records);
+            }
+            return Ok(());
+        }
         let reservation = self.memory.reserve(packet.estimated_size()).await?;
         self.sender
             .send(ProcessorEmission {

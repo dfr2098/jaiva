@@ -1,0 +1,109 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "stat", "title": "Estado (sin flujo = STOPPED)", "id": 1,
+      "datasource": {"type": "prometheus", "uid": "jaiba-prometheus"},
+      "targets": [{"expr": "max(jaiva_flow_status) or vector(0)", "refId": "A"}],
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "STOPPED"}, "1": {"text": "STARTING"}, "2": {"text": "RUNNING"}, "3": {"text": "PAUSED"}, "4": {"text": "DRAINING"}, "5": {"text": "FAILED"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 5}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 0, "y": 0}, "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none", "textMode": "auto"}
+    },
+    {
+      "type": "stat", "title": "Paquetes procesados", "id": 2,
+      "datasource": {"type": "prometheus", "uid": "jaiba-prometheus"},
+      "targets": [{"expr": "sum(jaiva_packets_processed_total) or vector(0)", "refId": "A"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 4, "y": 0}, "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value", "graphMode": "area", "textMode": "auto"}
+    },
+    {
+      "type": "stat", "title": "Paquetes fallidos", "id": 3,
+      "datasource": {"type": "prometheus", "uid": "jaiba-prometheus"},
+      "targets": [{"expr": "sum(jaiva_packets_failed_total) or vector(0)", "refId": "A"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 8, "y": 0}, "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "area", "textMode": "auto"}
+    },
+    {
+      "type": "stat", "title": "Cola actual", "id": 4,
+      "datasource": {"type": "prometheus", "uid": "jaiba-prometheus"},
+      "targets": [{"expr": "sum(jaiva_queue_depth) or vector(0)", "refId": "A"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 1}, {"color": "red", "value": 100}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 12, "y": 0}, "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "area", "textMode": "auto"}
+    },
+    {
+      "type": "stat", "title": "JME Hot", "id": 5,
+      "datasource": {"type": "prometheus", "uid": "jaiba-prometheus"},
+      "targets": [{"expr": "sum(jaiba_memory_hot_objects) or vector(0)", "refId": "A"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "blue"}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 16, "y": 0}, "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value", "graphMode": "area", "textMode": "auto"}
+    },
+    {
+      "type": "stat", "title": "JME pendientes", "id": 6,
+      "datasource": {"type": "prometheus", "uid": "jaiba-prometheus"},
+      "targets": [{"expr": "sum(jaiba_memory_persist_queue) or vector(0)", "refId": "A"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 1}, {"color": "red", "value": 100}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 20, "y": 0}, "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "area", "textMode": "auto"}
+    },
+    {
+      "type": "timeseries", "title": "Throughput por procesador", "id": 7,
+      "datasource": {"type": "prometheus", "uid": "jaiba-prometheus"},
+      "targets": [{"expr": "sum by (flow, processor) (rate(jaiva_processor_records_total[$__rate_interval]))", "legendFormat": "{{flow}} / {{processor}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 15}}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5}, "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "timeseries", "title": "Colas por conexión", "id": 8,
+      "datasource": {"type": "prometheus", "uid": "jaiba-prometheus"},
+      "targets": [{"expr": "sum by (flow, connection) (jaiva_queue_packets)", "legendFormat": "{{flow}} / {{connection}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 20}}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5}, "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "timeseries", "title": "Memoria de paquetes", "id": 9,
+      "datasource": {"type": "prometheus", "uid": "jaiba-prometheus"},
+      "targets": [
+        {"expr": "jaiva_memory_used_bytes", "legendFormat": "Usada", "refId": "A"},
+        {"expr": "jaiva_memory_budget_bytes", "legendFormat": "Presupuesto", "refId": "B"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"drawStyle": "line", "fillOpacity": 15}}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 13}, "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "timeseries", "title": "JME: ciclo de vida", "id": 10,
+      "datasource": {"type": "prometheus", "uid": "jaiba-prometheus"},
+      "targets": [
+        {"expr": "jaiba_memory_hot_objects", "legendFormat": "Hot", "refId": "A"},
+        {"expr": "jaiba_memory_warm_objects", "legendFormat": "Warm", "refId": "B"},
+        {"expr": "jaiba_memory_frozen_objects", "legendFormat": "Frozen", "refId": "C"},
+        {"expr": "jaiba_memory_persist_queue", "legendFormat": "Pendientes", "refId": "D"}
+      ],
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 15}}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 13}, "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "timeseries", "title": "Errores y backpressure", "id": 11,
+      "datasource": {"type": "prometheus", "uid": "jaiba-prometheus"},
+      "targets": [
+        {"expr": "sum(rate(jaiva_packets_failed_total[$__rate_interval]))", "legendFormat": "Paquetes fallidos/s", "refId": "A"},
+        {"expr": "sum(rate(jaiva_backpressure_total[$__rate_interval]))", "legendFormat": "Backpressure/s", "refId": "B"},
+        {"expr": "sum(rate(jaiba_memory_deferred_failures_total[$__rate_interval]))", "legendFormat": "JME deferred fallos/s", "refId": "C"},
+        {"expr": "sum(rate(jaiba_memory_immediate_failures_total[$__rate_interval]))", "legendFormat": "JME immediate fallos/s", "refId": "D"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "fillOpacity": 20}}, "overrides": []},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 21}, "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi"}}
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 41,
+  "tags": ["jaiba", "runtime", "jme"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timezone": "browser",
+  "title": "Jaiba Runtime + JME",
+  "uid": "jaiba-runtime-jme",
+  "version": 1
+}

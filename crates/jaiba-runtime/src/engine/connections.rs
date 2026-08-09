@@ -1,10 +1,11 @@
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc, time::Duration};
 
 #[cfg(feature = "mongodb-driver")]
 use mongodb::Client as MongoClient;
 #[cfg(feature = "kafka-driver")]
 use rdkafka::{ClientConfig, consumer::StreamConsumer, producer::FutureProducer};
 use sqlx::{MySqlPool, PgPool, mysql::MySqlPoolOptions, postgres::PgPoolOptions};
+use tracing::warn;
 
 #[cfg(feature = "oracle-driver")]
 use crate::connectors::OracleWriter;
@@ -16,6 +17,13 @@ use crate::{
     engine::resolver::ConnectionResolver,
     error::FlowError,
 };
+
+/// Timeout de acquire por defecto cuando el YAML/`url_env` no fija uno.
+const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Reintentos ante partición de red / Postgres caído durante STARTING.
+const CONNECT_RETRY_ATTEMPTS: u32 = 18;
+const CONNECT_RETRY_BASE_MS: u64 = 500;
+const CONNECT_RETRY_MAX_MS: u64 = 8_000;
 
 #[derive(Clone, Default)]
 pub struct ConnectionManager {
@@ -123,7 +131,7 @@ impl ConnectionManager {
                 &definition.connection_type,
                 &url,
                 definition.max_connections,
-                None,
+                Some(DEFAULT_ACQUIRE_TIMEOUT),
                 &mut postgres,
                 &mut mysql,
                 #[cfg(feature = "mongodb-driver")]
@@ -300,7 +308,7 @@ async fn insert_database(
     connection_type: &str,
     url: &str,
     max_connections: u32,
-    acquire_timeout: Option<std::time::Duration>,
+    acquire_timeout: Option<Duration>,
     postgres: &mut HashMap<String, PgPool>,
     mysql: &mut HashMap<String, MySqlPool>,
     #[cfg(feature = "mongodb-driver")] mongodb: &mut HashMap<String, MongoClient>,
@@ -310,20 +318,13 @@ async fn insert_database(
 ) -> Result<(), FlowError> {
     match connection_type {
         "postgres" => {
-            let mut options = PgPoolOptions::new().max_connections(max_connections);
-            if let Some(timeout) = acquire_timeout {
-                options = options.acquire_timeout(timeout);
-            }
-            let pool = options.connect(url).await?;
+            let pool =
+                connect_postgres_pool(name, url, max_connections, acquire_timeout).await?;
             writers.insert(name.to_owned(), Arc::new(PostgresWriter::new(pool.clone())));
             postgres.insert(name.to_owned(), pool);
         }
         "mysql" | "mariadb" => {
-            let mut options = MySqlPoolOptions::new().max_connections(max_connections);
-            if let Some(timeout) = acquire_timeout {
-                options = options.acquire_timeout(timeout);
-            }
-            let pool = options.connect(url).await?;
+            let pool = connect_mysql_pool(name, url, max_connections, acquire_timeout).await?;
             let kind = if connection_type == "mysql" {
                 DatabaseKind::MySql
             } else {
@@ -388,6 +389,97 @@ async fn insert_database(
         }
     }
     Ok(())
+}
+
+fn is_transient_db_error(error: &sqlx::Error) -> bool {
+    match error {
+        sqlx::Error::PoolTimedOut | sqlx::Error::Io(_) | sqlx::Error::Tls(_) => true,
+        sqlx::Error::Configuration(_) => false,
+        other => {
+            let message = other.to_string().to_lowercase();
+            message.contains("connection")
+                || message.contains("timeout")
+                || message.contains("timed out")
+                || message.contains("reset")
+                || message.contains("refused")
+                || message.contains("unreachable")
+                || message.contains("broken pipe")
+                || message.contains("network")
+                || message.contains("server closed")
+        }
+    }
+}
+
+async fn connect_postgres_pool(
+    name: &str,
+    url: &str,
+    max_connections: u32,
+    acquire_timeout: Option<Duration>,
+) -> Result<PgPool, FlowError> {
+    let timeout = acquire_timeout.unwrap_or(DEFAULT_ACQUIRE_TIMEOUT);
+    let mut attempt = 0_u32;
+    loop {
+        attempt += 1;
+        let options = PgPoolOptions::new()
+            .max_connections(max_connections)
+            .acquire_timeout(timeout)
+            .test_before_acquire(true)
+            .idle_timeout(Some(Duration::from_secs(60)))
+            .max_lifetime(Some(Duration::from_secs(300)));
+        match options.connect(url).await {
+            Ok(pool) => return Ok(pool),
+            Err(error) if is_transient_db_error(&error) && attempt < CONNECT_RETRY_ATTEMPTS => {
+                let delay = CONNECT_RETRY_BASE_MS
+                    .saturating_mul(2_u64.saturating_pow(attempt.saturating_sub(1)))
+                    .min(CONNECT_RETRY_MAX_MS);
+                warn!(
+                    connection = name,
+                    attempt,
+                    delay_ms = delay,
+                    error = %error,
+                    "transient PostgreSQL connect failure; retrying"
+                );
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+async fn connect_mysql_pool(
+    name: &str,
+    url: &str,
+    max_connections: u32,
+    acquire_timeout: Option<Duration>,
+) -> Result<MySqlPool, FlowError> {
+    let timeout = acquire_timeout.unwrap_or(DEFAULT_ACQUIRE_TIMEOUT);
+    let mut attempt = 0_u32;
+    loop {
+        attempt += 1;
+        let options = MySqlPoolOptions::new()
+            .max_connections(max_connections)
+            .acquire_timeout(timeout)
+            .test_before_acquire(true)
+            .idle_timeout(Some(Duration::from_secs(60)))
+            .max_lifetime(Some(Duration::from_secs(300)));
+        match options.connect(url).await {
+            Ok(pool) => return Ok(pool),
+            Err(error) if is_transient_db_error(&error) && attempt < CONNECT_RETRY_ATTEMPTS => {
+                let delay = CONNECT_RETRY_BASE_MS
+                    .saturating_mul(2_u64.saturating_pow(attempt.saturating_sub(1)))
+                    .min(CONNECT_RETRY_MAX_MS);
+                warn!(
+                    connection = name,
+                    attempt,
+                    delay_ms = delay,
+                    error = %error,
+                    "transient MySQL connect failure; retrying"
+                );
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 impl fmt::Debug for ConnectionManager {

@@ -14,6 +14,7 @@ pub enum DatabaseKind {
     MariaDb,
     Oracle,
     SqlServer,
+    ClickHouse,
 }
 
 /// Identifier quoting rules for a database family.
@@ -33,6 +34,7 @@ impl DatabaseKind {
             Self::MariaDb => "mariadb",
             Self::Oracle => "oracle",
             Self::SqlServer => "sqlserver",
+            Self::ClickHouse => "clickhouse",
         }
     }
 
@@ -40,7 +42,7 @@ impl DatabaseKind {
     pub fn identifier_dialect(self) -> IdentifierDialect {
         match self {
             Self::PostgreSql | Self::Oracle => IdentifierDialect::DoubleQuote,
-            Self::MySql | Self::MariaDb => IdentifierDialect::Backtick,
+            Self::MySql | Self::MariaDb | Self::ClickHouse => IdentifierDialect::Backtick,
             Self::SqlServer => IdentifierDialect::Bracket,
         }
     }

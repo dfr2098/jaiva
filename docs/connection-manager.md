@@ -262,6 +262,32 @@ cargo test -p jaiba-server --features sqlserver-driver \
 Limitación: todavía no se devuelven llaves/índices. El constructor visual SQL y
 el nodo `query_sqlserver` están disponibles con `--features sqlserver-driver`.
 
+## ClickHouse
+
+ClickHouse se habilita con `--features clickhouse-driver` (destino analítico /
+eventos Broder). MVP: **solo escritura** vía `put_database` (`mode: insert`).
+
+```bash
+cargo run --features clickhouse-driver -- examples/clickhouse-write.yaml
+```
+
+Capacidades del adaptador en Connection Manager (MVP):
+
+- prueba de conexión HTTP (`SELECT version()`);
+- diagnóstico básico de conectividad;
+- sin query builder / schema explorer todavía.
+
+URL de runtime (`CLICKHOUSE_URL`):
+
+```text
+http://default:@127.0.0.1:8123/broder
+# también: https://…  o  clickhouse://user:pass@host:8123/db
+```
+
+Escritura: ver [`examples/clickhouse-write.yaml`](../examples/clickhouse-write.yaml).
+`mode: upsert` se rechaza (usar motores tipo ReplacingMergeTree si hace falta
+deduplicar).
+
 ## Flujo UI → diseñador (SQL)
 
 ```mermaid

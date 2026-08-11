@@ -12,7 +12,15 @@ interface SettingsPanelProps {
   onChange: (meta: FlowMeta) => void;
 }
 
-const DATABASE_TYPES = ["postgres", "mysql", "mariadb", "mongodb", "oracle", "sqlserver"];
+const DATABASE_TYPES = [
+  "postgres",
+  "mysql",
+  "mariadb",
+  "mongodb",
+  "oracle",
+  "sqlserver",
+  "clickhouse",
+];
 
 export function SettingsPanel({ meta, onChange }: SettingsPanelProps) {
   const patch = (partial: Partial<FlowMeta>) => onChange({ ...meta, ...partial });

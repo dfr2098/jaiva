@@ -11,6 +11,7 @@ oracle-driver = ["dep:oracle"]
 sqlserver-driver = ["dep:tiberius", "dep:tokio-util"]
 kafka-driver = ["dep:rdkafka"]
 mongodb-driver = ["dep:mongodb"]
+clickhouse-driver = ["dep:clickhouse"]
 
 [dependencies]
 jaiba-core = { path = "../jaiba-core" }
@@ -38,4 +39,5 @@ tiberius = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 rdkafka = { workspace = true, optional = true }
 mongodb = { workspace = true, optional = true }
+clickhouse = { workspace = true, optional = true }
 reqwest.workspace = true

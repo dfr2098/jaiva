@@ -15,6 +15,7 @@ oracle-driver = ["jaiba-runtime/oracle-driver", "jaiba-server/oracle-driver"]
 sqlserver-driver = ["jaiba-runtime/sqlserver-driver", "jaiba-server/sqlserver-driver"]
 kafka-driver = ["jaiba-runtime/kafka-driver", "jaiba-server/kafka-driver"]
 mongodb-driver = ["jaiba-runtime/mongodb-driver", "jaiba-server/mongodb-driver"]
+clickhouse-driver = ["jaiba-runtime/clickhouse-driver", "jaiba-server/clickhouse-driver"]
 
 [dependencies]
 jaiba-core = { path = "../jaiba-core" }

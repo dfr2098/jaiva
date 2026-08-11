@@ -4,7 +4,7 @@ import type { DatabaseConnection as ManagedConnection } from "../types";
 
 export type ConnectionKind = NonNullable<FieldDef["connectionKind"]>;
 
-const SQL_TYPES = new Set(["postgres", "mysql", "mariadb", "oracle", "sqlserver"]);
+const SQL_TYPES = new Set(["postgres", "mysql", "mariadb", "oracle", "sqlserver", "clickhouse"]);
 const DB_TYPES = new Set([...SQL_TYPES, "mongodb"]);
 
 function normalizeType(value: string): string {

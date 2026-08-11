@@ -150,8 +150,9 @@ config:
 ## `put_database`
 
 Escribe registros mediante el `DatabaseWriter` asociado con la conexión. La
-implementación actual incluye PostgreSQL, MySQL/MariaDB, Oracle y SQL Server.
-Los dos últimos requieren `oracle-driver` y `sqlserver-driver`, respectivamente.
+implementación actual incluye PostgreSQL, MySQL/MariaDB, Oracle, SQL Server y
+ClickHouse. Oracle / SQL Server / ClickHouse requieren
+`oracle-driver`, `sqlserver-driver` y `clickhouse-driver`, respectivamente.
 
 ```yaml
 type: put_database
@@ -167,9 +168,13 @@ config:
     - customer_id
 ```
 
-Todo el paquete se escribe dentro de una transacción. Si un sublote falla, la
-transacción completa se revierte y el paquete sigue la política de reintentos y
-la ruta `failure`.
+ClickHouse solo admite `mode: insert` (sin upsert clásico). Ver
+[`examples/clickhouse-write.yaml`](../examples/clickhouse-write.yaml).
+
+Todo el paquete se escribe dentro de una transacción **cuando el destino lo
+soporta**. Si un sublote falla, la política de reintentos y la ruta `failure`
+siguen aplicando. ClickHouse declara `transactions: false` (insert por bloque
+HTTP JSONEachRow).
 
 ## `put_mongodb`
 
@@ -202,7 +207,7 @@ fase.
 
 Detecta el motor asociado con `connection` y genera un plan de carga usando las
 capacidades declaradas por su writer. Admite actualmente PostgreSQL,
-MySQL/MariaDB, Oracle y SQL Server.
+MySQL/MariaDB, Oracle, SQL Server y ClickHouse.
 
 ```yaml
 type: auto_destination

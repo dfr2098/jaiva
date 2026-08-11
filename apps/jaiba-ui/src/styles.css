@@ -807,7 +807,8 @@ main.connections-main {
 }
 
 .db-oracle,
-.db-sql_server {
+.db-sql_server,
+.db-clickhouse {
   border-color: rgb(208 107 67 / 40%);
   color: var(--rust-light);
 }

@@ -465,6 +465,7 @@ cargo fmt --all -- --check
 cargo test --workspace --all-targets
 cargo test --features oracle-driver
 cargo test --features sqlserver-driver
+cargo test --features clickhouse-driver
 cargo test --features kafka-driver
 cargo test --features mongodb-driver
 # Integración real (entorno de pruebas levantado):
@@ -541,6 +542,16 @@ La lectura usa `query_sqlserver` (placeholders `@P1`, `TOP` en el constructor).
 cargo run --features sqlserver-driver -- examples/sqlserver-write.yaml
 # Lectura:
 # cargo run --features sqlserver-driver -- examples/sqlserver-query.yaml
+```
+
+## ClickHouse
+
+Destino analítico (eventos Broder). Feature `clickhouse-driver`; solo
+`put_database` con `mode: insert` en el MVP.
+
+```bash
+export CLICKHOUSE_URL='http://default:@127.0.0.1:8123/broder'
+cargo run --features clickhouse-driver -- examples/clickhouse-write.yaml
 ```
 
 ## MySQL / MariaDB

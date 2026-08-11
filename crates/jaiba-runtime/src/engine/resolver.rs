@@ -22,7 +22,7 @@ use crate::{config::FlowConfig, error::FlowError};
 #[derive(Debug, Clone)]
 pub struct ResolvedConnection {
     /// Tipo que entiende el runtime: `postgres`, `mysql`, `mariadb`, `mongodb`,
-    /// `oracle` o `sqlserver`.
+    /// `oracle`, `sqlserver` o `clickhouse`.
     pub connection_type: String,
     /// URL de conexión lista para el driver (credenciales ya incluidas y
     /// codificadas de forma segura).
@@ -115,6 +115,7 @@ fn scheme_for(connection_type: &ConnectionType) -> Option<(&'static str, &'stati
         ConnectionType::MongoDb => Some(("mongodb", "mongodb")),
         ConnectionType::Oracle => Some(("oracle", "oracle")),
         ConnectionType::SqlServer => Some(("sqlserver", "sqlserver")),
+        ConnectionType::ClickHouse => Some(("clickhouse", "clickhouse")),
         _ => None,
     }
 }
@@ -147,8 +148,17 @@ fn build_url(
         return Ok(url.to_string());
     }
 
-    let mut url = Url::parse(&format!("{scheme}://{}:{}", endpoint.host, endpoint.port))
-        .map_err(|error| FlowError::Configuration(format!("URL de conexión inválida: {error}")))?;
+    let mut url = if scheme == "clickhouse" {
+        // ClickHouse HTTP interface; SSL → https.
+        let proto = if endpoint.ssl { "https" } else { "http" };
+        Url::parse(&format!("{proto}://{}:{}", endpoint.host, endpoint.port)).map_err(|error| {
+            FlowError::Configuration(format!("URL de conexión inválida: {error}"))
+        })?
+    } else {
+        Url::parse(&format!("{scheme}://{}:{}", endpoint.host, endpoint.port)).map_err(|error| {
+            FlowError::Configuration(format!("URL de conexión inválida: {error}"))
+        })?
+    };
     url.set_username(&secret.username).map_err(|_| {
         FlowError::Configuration("no se pudo fijar el usuario en la URL".to_owned())
     })?;

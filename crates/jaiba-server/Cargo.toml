@@ -11,6 +11,7 @@ oracle-driver = ["jaiba-runtime/oracle-driver", "dep:oracle"]
 sqlserver-driver = ["jaiba-runtime/sqlserver-driver", "dep:tiberius", "dep:tokio-util"]
 kafka-driver = ["jaiba-runtime/kafka-driver"]
 mongodb-driver = ["jaiba-runtime/mongodb-driver", "dep:mongodb", "dep:url"]
+clickhouse-driver = ["jaiba-runtime/clickhouse-driver", "dep:url"]
 
 [dependencies]
 jaiba-connection-manager = { path = "../jaiba-connection-manager" }

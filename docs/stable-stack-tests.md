@@ -111,14 +111,36 @@ CHAOS_PROFILE=v2 CHAOS_ACTIONS=net_flap \
 SOAK_DURATION_SECONDS=600 CHAOS_INTERVAL_SECONDS=90 \
 CHAOS_RECOVERY_SECONDS=60 STALL_SECONDS=300 \
   ./scripts/chaos-soak-stable-stack.sh
+
+# Auditoría full — todas las acciones v2 (round-robin) + reporte JSON
+CHAOS_PROFILE=v2 CHAOS_MODE=coverage CHAOS_SEED=20260809 \
+CHAOS_REPORT_DIR=./artifacts/chaos-audit \
+  ./scripts/chaos-soak-stable-stack.sh
 ```
 
+`CHAOS_MODE=coverage` recorre **todas** las acciones de la lista (no RNG).
+Con `CHAOS_REQUIRE_FULL_COVERAGE=1` (default en coverage) el run **FAIL**
+si alguna acción quedó en 0 hits.
+
+Artefactos en `CHAOS_REPORT_DIR/<run_id>/`:
+
+| Archivo | Contenido |
+| --- | --- |
+| `manifest.env` | parámetros del run + git head |
+| `flow.yaml` | flow desplegado |
+| `events.log` | log humano de caos |
+| `events.jsonl` | un JSON por evento (inject/skip/defer) |
+| `report.json` | veredicto, cobertura, métricas |
+| `SUMMARY.md` | resumen legible |
 ### Variables
 
 | Variable | Default v1 | Default v2 | Notas |
 | --- | --- | --- | --- |
 | `CHAOS_PROFILE` | `v1` | — | `v1` \| `v2` |
-| `CHAOS_SEED` | `1` | `1` | RNG reproducible de acciones |
+| `CHAOS_MODE` | `random` | `random` | `random` \| `coverage` (round-robin todas) |
+| `CHAOS_SEED` | `1` | `1` | RNG o offset de orden en coverage |
+| `CHAOS_REPORT_DIR` | (tmp) | (tmp) | Si se setea → `report.json` + `events.jsonl` + `SUMMARY.md` |
+| `CHAOS_REQUIRE_FULL_COVERAGE` | `0` | `0` | En coverage default `1`: FAIL si falta alguna acción |
 | `SOAK_DURATION_SECONDS` | `3600` | `3600` | 120 … 86400 |
 | `SOAK_ROWS_PER_CYCLE` | `250000` | `250000` | 1 … 10 000 000 |
 | `CHAOS_INTERVAL_SECONDS` | `120` | `150` | Tiempo entre eventos |

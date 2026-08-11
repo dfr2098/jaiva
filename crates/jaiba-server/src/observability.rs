@@ -1371,6 +1371,7 @@ pub(crate) fn parse_and_validate(body: &str) -> Result<FlowConfig, FlowError> {
                 | "oracle"
                 | "sqlserver"
                 | "mssql"
+                | "clickhouse"
         ) {
             return Err(FlowError::Configuration(format!(
                 "unsupported database connection type '{}'",

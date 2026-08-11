@@ -9,6 +9,11 @@
 # Fase C / v2 (1 h, corte DB largo + kill + flap de red):
 #   CHAOS_PROFILE=v2 CHAOS_SEED=7 ./scripts/chaos-soak-stable-stack.sh
 #
+# Auditoría full (todas las acciones v2, round-robin, reporte JSON):
+#   CHAOS_PROFILE=v2 CHAOS_MODE=coverage CHAOS_SEED=20260809 \
+#   CHAOS_REPORT_DIR=./artifacts/chaos-audit \
+#     ./scripts/chaos-soak-stable-stack.sh
+#
 # Ejemplo corto (10 min):
 #   CHAOS_SEED=42 \
 #   SOAK_DURATION_SECONDS=600 \
@@ -19,7 +24,10 @@
 #
 # Vars:
 #   CHAOS_PROFILE           v1 (default) | v2
-#   CHAOS_SEED              semilla RNG (default: 1)
+#   CHAOS_MODE              random (default) | coverage (round-robin todas)
+#   CHAOS_SEED              semilla RNG (default: 1); en coverage fija el orden base
+#   CHAOS_REPORT_DIR        si se setea, escribe report.json + events.jsonl + events.log
+#   CHAOS_REQUIRE_FULL_COVERAGE  1 (default en coverage) exige cada acción ≥1 vez
 #   CHAOS_INTERVAL_SECONDS  segundos entre eventos (v1:120, v2:150)
 #   CHAOS_RECOVERY_SECONDS  calma final (default: 300)
 #   CHAOS_DB_PAUSE_SECONDS  pause corto Postgres / db_blip (default: 20)
@@ -54,6 +62,12 @@ case "$PROFILE" in
   *) echo "CHAOS_PROFILE debe ser v1 o v2" >&2; exit 2 ;;
 esac
 
+CHAOS_MODE="${CHAOS_MODE:-random}"
+case "$CHAOS_MODE" in
+  random|coverage) ;;
+  *) echo "CHAOS_MODE debe ser random o coverage" >&2; exit 2 ;;
+esac
+
 DURATION="${SOAK_DURATION_SECONDS:-3600}"
 ROWS="${SOAK_ROWS_PER_CYCLE:-250000}"
 SEED="${CHAOS_SEED:-1}"
@@ -74,6 +88,12 @@ else
   DEFAULT_ACTIONS="db_blip,flow_bounce,runtime_restart,double_stop,noop"
 fi
 ACTIONS_CSV="${CHAOS_ACTIONS:-$DEFAULT_ACTIONS}"
+
+if [[ "$CHAOS_MODE" == "coverage" ]]; then
+  REQUIRE_FULL_COVERAGE="${CHAOS_REQUIRE_FULL_COVERAGE:-1}"
+else
+  REQUIRE_FULL_COVERAGE="${CHAOS_REQUIRE_FULL_COVERAGE:-0}"
+fi
 
 for VALUE in "$DURATION" "$ROWS" "$SEED" "$CHAOS_INTERVAL" "$RECOVERY_SECONDS" \
   "$DB_PAUSE_SECONDS" "$DB_OUTAGE_SECONDS" "$NET_FLAP_SECONDS" "$STALL_SECONDS"; do
@@ -116,13 +136,31 @@ DB_PAUSED=0
 NET_DISCONNECTED=0
 POSTGRES_NETWORK=""
 CHAOS_EVENTS=0
-CHAOS_LOG="$(mktemp "${TMPDIR:-/tmp}/jaiba-chaos-events.XXXXXX.log")"
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-pid$$"
+if [[ -n "${CHAOS_REPORT_DIR:-}" ]]; then
+  REPORT_DIR="${CHAOS_REPORT_DIR%/}/$RUN_ID"
+  mkdir -p "$REPORT_DIR"
+  CHAOS_LOG="$REPORT_DIR/events.log"
+  CHAOS_JSONL="$REPORT_DIR/events.jsonl"
+  : >"$CHAOS_LOG"
+  : >"$CHAOS_JSONL"
+else
+  REPORT_DIR=""
+  CHAOS_LOG="$(mktemp "${TMPDIR:-/tmp}/jaiba-chaos-events.XXXXXX.log")"
+  CHAOS_JSONL="$(mktemp "${TMPDIR:-/tmp}/jaiba-chaos-events.XXXXXX.jsonl")"
+fi
 
 IFS=',' read -r -a ACTIONS <<<"$ACTIONS_CSV"
 if [[ ${#ACTIONS[@]} -eq 0 ]]; then
   echo "CHAOS_ACTIONS vacío" >&2
   exit 2
 fi
+
+# Cobertura: conteo por acción ejecutada (no SKIP).
+declare -A ACTION_HITS=()
+for a in "${ACTIONS[@]}"; do
+  ACTION_HITS["$a"]=0
+done
 
 auth_hdr=(-H "Authorization: Bearer $TOKEN")
 
@@ -131,6 +169,39 @@ chaos_log() {
   local line="$*"
   printf '%s\n' "$line" >>"$CHAOS_LOG"
   log "CHAOS $line"
+}
+
+audit_event() {
+  # audit_event <kind> <action> <status> [detail]
+  local kind="$1" action="$2" status="$3" detail="${4:-}"
+  local ts state cycles records failed
+  ts="$(date -Is)"
+  state="$(flow_state 2>/dev/null || echo UNKNOWN)"
+  cycles="${CYCLES:-0}"
+  records="${LAST_RECORDS:-0}"
+  failed="${FAILED:-0}"
+  python3 - "$CHAOS_JSONL" "$ts" "$kind" "$action" "$status" "$detail" \
+    "$state" "$cycles" "$records" "$failed" "$CHAOS_EVENTS" "$SEED" "$PROFILE" "$CHAOS_MODE" <<'PY'
+import json, sys
+path, ts, kind, action, status, detail, state, cycles, records, failed, events, seed, profile, mode = sys.argv[1:]
+row = {
+  "ts": ts,
+  "kind": kind,
+  "action": action,
+  "status": status,
+  "detail": detail,
+  "state": state,
+  "cycles": int(cycles),
+  "records": int(records),
+  "failed": int(failed),
+  "event_index": int(events),
+  "seed": int(seed),
+  "profile": profile,
+  "mode": mode,
+}
+with open(path, "a", encoding="utf-8") as f:
+    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+PY
 }
 
 cleanup() {
@@ -151,6 +222,14 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 pick_action() {
+  if [[ "$CHAOS_MODE" == "coverage" ]]; then
+    # Round-robin determinista: orden = ACTIONS rotado por seed.
+    local idx n
+    n="${#ACTIONS[@]}"
+    idx=$(( (SEED + CHAOS_EVENTS) % n ))
+    printf '%s\n' "${ACTIONS[$idx]}"
+    return 0
+  fi
   python3 - "$SEED" "$CHAOS_EVENTS" "${ACTIONS[@]}" <<'PY'
 import sys
 seed = int(sys.argv[1])
@@ -430,14 +509,18 @@ chaos_noop() {
 }
 
 run_chaos_action() {
-  local action state
+  local action state before_cycles before_records
   state="$(flow_state)"
   # No inyectar caos de red/DB mientras el flow aún no arrancó.
   if [[ "$state" == "STARTING" ]]; then
     chaos_log "SKIP chaos (estado=STARTING; esperando RUNNING)"
+    audit_event "skip" "pending" "skip" "estado=STARTING"
     return 0
   fi
   action="$(pick_action)"
+  before_cycles="$CYCLES"
+  before_records="$LAST_RECORDS"
+  audit_event "inject" "$action" "ok" "begin cycles=$before_cycles records=$before_records"
   case "$action" in
     db_blip) chaos_db_blip ;;
     db_outage) chaos_db_outage ;;
@@ -449,12 +532,15 @@ run_chaos_action() {
     noop) chaos_noop ;;
     *)
       chaos_log "UNKNOWN_ACTION=$action (tratado como noop)"
+      action="noop"
       ;;
   esac
+  ACTION_HITS["$action"]=$(( ACTION_HITS["$action"] + 1 ))
   CHAOS_EVENTS=$((CHAOS_EVENTS + 1))
   # Gracia post-caos: no reiniciar baseline a 0/0 (eso oculta stall real).
   WATCH_SINCE="$(date +%s)"
   chaos_log "watchdog_grace (post-chaos:$action) cycles=$CYCLES records=$LAST_RECORDS"
+  audit_event "inject" "$action" "ok" "end cycles=$CYCLES records=$LAST_RECORDS state=$(flow_state)"
 }
 
 reset_watchdog() {
@@ -473,18 +559,44 @@ if ! wait_api 15; then
   exit 1
 fi
 
-log "Chaos soak Jaiba profile=$PROFILE"
+log "Chaos soak Jaiba profile=$PROFILE mode=$CHAOS_MODE"
 echo "  duration=${DURATION}s rows/ciclo=$ROWS seed=$SEED"
 echo "  chaos_interval=${CHAOS_INTERVAL}s recovery=${RECOVERY_SECONDS}s stall=${STALL_SECONDS}s"
 echo "  db_blip=${DB_PAUSE_SECONDS}s db_outage=${DB_OUTAGE_SECONDS}s net_flap=${NET_FLAP_SECONDS}s"
 echo "  actions=${ACTIONS_CSV}"
+echo "  require_full_coverage=$REQUIRE_FULL_COVERAGE"
 echo "  postgres=$POSTGRES_CONTAINER jaiba=$JAIBA_CONTAINER"
 echo "  grafana=http://127.0.0.1:${GRAFANA_PORT:-13000}/d/jaiba-runtime-jme"
+[[ -n "$REPORT_DIR" ]] && echo "  report_dir=$REPORT_DIR"
 
 # Si un net_flap previo dejó Postgres sin alias DNS, sanar antes de desplegar.
 if ! heal_postgres_dns; then
   echo "FAIL: Postgres no reachable desde $JAIBA_CONTAINER (DNS/TCP)." >&2
   exit 1
+fi
+
+if [[ -n "$REPORT_DIR" ]]; then
+  cp "$FLOW_FILE" "$REPORT_DIR/flow.yaml"
+  {
+    echo "run_id=$RUN_ID"
+    echo "profile=$PROFILE"
+    echo "mode=$CHAOS_MODE"
+    echo "seed=$SEED"
+    echo "actions=$ACTIONS_CSV"
+    echo "duration=$DURATION"
+    echo "rows=$ROWS"
+    echo "interval=$CHAOS_INTERVAL"
+    echo "recovery=$RECOVERY_SECONDS"
+    echo "stall=$STALL_SECONDS"
+    echo "db_blip=$DB_PAUSE_SECONDS"
+    echo "db_outage=$DB_OUTAGE_SECONDS"
+    echo "net_flap=$NET_FLAP_SECONDS"
+    echo "require_full_coverage=$REQUIRE_FULL_COVERAGE"
+    echo "api=$API"
+    echo "started_at=$(date -Is)"
+    echo "git_head=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  } >"$REPORT_DIR/manifest.env"
+  log "Auditoría → $REPORT_DIR"
 fi
 
 deploy_flow
@@ -501,11 +613,13 @@ NEXT_CHAOS="$((START + CHAOS_INTERVAL))"
 CYCLES=0
 LAST_PROCESSED=0
 LAST_RECORDS=0
+FAILED=0
 WATCH_CYCLES=0
 WATCH_RECORDS=0
 WATCH_SINCE="$START"
 STARTING_SINCE=0
 EXIT_CODE=0
+FAIL_REASON=""
 
 while (( $(date +%s) < DEADLINE )); do
   NOW="$(date +%s)"
@@ -530,6 +644,7 @@ while (( $(date +%s) < DEADLINE )); do
       # Aplazar caos hasta que el flow esté operativo.
       NEXT_CHAOS="$((NOW + 15))"
       chaos_log "defer chaos (estado=$STATE)"
+      audit_event "defer" "pending" "skip" "estado=$STATE"
     fi
   fi
 
@@ -553,6 +668,7 @@ while (( $(date +%s) < DEADLINE )); do
     elif (( NOW - STARTING_SINCE >= STALL_SECONDS )); then
       echo
       log "STALL: STARTING > ${STALL_SECONDS}s sin llegar a RUNNING"
+      FAIL_REASON="stall_starting"
       EXIT_CODE=1
       break
     fi
@@ -570,6 +686,7 @@ while (( $(date +%s) < DEADLINE )); do
   elif (( NOW - WATCH_SINCE >= STALL_SECONDS )); then
     echo
     log "STALL: sin progreso en ${STALL_SECONDS}s (ciclos=$CYCLES records=$LAST_RECORDS estado=$STATE caos=$CHAOS_EVENTS)"
+    FAIL_REASON="stall_progress"
     EXIT_CODE=1
     break
   fi
@@ -588,19 +705,33 @@ FINAL_STATE="$(jq -r '.runtime.control.state // "UNKNOWN"' <<<"$FINAL_BODY")"
 RUNTIME_NULL="$(jq -r 'if .runtime == null then "null" else "present" end' <<<"$FINAL_BODY")"
 
 TOTAL_RECORDS="$((CYCLES * ROWS))"
-echo "Chaos soak terminado: profile=$PROFILE exit=$EXIT_CODE"
+echo "Chaos soak terminado: profile=$PROFILE mode=$CHAOS_MODE exit=$EXIT_CODE"
 echo "  ciclos=$CYCLES registros_aprox=$TOTAL_RECORDS paquetes_ultimo_ciclo=$LAST_PROCESSED"
 echo "  eventos_caos=$CHAOS_EVENTS estado_final=$FINAL_STATE runtime=$RUNTIME_NULL"
 echo "  log_eventos=$CHAOS_LOG"
+echo "  jsonl_eventos=$CHAOS_JSONL"
+[[ -n "$REPORT_DIR" ]] && echo "  report_dir=$REPORT_DIR"
 echo "  Grafana: http://127.0.0.1:${GRAFANA_PORT:-13000}/d/jaiba-runtime-jme"
+
+echo "  cobertura_acciones:"
+MISSING_ACTIONS=()
+for a in "${ACTIONS[@]}"; do
+  hits="${ACTION_HITS[$a]:-0}"
+  printf '    - %s: %s\n' "$a" "$hits"
+  if (( hits < 1 )); then
+    MISSING_ACTIONS+=("$a")
+  fi
+done
 
 warn_final=""
 if (( CYCLES < 1 )); then
   warn_final="ciclos=0 (sin trabajo útil)"
+  FAIL_REASON="${FAIL_REASON:-cycles_zero}"
   EXIT_CODE=1
 fi
 if [[ "$FINAL_STATE" == "FAILED" ]]; then
   warn_final="${warn_final} estado_final=FAILED"
+  FAIL_REASON="${FAIL_REASON:-final_failed}"
   EXIT_CODE=1
 fi
 if [[ "$RUNTIME_NULL" != "null" ]]; then
@@ -612,13 +743,158 @@ if [[ "$RUNTIME_NULL" != "null" ]]; then
   FINAL_STATE="$(jq -r '.runtime.control.state // "UNKNOWN"' <<<"$FINAL_BODY")"
   if [[ "$RUNTIME_NULL" != "null" || "$FINAL_STATE" == "FAILED" ]]; then
     EXIT_CODE=1
+    FAIL_REASON="${FAIL_REASON:-runtime_unclean}"
     warn_final="${warn_final} runtime/estado no limpio tras stop ($FINAL_STATE/$RUNTIME_NULL)"
   fi
 fi
+
+if [[ "$REQUIRE_FULL_COVERAGE" == "1" && ${#MISSING_ACTIONS[@]} -gt 0 ]]; then
+  EXIT_CODE=1
+  FAIL_REASON="${FAIL_REASON:-incomplete_coverage}"
+  warn_final="${warn_final} cobertura incompleta: ${MISSING_ACTIONS[*]}"
+fi
+
+# Reporte JSON auditable.
+write_audit_report() {
+  local verdict="PASS" ended cov_file
+  (( EXIT_CODE != 0 )) && verdict="FAIL"
+  ended="$(date -Is)"
+  cov_file="$(mktemp "${TMPDIR:-/tmp}/jaiba-chaos-cov.XXXXXX.txt")"
+  for a in "${ACTIONS[@]}"; do
+    printf '%s\t%s\n' "$a" "${ACTION_HITS[$a]:-0}" >>"$cov_file"
+  done
+  REPORT_PATH="${REPORT_DIR:-}/report.json"
+  [[ -n "${REPORT_DIR:-}" ]] || REPORT_PATH=""
+  python3 - "$cov_file" "$verdict" "$ended" "$REPORT_PATH" <<'PY'
+import json, sys
+from pathlib import Path
+
+cov_path, verdict, ended, report_path = sys.argv[1:5]
+coverage = {}
+with open(cov_path, encoding="utf-8") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        k, v = line.split("\t", 1)
+        coverage[k] = int(v)
+
+# Env-like values passed via os.environ below
+import os
+env = os.environ
+missing = [a for a, n in coverage.items() if n < 1]
+planned = list(coverage.keys())
+report = {
+    "run_id": env["JAIBA_AUDIT_RUN_ID"],
+    "verdict": verdict,
+    "exit_code": int(env["JAIBA_AUDIT_EXIT"]),
+    "fail_reason": env.get("JAIBA_AUDIT_FAIL_REASON", ""),
+    "warn_final": env.get("JAIBA_AUDIT_WARN", "").strip(),
+    "profile": env["JAIBA_AUDIT_PROFILE"],
+    "mode": env["JAIBA_AUDIT_MODE"],
+    "seed": int(env["JAIBA_AUDIT_SEED"]),
+    "actions_planned": planned,
+    "coverage": coverage,
+    "missing_actions": missing,
+    "require_full_coverage": env.get("JAIBA_AUDIT_REQUIRE_COV", "0") == "1",
+    "duration_seconds": int(env["JAIBA_AUDIT_DURATION"]),
+    "rows_per_cycle": int(env["JAIBA_AUDIT_ROWS"]),
+    "chaos_interval_seconds": int(env["JAIBA_AUDIT_INTERVAL"]),
+    "recovery_seconds": int(env["JAIBA_AUDIT_RECOVERY"]),
+    "stall_seconds": int(env["JAIBA_AUDIT_STALL"]),
+    "db_blip_seconds": int(env["JAIBA_AUDIT_DB_BLIP"]),
+    "db_outage_seconds": int(env["JAIBA_AUDIT_DB_OUTAGE"]),
+    "net_flap_seconds": int(env["JAIBA_AUDIT_NET_FLAP"]),
+    "events": int(env["JAIBA_AUDIT_EVENTS"]),
+    "cycles": int(env["JAIBA_AUDIT_CYCLES"]),
+    "records_approx": int(env["JAIBA_AUDIT_RECORDS"]),
+    "packets_last_cycle": int(env["JAIBA_AUDIT_PACKETS"]),
+    "failed_metric": int(env["JAIBA_AUDIT_FAILED"]),
+    "final_state": env["JAIBA_AUDIT_FINAL_STATE"],
+    "runtime": env["JAIBA_AUDIT_RUNTIME"],
+    "started_unix": int(env["JAIBA_AUDIT_START"]),
+    "ended_at": ended,
+    "api": env["JAIBA_AUDIT_API"],
+    "grafana": env["JAIBA_AUDIT_GRAFANA"],
+    "files": {
+        "events_log": env["JAIBA_AUDIT_LOG"],
+        "events_jsonl": env["JAIBA_AUDIT_JSONL"],
+        "report_dir": env.get("JAIBA_AUDIT_REPORT_DIR", ""),
+    },
+}
+text = json.dumps(report, indent=2, ensure_ascii=False)
+print(text)
+if report_path:
+    Path(report_path).write_text(text + "\n", encoding="utf-8")
+    md = Path(report_path).with_name("SUMMARY.md")
+    cov_lines = "\n".join(f"- `{k}`: {v}" for k, v in sorted(coverage.items()))
+    md.write_text(
+        f"""# Chaos audit {report['run_id']}
+
+**Verdict:** {report['verdict']} (exit {report['exit_code']})
+
+| Campo | Valor |
+| --- | --- |
+| profile / mode | {report['profile']} / {report['mode']} |
+| seed | {report['seed']} |
+| eventos | {report['events']} |
+| ciclos | {report['cycles']} |
+| registros_aprox | {report['records_approx']} |
+| fail_reason | {report['fail_reason'] or '—'} |
+
+## Cobertura
+
+{cov_lines}
+
+## Archivos
+
+- `events.jsonl` — eventos estructurados
+- `events.log` — log humano
+- `manifest.env` — parámetros del run
+- `flow.yaml` — flow desplegado
+- `report.json` — este resumen en JSON
+""",
+        encoding="utf-8",
+    )
+PY
+  rm -f "$cov_file"
+}
+
+export JAIBA_AUDIT_RUN_ID="$RUN_ID"
+export JAIBA_AUDIT_EXIT="$EXIT_CODE"
+export JAIBA_AUDIT_FAIL_REASON="${FAIL_REASON:-}"
+export JAIBA_AUDIT_WARN="${warn_final:-}"
+export JAIBA_AUDIT_PROFILE="$PROFILE"
+export JAIBA_AUDIT_MODE="$CHAOS_MODE"
+export JAIBA_AUDIT_SEED="$SEED"
+export JAIBA_AUDIT_REQUIRE_COV="$REQUIRE_FULL_COVERAGE"
+export JAIBA_AUDIT_DURATION="$DURATION"
+export JAIBA_AUDIT_ROWS="$ROWS"
+export JAIBA_AUDIT_INTERVAL="$CHAOS_INTERVAL"
+export JAIBA_AUDIT_RECOVERY="$RECOVERY_SECONDS"
+export JAIBA_AUDIT_STALL="$STALL_SECONDS"
+export JAIBA_AUDIT_DB_BLIP="$DB_PAUSE_SECONDS"
+export JAIBA_AUDIT_DB_OUTAGE="$DB_OUTAGE_SECONDS"
+export JAIBA_AUDIT_NET_FLAP="$NET_FLAP_SECONDS"
+export JAIBA_AUDIT_EVENTS="$CHAOS_EVENTS"
+export JAIBA_AUDIT_CYCLES="$CYCLES"
+export JAIBA_AUDIT_RECORDS="$TOTAL_RECORDS"
+export JAIBA_AUDIT_PACKETS="$LAST_PROCESSED"
+export JAIBA_AUDIT_FAILED="$FAILED"
+export JAIBA_AUDIT_FINAL_STATE="$FINAL_STATE"
+export JAIBA_AUDIT_RUNTIME="$RUNTIME_NULL"
+export JAIBA_AUDIT_START="$START"
+export JAIBA_AUDIT_API="$API"
+export JAIBA_AUDIT_GRAFANA="http://127.0.0.1:${GRAFANA_PORT:-13000}/d/jaiba-runtime-jme"
+export JAIBA_AUDIT_LOG="$CHAOS_LOG"
+export JAIBA_AUDIT_JSONL="$CHAOS_JSONL"
+export JAIBA_AUDIT_REPORT_DIR="${REPORT_DIR:-}"
+
+write_audit_report
 
 if (( EXIT_CODE != 0 )); then
   echo "FAIL: stall o recuperación insuficiente${warn_final:+ ($warn_final)} (ver log de caos)." >&2
   exit "$EXIT_CODE"
 fi
 
-echo "PASS: sin stall detectado; stop externo aplicado."
+echo "PASS: sin stall detectado; stop externo aplicado; cobertura OK."

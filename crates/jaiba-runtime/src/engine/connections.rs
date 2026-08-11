@@ -11,6 +11,8 @@ use tracing::warn;
 use crate::connectors::OracleWriter;
 #[cfg(feature = "sqlserver-driver")]
 use crate::connectors::SqlServerWriter;
+#[cfg(feature = "clickhouse-driver")]
+use crate::connectors::ClickHouseWriter;
 use crate::{
     config::{DatabaseConnectionConfig, KafkaConnectionConfig},
     connectors::{DatabaseKind, DatabaseWriter, MySqlWriter, PostgresWriter},
@@ -35,6 +37,8 @@ pub struct ConnectionManager {
     oracle: Arc<HashMap<String, OracleWriter>>,
     #[cfg(feature = "sqlserver-driver")]
     sqlserver: Arc<HashMap<String, SqlServerWriter>>,
+    #[cfg(feature = "clickhouse-driver")]
+    clickhouse: Arc<HashMap<String, ClickHouseWriter>>,
     writers: Arc<HashMap<String, Arc<dyn DatabaseWriter>>>,
     #[cfg(feature = "kafka-driver")]
     kafka: Arc<HashMap<String, KafkaEndpoint>>,
@@ -115,6 +119,8 @@ impl ConnectionManager {
         let mut oracle = HashMap::new();
         #[cfg(feature = "sqlserver-driver")]
         let mut sqlserver = HashMap::new();
+        #[cfg(feature = "clickhouse-driver")]
+        let mut clickhouse = HashMap::new();
         let mut writers: HashMap<String, Arc<dyn DatabaseWriter>> = HashMap::new();
         #[cfg(feature = "kafka-driver")]
         let mut kafka = HashMap::new();
@@ -140,6 +146,8 @@ impl ConnectionManager {
                 &mut oracle,
                 #[cfg(feature = "sqlserver-driver")]
                 &mut sqlserver,
+                #[cfg(feature = "clickhouse-driver")]
+                &mut clickhouse,
                 &mut writers,
             )
             .await?;
@@ -170,6 +178,8 @@ impl ConnectionManager {
                     &mut oracle,
                     #[cfg(feature = "sqlserver-driver")]
                     &mut sqlserver,
+                    #[cfg(feature = "clickhouse-driver")]
+                    &mut clickhouse,
                     &mut writers,
                 )
                 .await?;
@@ -238,6 +248,8 @@ impl ConnectionManager {
             oracle: Arc::new(oracle),
             #[cfg(feature = "sqlserver-driver")]
             sqlserver: Arc::new(sqlserver),
+            #[cfg(feature = "clickhouse-driver")]
+            clickhouse: Arc::new(clickhouse),
             writers: Arc::new(writers),
             #[cfg(feature = "kafka-driver")]
             kafka: Arc::new(kafka),
@@ -274,6 +286,13 @@ impl ConnectionManager {
     pub fn sqlserver(&self, name: &str) -> Result<&SqlServerWriter, FlowError> {
         self.sqlserver.get(name).ok_or_else(|| {
             FlowError::Configuration(format!("SQL Server connection '{name}' does not exist"))
+        })
+    }
+
+    #[cfg(feature = "clickhouse-driver")]
+    pub fn clickhouse(&self, name: &str) -> Result<&ClickHouseWriter, FlowError> {
+        self.clickhouse.get(name).ok_or_else(|| {
+            FlowError::Configuration(format!("ClickHouse connection '{name}' does not exist"))
         })
     }
 
@@ -314,6 +333,7 @@ async fn insert_database(
     #[cfg(feature = "mongodb-driver")] mongodb: &mut HashMap<String, MongoClient>,
     #[cfg(feature = "oracle-driver")] oracle: &mut HashMap<String, OracleWriter>,
     #[cfg(feature = "sqlserver-driver")] sqlserver: &mut HashMap<String, SqlServerWriter>,
+    #[cfg(feature = "clickhouse-driver")] clickhouse: &mut HashMap<String, ClickHouseWriter>,
     writers: &mut HashMap<String, Arc<dyn DatabaseWriter>>,
 ) -> Result<(), FlowError> {
     match connection_type {
@@ -379,6 +399,22 @@ async fn insert_database(
                 let _ = url;
                 return Err(FlowError::Configuration(
                     "SQL Server connections require the 'sqlserver-driver' feature".to_owned(),
+                ));
+            }
+        }
+        "clickhouse" => {
+            #[cfg(feature = "clickhouse-driver")]
+            {
+                let _ = (max_connections, acquire_timeout);
+                let connection = ClickHouseWriter::from_url(url)?;
+                writers.insert(name.to_owned(), Arc::new(connection.clone()));
+                clickhouse.insert(name.to_owned(), connection);
+            }
+            #[cfg(not(feature = "clickhouse-driver"))]
+            {
+                let _ = (url, max_connections, acquire_timeout);
+                return Err(FlowError::Configuration(
+                    "ClickHouse connections require the 'clickhouse-driver' feature".to_owned(),
                 ));
             }
         }
@@ -493,6 +529,8 @@ impl fmt::Debug for ConnectionManager {
         debug.field("oracle", &self.oracle.keys().collect::<Vec<_>>());
         #[cfg(feature = "sqlserver-driver")]
         debug.field("sqlserver", &self.sqlserver.keys().collect::<Vec<_>>());
+        #[cfg(feature = "clickhouse-driver")]
+        debug.field("clickhouse", &self.clickhouse.keys().collect::<Vec<_>>());
         #[cfg(feature = "mongodb-driver")]
         debug.field("mongodb", &self.mongodb.keys().collect::<Vec<_>>());
         #[cfg(feature = "kafka-driver")]

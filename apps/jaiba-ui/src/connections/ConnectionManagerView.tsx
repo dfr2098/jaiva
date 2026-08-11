@@ -68,6 +68,7 @@ const marks: Record<string, string> = {
   mongodb: "MO",
   oracle: "OR",
   sql_server: "MS",
+  clickhouse: "CH",
   kafka: "KF",
   opc_ua: "OP",
   rest: "API",

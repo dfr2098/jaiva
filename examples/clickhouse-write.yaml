@@ -1,0 +1,73 @@
+# Ejemplo: insertar eventos en ClickHouse vía put_database.
+# Requiere: cargo run --features clickhouse-driver -- examples/clickhouse-write.yaml
+#
+# URL típica:
+#   export CLICKHOUSE_URL='http://default:@127.0.0.1:8123/broder'
+#
+# Tabla de ejemplo (crear antes en ClickHouse):
+#   CREATE DATABASE IF NOT EXISTS broder;
+#   CREATE TABLE IF NOT EXISTS broder.events (
+#     ts DateTime64(3) DEFAULT now64(3),
+#     event_type LowCardinality(String),
+#     conveyor LowCardinality(String),
+#     angle Float32,
+#     confidence Float32
+#   ) ENGINE = MergeTree ORDER BY (event_type, conveyor, ts);
+
+id: clickhouse-write-example
+
+database_connections:
+  broder_ch:
+    type: clickhouse
+    url_env: CLICKHOUSE_URL
+    max_connections: 4
+
+engine:
+  queue_capacity: 100
+  max_concurrency: 4
+  memory:
+    maximum_percent: 42
+  repository:
+    enabled: false
+
+processors:
+  - id: records
+    type: generate_records
+    config:
+      records:
+        - event_type: PALLET_MISALIGNED
+          conveyor: TP04
+          angle: 27.0
+          confidence: 0.97
+        - event_type: PALLET_MISALIGNED
+          conveyor: TP02
+          angle: 15.5
+          confidence: 0.88
+
+  - id: sink
+    type: put_database
+    config:
+      connection: broder_ch
+      table: broder.events
+      mode: insert
+      batch_size: 5000
+      columns:
+        event_type: event_type
+        conveyor: conveyor
+        angle: angle
+        confidence: confidence
+    retry:
+      maximum_attempts: 3
+      initial_delay_ms: 250
+      maximum_delay_ms: 5000
+
+  - id: errors
+    type: log_records
+
+connections:
+  - from: records
+    relationship: success
+    to: sink
+  - from: sink
+    relationship: failure
+    to: errors

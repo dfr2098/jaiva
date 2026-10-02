@@ -12,7 +12,7 @@ fugas de secretos en respuestas HTTP.
 |---|---|
 | Bearer sin `JAIBA_ADMIN_TOKEN` en loopback degradaba a `none` | **Falla al arrancar**. Dev local: `authentication: none` o `JAIBA_ADMIN_AUTH=none` |
 | Comparación Bearer con `==` | Comparación en tiempo constante |
-| `/runtime` y `/ws*` siempre abiertos | En bind **no loopback** exigen Bearer (header o `?access_token=`) |
+| `/runtime` y `/ws*` siempre abiertos | Con autenticación Bearer exigen token incluso en loopback (header o `?access_token=`), y filtran los proyectos autorizados |
 
 `authentication: none` sigue permitido **solo** en bind loopback.
 

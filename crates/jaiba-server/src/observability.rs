@@ -19,6 +19,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::{net::TcpListener, time::interval};
+use tower_http::cors::CorsLayer;
 
 use jaiba_connection_manager::{
     AuditSink, ConnectionManager, EncryptedFileSecretStore, FileAuditSink, FileProfileRepository,
@@ -60,8 +61,6 @@ struct AdminAccess {
     authentication: AdminAuthentication,
     /// Principales Bearer (token único o fichero de usuarios).
     principals: Vec<Principal>,
-    /// True si el bind es loopback (permite /runtime y /ws sin Bearer).
-    bind_is_loopback: bool,
 }
 
 #[derive(Clone)]
@@ -384,9 +383,51 @@ impl ObservabilityServer {
                 post(replay_dead_letter),
             )
             .layer(DefaultBodyLimit::max(body_limit))
+            .layer(server_cors()?)
             .with_state(state.clone());
         serve_http_or_https(address, app, state.registry.clone()).await
     }
+}
+
+fn server_cors() -> Result<CorsLayer, FlowError> {
+    let extra = env::var("JAIBA_CORS_ORIGINS").unwrap_or_default();
+    cors_for_origins(&extra)
+}
+
+fn cors_for_origins(extra: &str) -> Result<CorsLayer, FlowError> {
+    use axum::http::{HeaderValue, Method};
+    let defaults = [
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ];
+    let origins = defaults
+        .into_iter()
+        .chain(extra.split(',').map(str::trim).filter(|s| !s.is_empty()))
+        .map(|origin| {
+            if origin == "*" {
+                return Err(FlowError::Configuration(
+                    "JAIBA_CORS_ORIGINS requires explicit origins".into(),
+                ));
+            }
+            origin
+                .parse::<HeaderValue>()
+                .map_err(|_| FlowError::Configuration("invalid JAIBA_CORS_ORIGINS".into()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT])
+        .max_age(Duration::from_secs(600)))
 }
 
 async fn serve_http_or_https(
@@ -445,22 +486,23 @@ async fn health() -> Json<Health> {
 }
 
 async fn readiness(State(state): State<AppState>) -> Response {
-    match state.registry.primary_snapshot().await {
-        Some(snapshot) if snapshot.ready => (StatusCode::OK, Json(snapshot)).into_response(),
-        Some(snapshot) => (StatusCode::SERVICE_UNAVAILABLE, Json(snapshot)).into_response(),
-        None => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiMessage {
-                message: "no flow is running".to_owned(),
-            }),
-        )
-            .into_response(),
-    }
+    let ready = state
+        .registry
+        .snapshots()
+        .await
+        .iter()
+        .any(|snapshot| snapshot.ready);
+    let status = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (status, Json(serde_json::json!({ "ready": ready }))).into_response()
 }
 
 #[derive(Debug, Deserialize)]
 struct ObservabilityQuery {
-    /// Token opcional para WebSocket cuando el bind no es loopback.
+    /// Token Bearer opcional por query para clientes WebSocket.
     access_token: Option<String>,
 }
 
@@ -469,18 +511,22 @@ async fn runtime(
     headers: HeaderMap,
     Query(query): Query<ObservabilityQuery>,
 ) -> Response {
-    if let Err(response) = authorize_observability(&state, &headers, query.access_token.as_deref())
-    {
-        return response;
-    }
-    Json(state.registry.primary_snapshot().await).into_response()
+    let ctx = match authorize_observability(&state, &headers, query.access_token.as_deref()) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
+    Json(visible_snapshots(&state, &ctx).await.into_iter().next()).into_response()
 }
 
-async fn prometheus(State(state): State<AppState>) -> Response {
+async fn prometheus(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let ctx = match authorize_perm(&state, &headers, Permission::Read) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        state.registry.prometheus().await,
+        state.registry.prometheus(&ctx).await,
     )
         .into_response()
 }
@@ -491,12 +537,12 @@ async fn websocket(
     headers: HeaderMap,
     Query(query): Query<ObservabilityQuery>,
 ) -> Response {
-    if let Err(response) = authorize_observability(&state, &headers, query.access_token.as_deref())
-    {
-        return response;
-    }
+    let ctx = match authorize_observability(&state, &headers, query.access_token.as_deref()) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     upgrade
-        .on_upgrade(move |socket| stream_metrics(socket, state))
+        .on_upgrade(move |socket| stream_metrics(socket, state, ctx))
         .into_response()
 }
 
@@ -506,12 +552,12 @@ async fn websocket_v1(
     headers: HeaderMap,
     Query(query): Query<ObservabilityQuery>,
 ) -> Response {
-    if let Err(response) = authorize_observability(&state, &headers, query.access_token.as_deref())
-    {
-        return response;
-    }
+    let ctx = match authorize_observability(&state, &headers, query.access_token.as_deref()) {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
     upgrade
-        .on_upgrade(move |socket| stream_runtime(socket, state))
+        .on_upgrade(move |socket| stream_runtime(socket, state, ctx))
         .into_response()
 }
 
@@ -1157,7 +1203,6 @@ fn resolve_server_admin(
             enabled,
             authentication,
             principals,
-            bind_is_loopback: address.ip().is_loopback(),
         },
         body_limit,
     ))
@@ -1301,16 +1346,13 @@ fn authorize_observability(
     state: &AppState,
     headers: &HeaderMap,
     query_token: Option<&str>,
-) -> Result<(), Response> {
+) -> Result<AuthContext, Response> {
     let admin = state.admin.read().expect("admin lock poisoned");
-    if admin.bind_is_loopback || admin.authentication == AdminAuthentication::None {
-        return Ok(());
-    }
     let ctx = authenticate(&admin, headers, query_token)?;
     if !ctx.has_permission(Permission::Read) {
         return Err(forbidden("insufficient role for observability"));
     }
-    Ok(())
+    Ok(ctx)
 }
 
 async fn whoami(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -1549,13 +1591,31 @@ fn ws_changed_payload(last: &Option<String>, payload: String) -> Option<String> 
     }
 }
 
-async fn stream_metrics(mut socket: WebSocket, state: AppState) {
+fn filter_snapshots(
+    snapshots: Vec<SupervisedFlowSnapshot>,
+    ctx: &AuthContext,
+) -> Vec<SupervisedFlowSnapshot> {
+    snapshots
+        .into_iter()
+        .filter(|flow| ctx.allows_project(&flow.flow_id))
+        .collect()
+}
+
+async fn visible_snapshots(state: &AppState, ctx: &AuthContext) -> Vec<SupervisedFlowSnapshot> {
+    filter_snapshots(state.registry.snapshots().await, ctx)
+}
+
+async fn stream_metrics(mut socket: WebSocket, state: AppState, ctx: AuthContext) {
     let mut ticker = interval(ws_poll_interval());
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last: Option<String> = None;
     loop {
         ticker.tick().await;
-        let summary = state.registry.primary_snapshot().await.map(|s| s.metrics);
+        let summary = visible_snapshots(&state, &ctx)
+            .await
+            .into_iter()
+            .next()
+            .map(|s| s.metrics);
         let Ok(message) = serde_json::to_string(&summary) else {
             break;
         };
@@ -1581,13 +1641,13 @@ struct RuntimeEvent {
     flows: Vec<SupervisedFlowSnapshot>,
 }
 
-async fn stream_runtime(mut socket: WebSocket, state: AppState) {
+async fn stream_runtime(mut socket: WebSocket, state: AppState, ctx: AuthContext) {
     let mut ticker = interval(ws_poll_interval());
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last: Option<String> = None;
     loop {
         ticker.tick().await;
-        let flows = state.registry.snapshots().await;
+        let flows = visible_snapshots(&state, &ctx).await;
         let event = RuntimeEvent {
             kind: "runtime_snapshot",
             flow: flows.first().cloned(),
@@ -1634,6 +1694,112 @@ fn validate_admin_exposure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn desktop_preflight_allows_only_configured_origins() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+        let app = Router::new()
+            .route("/api/v1/flows", put(|| async { "ok" }))
+            .layer(cors_for_origins("https://console.example").unwrap());
+        for origin in [
+            "http://tauri.localhost",
+            "tauri://localhost",
+            "https://console.example",
+        ] {
+            let request = Request::builder()
+                .method("OPTIONS")
+                .uri("/api/v1/flows")
+                .header("origin", origin)
+                .header("access-control-request-method", "PUT")
+                .header(
+                    "access-control-request-headers",
+                    "authorization,content-type",
+                )
+                .body(Body::empty())
+                .unwrap();
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert!(response.status().is_success());
+            assert_eq!(response.headers()["access-control-allow-origin"], origin);
+        }
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/v1/flows")
+                    .header("origin", "https://untrusted.example")
+                    .header("access-control-request-method", "PUT")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !response
+                .headers()
+                .contains_key("access-control-allow-origin")
+        );
+        assert!(cors_for_origins("*").is_err());
+    }
+
+    #[test]
+    fn observability_tokens_preserve_project_scope() {
+        let admin = AdminAccess {
+            enabled: true,
+            authentication: AdminAuthentication::Bearer,
+            principals: vec![Principal {
+                id: "viewer".into(),
+                role: Role::Viewer,
+                projects: vec!["beta".into()],
+                token_secret: "test-token".into(),
+            }],
+        };
+        let mut headers = HeaderMap::new();
+        assert!(authenticate(&admin, &headers, None).is_err());
+        assert!(authenticate(&admin, &headers, Some("wrong")).is_err());
+        let ctx = authenticate(&admin, &headers, Some("test-token")).unwrap();
+        assert!(ctx.allows_project("beta"));
+        assert!(!ctx.allows_project("alpha"));
+        headers.insert(header::AUTHORIZATION, "Bearer test-token".parse().unwrap());
+        assert_eq!(
+            authenticate(&admin, &headers, None).unwrap().projects,
+            ["beta"]
+        );
+    }
+
+    #[test]
+    fn runtime_payloads_exclude_unauthorized_flows() {
+        let snapshots = || {
+            ["alpha", "beta"]
+                .into_iter()
+                .map(|id| SupervisedFlowSnapshot {
+                    flow_id: id.into(),
+                    control: jaiba_runtime::engine::FlowControl::default().snapshot(),
+                    metrics: FlowMetrics::default().summary(),
+                    ready: true,
+                })
+                .collect()
+        };
+        let mut ctx = AuthContext {
+            actor: "viewer".into(),
+            role: Role::Viewer,
+            projects: vec!["beta".into()],
+        };
+        let flows = filter_snapshots(snapshots(), &ctx);
+        let event = RuntimeEvent {
+            kind: "runtime_snapshot",
+            flow: flows.first().cloned(),
+            flows,
+        };
+        let payload = serde_json::to_value(event).unwrap();
+        assert_eq!(payload["flow"]["flow_id"], "beta");
+        assert_eq!(payload["flows"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["flows"][0]["flow_id"], "beta");
+        ctx.projects.clear();
+        assert!(filter_snapshots(snapshots(), &ctx).is_empty());
+        ctx.projects = vec!["*".into()];
+        assert_eq!(filter_snapshots(snapshots(), &ctx).len(), 2);
+    }
 
     /// Candado compartido: varios tests mutan variables de entorno.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

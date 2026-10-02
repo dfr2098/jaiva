@@ -19,7 +19,7 @@ pub struct ProcessorEmission {
     pub processor_id: String,
     pub relationship: String,
     pub packet: DataPacket,
-    pub(crate) reservation: MemoryReservation,
+    pub(crate) _reservation: MemoryReservation,
 }
 
 /// Bounded output channel supplied to each processor.
@@ -34,6 +34,7 @@ pub struct OutputSender {
     metrics: FlowMetrics,
     emitted_records: Arc<AtomicU64>,
     routed_relationships: Option<Arc<HashSet<String>>>,
+    holds_input: bool,
 }
 
 impl OutputSender {
@@ -50,6 +51,7 @@ impl OutputSender {
             metrics,
             emitted_records: Arc::new(AtomicU64::new(0)),
             routed_relationships: None,
+            holds_input: false,
         }
     }
 
@@ -58,6 +60,22 @@ impl OutputSender {
     pub(crate) fn with_routed_relationships(mut self, relationships: HashSet<String>) -> Self {
         self.routed_relationships = Some(Arc::new(relationships));
         self
+    }
+
+    pub(crate) fn with_input_reservation(mut self, holds_input: bool) -> Self {
+        self.holds_input = holds_input;
+        self
+    }
+
+    pub(crate) fn reserve_working_copy(
+        &self,
+        packet: &DataPacket,
+    ) -> Result<Option<MemoryReservation>, FlowError> {
+        if self.holds_input {
+            self.memory.try_reserve(packet.estimated_size()).map(Some)
+        } else {
+            Ok(None)
+        }
     }
 
     /// Emits a packet through an arbitrary relationship.
@@ -82,13 +100,17 @@ impl OutputSender {
             }
             return Ok(());
         }
-        let reservation = self.memory.reserve(packet.estimated_size()).await?;
+        let reservation = if self.holds_input {
+            self.memory.try_reserve(packet.estimated_size())?
+        } else {
+            self.memory.reserve(packet.estimated_size()).await?
+        };
         self.sender
             .send(ProcessorEmission {
                 processor_id: self.processor_id.clone(),
                 relationship: relationship.clone(),
                 packet,
-                reservation,
+                _reservation: reservation,
             })
             .await
             .map_err(|_| FlowError::ChannelClosed)?;
@@ -134,6 +156,29 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[tokio::test]
+    async fn input_holder_fails_instead_of_waiting_for_its_own_memory() {
+        let metrics = FlowMetrics::default();
+        let memory = MemoryLimiter::from_budget(65536, metrics.clone());
+        let input = memory.reserve(1).await.unwrap();
+        let (sender, _receiver) = mpsc::channel(1);
+        let output = OutputSender::new(sender, "transform", memory, metrics.clone())
+            .with_input_reservation(true);
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            output.success(DataPacket::empty()),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(result, Err(FlowError::MemoryCapacity { .. })));
+        assert!(matches!(
+            output.reserve_working_copy(&DataPacket::empty()),
+            Err(FlowError::MemoryCapacity { .. })
+        ));
+        drop(input);
+        assert_eq!(metrics.summary().memory_used_bytes, 0);
+    }
 
     #[tokio::test]
     async fn bounded_output_waits_until_capacity_is_available() {

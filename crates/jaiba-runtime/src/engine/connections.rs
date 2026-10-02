@@ -7,12 +7,12 @@ use rdkafka::{ClientConfig, consumer::StreamConsumer, producer::FutureProducer};
 use sqlx::{MySqlPool, PgPool, mysql::MySqlPoolOptions, postgres::PgPoolOptions};
 use tracing::warn;
 
+#[cfg(feature = "clickhouse-driver")]
+use crate::connectors::ClickHouseWriter;
 #[cfg(feature = "oracle-driver")]
 use crate::connectors::OracleWriter;
 #[cfg(feature = "sqlserver-driver")]
 use crate::connectors::SqlServerWriter;
-#[cfg(feature = "clickhouse-driver")]
-use crate::connectors::ClickHouseWriter;
 use crate::{
     config::{DatabaseConnectionConfig, KafkaConnectionConfig},
     connectors::{DatabaseKind, DatabaseWriter, MySqlWriter, PostgresWriter},
@@ -338,8 +338,7 @@ async fn insert_database(
 ) -> Result<(), FlowError> {
     match connection_type {
         "postgres" => {
-            let pool =
-                connect_postgres_pool(name, url, max_connections, acquire_timeout).await?;
+            let pool = connect_postgres_pool(name, url, max_connections, acquire_timeout).await?;
             writers.insert(name.to_owned(), Arc::new(PostgresWriter::new(pool.clone())));
             postgres.insert(name.to_owned(), pool);
         }

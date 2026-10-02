@@ -656,18 +656,15 @@ impl FlowRegistry {
         snapshots
     }
 
-    pub async fn primary_snapshot(&self) -> Option<SupervisedFlowSnapshot> {
-        self.snapshots().await.into_iter().next()
-    }
-
     /// Texto Prometheus agregado de todos los flujos en ejecución, deduplicando
     /// las líneas `# HELP`/`# TYPE` para producir una exposición válida.
-    pub async fn prometheus(&self) -> String {
+    pub async fn prometheus(&self, ctx: &crate::auth::AuthContext) -> String {
         let bodies: Vec<String> = {
             let running = self.running.read().await;
             running
-                .values()
-                .map(|running| running.metrics.prometheus())
+                .iter()
+                .filter(|(id, _)| ctx.allows_project(id))
+                .map(|(_, running)| running.metrics.prometheus())
                 .collect()
         };
         merge_prometheus(&bodies)
@@ -846,6 +843,36 @@ connections:
             .await
             .unwrap_err();
         assert!(matches!(error, RegistryError::InvalidState(_)));
+    }
+
+    #[tokio::test]
+    async fn failed_initialization_restores_previous_version() {
+        let registry = FlowRegistry::new(None, 4);
+        let (id, v1) = registry.create_draft(FLOW, None).await.unwrap();
+        registry.validate_version(&id, v1).await.unwrap();
+        registry.deploy_version(&id, v1, true, None).await.unwrap();
+        let broken = FLOW.replace(
+            "engine:",
+            &format!(
+                "engine:\n  domain_memory:\n    enabled: true\n    policy_file: missing-{}.yaml",
+                uuid::Uuid::new_v4()
+            ),
+        );
+        let (_, v2) = registry.create_draft(&broken, None).await.unwrap();
+        registry.validate_version(&id, v2).await.unwrap();
+        assert!(registry.deploy_version(&id, v2, true, None).await.is_err());
+        let record = registry.get_record(&id).await.unwrap();
+        assert_eq!(record.active_version, Some(v1));
+        assert_eq!(
+            record.version(v1).unwrap().state,
+            FlowVersionState::Deployed
+        );
+        assert_eq!(
+            record.version(v2).unwrap().state,
+            FlowVersionState::Validated
+        );
+        assert_eq!(registry.running.read().await.get(&id).unwrap().version, v1);
+        registry.stop_all().await;
     }
 
     #[tokio::test]

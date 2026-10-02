@@ -82,38 +82,63 @@ function schedulingBlock(
   return Object.keys(block).length > 0 ? block : null;
 }
 
-function engineBlock(meta: FlowMeta): Yaml | null {
-  const engine: Yaml = {};
+function engineBlock(meta: FlowMeta): Yaml {
   const e = meta.engine;
-  if (e.queue_capacity !== ENGINE_DEFAULTS.queue_capacity) {
-    engine.queue_capacity = e.queue_capacity;
+  return {
+    queue_capacity: e.queue_capacity,
+    max_concurrency: e.max_concurrency,
+    memory: { maximum_percent: e.memory_maximum_percent },
+    repository: { enabled: e.repository_enabled },
+    circuit_breaker: { enabled: e.circuit_breaker_enabled },
+    admin: { enabled: e.admin_enabled, authentication: e.admin_authentication, token_env: e.admin_token_env },
+  };
+}
+
+// Apply only visual edits to the imported document. Unknown options survive.
+function preserveImported(source: unknown, baseline: unknown, current: unknown): unknown {
+  if (JSON.stringify(baseline) === JSON.stringify(current)) return structuredClone(source);
+  if (Array.isArray(baseline) && Array.isArray(current) && Array.isArray(source)) {
+    const identity = (value: unknown): string | undefined => {
+      const item = object(value);
+      if (typeof item.id === "string") return item.id;
+      if (typeof item.from === "string") return JSON.stringify([item.from, item.to, item.relationship]);
+      return undefined;
+    };
+    return current.map((value, index) => {
+      const key = identity(value);
+      const previous = key === undefined ? index : baseline.findIndex((item) => identity(item) === key);
+      return previous < 0 ? value : preserveImported(source[previous], baseline[previous], value);
+    });
   }
-  if (e.max_concurrency !== ENGINE_DEFAULTS.max_concurrency) {
-    engine.max_concurrency = e.max_concurrency;
+  if (current && typeof current === "object" && !Array.isArray(current)) {
+    const result = { ...object(source) };
+    const before = object(baseline);
+    const after = object(current);
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (!(key in after)) delete result[key];
+      else result[key] = preserveImported(result[key], before[key], after[key]);
+    }
+    return result;
   }
-  if (e.memory_maximum_percent !== ENGINE_DEFAULTS.memory_maximum_percent) {
-    engine.memory = { maximum_percent: e.memory_maximum_percent };
+  return structuredClone(current);
+}
+
+// These blocks disappear from generated YAML when their controls return to defaults.
+// Merge an empty block to remove modeled settings while retaining imported extensions.
+function preserveImportedSettings(
+  source: unknown,
+  baseline: unknown,
+  current: Yaml,
+  defaultableBlocks: string[],
+): Yaml {
+  const adjusted = { ...current };
+  const resetBlocks = defaultableBlocks.filter((key) => key in object(baseline) && !(key in current));
+  for (const key of resetBlocks) adjusted[key] = {};
+  const result = preserveImported(source, baseline, adjusted) as Yaml;
+  for (const key of resetBlocks) {
+    if (Object.keys(object(result[key])).length === 0) delete result[key];
   }
-  if (e.repository_enabled !== ENGINE_DEFAULTS.repository_enabled) {
-    engine.repository = { enabled: e.repository_enabled };
-  }
-  if (e.circuit_breaker_enabled !== ENGINE_DEFAULTS.circuit_breaker_enabled) {
-    engine.circuit_breaker = { enabled: e.circuit_breaker_enabled };
-  }
-  const admin: Yaml = {};
-  if (e.admin_enabled !== ENGINE_DEFAULTS.admin_enabled) {
-    admin.enabled = e.admin_enabled;
-  }
-  if (e.admin_authentication !== ENGINE_DEFAULTS.admin_authentication) {
-    admin.authentication = e.admin_authentication;
-  }
-  if (e.admin_token_env !== ENGINE_DEFAULTS.admin_token_env) {
-    admin.token_env = e.admin_token_env;
-  }
-  if (Object.keys(admin).length > 0) {
-    engine.admin = admin;
-  }
-  return Object.keys(engine).length > 0 ? engine : null;
+  return result;
 }
 
 export function buildFlowObject(
@@ -220,12 +245,23 @@ export function buildFlowObject(
       const capacity = edge.data?.queueCapacity ?? 100;
       const connection: Yaml = { from, relationship, to };
       if (capacity !== 100) connection.queue = { capacity };
-      return connection;
+      const original = meta.imported?.connections[edge.id];
+      return original ? preserveImportedSettings(original.source, original.baseline, connection, ["queue"]) : connection;
     })
     .filter((value): value is Yaml => value !== null);
 
   if (connections.length > 0) flow.connections = connections;
 
+  if (meta.imported) {
+    const result = preserveImported(meta.imported.source, meta.imported.baseline, flow) as Yaml;
+    result.processors = nodes.map((node, index) => {
+      const original = meta.imported?.processors[node.id];
+      const current = (flow.processors as Yaml[])[index];
+      return original ? preserveImportedSettings(original.source, original.baseline, current, ["scheduling", "retry", "simulation"]) : current;
+    });
+    result.connections = connections;
+    return result;
+  }
   return flow;
 }
 
@@ -755,6 +791,16 @@ export function parseFlowYaml(content: string): ImportedFlow {
     }];
   });
 
+  const baseline = buildFlowObject(meta, nodes, edges);
+  meta.imported = {
+    source: structuredClone(root), baseline,
+    processors: Object.fromEntries(nodes.map((node, index) => [node.id, {
+      source: structuredClone(processors[index]), baseline: (baseline.processors as unknown[])[index],
+    }])),
+    connections: Object.fromEntries(edges.map((edge, index) => [edge.id, {
+      source: structuredClone(connectionValues[index]), baseline: (baseline.connections as unknown[] | undefined)?.[index],
+    }])),
+  };
   return { meta, nodes, edges };
 }
 

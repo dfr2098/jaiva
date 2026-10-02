@@ -31,9 +31,13 @@ sha2.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tower-http = { version = "0.6", features = ["cors"] }
 uuid.workspace = true
 oracle = { workspace = true, optional = true }
 tiberius = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 mongodb = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

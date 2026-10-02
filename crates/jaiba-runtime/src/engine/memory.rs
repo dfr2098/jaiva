@@ -1,4 +1,6 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+static PROCESS_BUDGET: Mutex<Option<(u64, Arc<Semaphore>)>> = Mutex::new(None);
 
 #[cfg(target_os = "linux")]
 use std::fs;
@@ -20,6 +22,7 @@ const PORTABLE_MEMORY_FALLBACK_BYTES: u64 = 512 * 1024 * 1024;
 #[derive(Clone, Debug)]
 pub struct MemoryLimiter {
     semaphore: Arc<Semaphore>,
+    shared: Option<Arc<Semaphore>>,
     total_units: u32,
     budget_bytes: u64,
     metrics: FlowMetrics,
@@ -35,6 +38,7 @@ pub struct MemoryReservation {
 #[derive(Debug)]
 struct ReservationInner {
     _permit: OwnedSemaphorePermit,
+    _shared_permit: Option<OwnedSemaphorePermit>,
     reserved_bytes: u64,
     metrics: FlowMetrics,
 }
@@ -55,16 +59,49 @@ impl MemoryLimiter {
         }
         let available = detected_memory_limit()?;
         let budget_bytes = available.saturating_mul(config.maximum_percent as u64) / 100;
-        Ok(Self::from_budget(budget_bytes, metrics))
+        let mut shared = PROCESS_BUDGET
+            .lock()
+            .map_err(|_| FlowError::Configuration("process memory lock poisoned".into()))?;
+        if shared.is_none() {
+            let bytes = match std::env::var("JAIBA_MEMORY_MAX_BYTES") {
+                Ok(value) => value.parse::<u64>().map_err(|_| {
+                    FlowError::Configuration(
+                        "JAIBA_MEMORY_MAX_BYTES must be a positive integer".into(),
+                    )
+                })?,
+                Err(std::env::VarError::NotPresent) => {
+                    available.saturating_mul(MemoryConfig::default().maximum_percent as u64) / 100
+                }
+                Err(_) => {
+                    return Err(FlowError::Configuration(
+                        "invalid JAIBA_MEMORY_MAX_BYTES".into(),
+                    ));
+                }
+            };
+            if bytes < UNIT_BYTES || bytes / UNIT_BYTES > u32::MAX as u64 {
+                return Err(FlowError::Configuration(
+                    "process memory budget must fit 1..=u32::MAX units of 64 KiB".into(),
+                ));
+            }
+            *shared = Some((
+                bytes,
+                Arc::new(Semaphore::new((bytes / UNIT_BYTES) as usize)),
+            ));
+        }
+        let (global_bytes, semaphore) = shared.as_ref().expect("initialized process budget");
+        let mut limiter = Self::from_budget(budget_bytes.min(*global_bytes), metrics);
+        limiter.shared = Some(semaphore.clone());
+        Ok(limiter)
     }
 
-    fn from_budget(budget_bytes: u64, metrics: FlowMetrics) -> Self {
-        let total_units_u64 = budget_bytes.div_ceil(UNIT_BYTES).max(1);
+    pub(crate) fn from_budget(budget_bytes: u64, metrics: FlowMetrics) -> Self {
+        let total_units_u64 = (budget_bytes / UNIT_BYTES).max(1);
         let total_units = total_units_u64.min(u32::MAX as u64) as u32;
         metrics.set_memory_budget(budget_bytes);
 
         Self {
             semaphore: Arc::new(Semaphore::new(total_units as usize)),
+            shared: None,
             total_units,
             budget_bytes,
             metrics,
@@ -87,7 +124,14 @@ impl MemoryLimiter {
                 budget_bytes: self.budget_bytes,
             });
         }
-        let units = reserved_bytes.div_ceil(UNIT_BYTES) as u32;
+        let requested_units = reserved_bytes.div_ceil(UNIT_BYTES);
+        if requested_units > self.total_units as u64 {
+            return Err(FlowError::PacketTooLarge {
+                packet_bytes: reserved_bytes,
+                budget_bytes: self.total_units as u64 * UNIT_BYTES,
+            });
+        }
+        let units = requested_units as u32;
         let permit = match self.semaphore.clone().try_acquire_many_owned(units) {
             Ok(permit) => permit,
             Err(tokio::sync::TryAcquireError::NoPermits) => {
@@ -103,10 +147,66 @@ impl MemoryLimiter {
             }
             Err(tokio::sync::TryAcquireError::Closed) => return Err(FlowError::ChannelClosed),
         };
+        let shared_permit = if let Some(shared) = &self.shared {
+            let permit = match shared.clone().try_acquire_many_owned(units) {
+                Ok(permit) => permit,
+                Err(tokio::sync::TryAcquireError::NoPermits) => {
+                    self.metrics.backpressure();
+                    shared
+                        .clone()
+                        .acquire_many_owned(units)
+                        .await
+                        .map_err(|_| FlowError::ChannelClosed)?
+                }
+                Err(tokio::sync::TryAcquireError::Closed) => return Err(FlowError::ChannelClosed),
+            };
+            Some(permit)
+        } else {
+            None
+        };
         self.metrics.reserve_memory(reserved_bytes);
         Ok(MemoryReservation {
             _inner: Arc::new(ReservationInner {
                 _permit: permit,
+                _shared_permit: shared_permit,
+                reserved_bytes,
+                metrics: self.metrics.clone(),
+            }),
+        })
+    }
+
+    /// Never wait while holding input memory or while routing on the scheduler.
+    pub fn try_reserve(&self, bytes: usize) -> Result<MemoryReservation, FlowError> {
+        let reserved_bytes = (bytes as u64).max(1);
+        let units = reserved_bytes.div_ceil(UNIT_BYTES);
+        if reserved_bytes > self.budget_bytes || units > self.total_units as u64 {
+            return Err(FlowError::PacketTooLarge {
+                packet_bytes: reserved_bytes,
+                budget_bytes: self.budget_bytes,
+            });
+        }
+        let exhausted = |_| {
+            self.metrics.backpressure();
+            FlowError::MemoryCapacity {
+                packet_bytes: reserved_bytes,
+            }
+        };
+        let permit = self
+            .semaphore
+            .clone()
+            .try_acquire_many_owned(units as u32)
+            .map_err(exhausted)?;
+        let shared_permit = self
+            .shared
+            .as_ref()
+            .map(|shared| shared.clone().try_acquire_many_owned(units as u32))
+            .transpose()
+            .map_err(exhausted)?;
+        self.metrics.reserve_memory(reserved_bytes);
+        Ok(MemoryReservation {
+            _inner: Arc::new(ReservationInner {
+                _permit: permit,
+                _shared_permit: shared_permit,
                 reserved_bytes,
                 metrics: self.metrics.clone(),
             }),
@@ -173,6 +273,57 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn detected_limiters_use_the_same_process_pool() {
+        let first =
+            MemoryLimiter::detect(&MemoryConfig::default(), FlowMetrics::default()).unwrap();
+        let second = MemoryLimiter::detect(
+            &MemoryConfig {
+                maximum_percent: 20,
+            },
+            FlowMetrics::default(),
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(
+            first.shared.as_ref().unwrap(),
+            second.shared.as_ref().unwrap()
+        ));
+        assert!(second.budget_bytes() <= first.budget_bytes());
+    }
+
+    #[tokio::test]
+    async fn independent_flows_share_capacity_and_cancel_safely() {
+        let shared = Arc::new(Semaphore::new(1));
+        let mut first = MemoryLimiter::from_budget(UNIT_BYTES, FlowMetrics::default());
+        let mut second = MemoryLimiter::from_budget(UNIT_BYTES, FlowMetrics::default());
+        first.shared = Some(shared.clone());
+        second.shared = Some(shared.clone());
+        let held = first.reserve(UNIT_BYTES as usize).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), second.reserve(1))
+                .await
+                .is_err()
+        );
+        assert_eq!(second.semaphore.available_permits(), 1);
+        let clone = held.clone();
+        drop(held);
+        assert_eq!(shared.available_permits(), 0);
+        drop(clone);
+        let reservation = second.reserve(UNIT_BYTES as usize).await.unwrap();
+        assert_eq!(shared.available_permits(), 0);
+        drop(reservation);
+        assert_eq!(shared.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn fractional_units_do_not_overcommit_or_wait_forever() {
+        let limiter = MemoryLimiter::from_budget(UNIT_BYTES + 1, FlowMetrics::default());
+        assert!(matches!(
+            limiter.reserve(UNIT_BYTES as usize + 1).await,
+            Err(FlowError::PacketTooLarge { .. })
+        ));
+    }
 
     #[tokio::test]
     async fn waits_until_reserved_memory_is_released() {

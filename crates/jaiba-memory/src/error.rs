@@ -24,6 +24,11 @@ pub enum MemoryError {
     CriticalCapacity { max_entries: usize },
     #[error("la política requiere sink de persistencia (immediate/persistent/deferred)")]
     MissingImmediateSink,
+    #[error("hot byte capacity exceeded: {requested_bytes} > {max_bytes}")]
+    HotByteCapacity {
+        requested_bytes: u64,
+        max_bytes: u64,
+    },
     #[error("warm.backend redis requiere compilar jaiba-memory con feature 'redis'")]
     RedisFeatureDisabled,
 }

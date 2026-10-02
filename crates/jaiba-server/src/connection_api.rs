@@ -1990,13 +1990,7 @@ impl ConnectionPlugin for ClickHouseConnectionPlugin {
             .ping()
             .await
             .map_err(|error| PluginError::Connection(error.to_string()))?;
-        Ok(success(
-            started,
-            version,
-            1,
-            0,
-            endpoint.pool_max,
-        ))
+        Ok(success(started, version, 1, 0, endpoint.pool_max))
     }
 
     async fn diagnose(

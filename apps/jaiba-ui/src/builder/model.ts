@@ -117,6 +117,12 @@ export interface ScheduleSettings {
 }
 
 export interface FlowMeta {
+  imported?: {
+    source: Record<string, unknown>;
+    baseline: Record<string, unknown>;
+    processors: Record<string, { source: unknown; baseline: unknown }>;
+    connections: Record<string, { source: unknown; baseline: unknown }>;
+  };
   id: string;
   parameters: ParameterEntry[];
   databaseConnections: DatabaseConnection[];
@@ -148,7 +154,7 @@ export const SIMULATION_DEFAULTS: SimulationSettings = {
 export const ENGINE_DEFAULTS: EngineSettings = {
   queue_capacity: 100,
   max_concurrency: 4,
-  memory_maximum_percent: 70,
+  memory_maximum_percent: 42,
   repository_enabled: false,
   circuit_breaker_enabled: true,
   admin_enabled: true,

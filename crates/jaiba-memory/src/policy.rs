@@ -117,6 +117,7 @@ pub struct ClassPolicy {
 #[derive(Debug, Clone)]
 pub struct MemoryPolicy {
     pub max_entries: usize,
+    pub max_hot_bytes: u64,
     pub max_pending_deferred: usize,
     pub default_priority: Priority,
     pub warm_backend: WarmBackend,
@@ -143,6 +144,8 @@ struct FileRoot {
 struct FileMemory {
     #[serde(default)]
     max_entries: Option<usize>,
+    #[serde(default)]
+    max_hot_bytes: Option<u64>,
     #[serde(default)]
     max_pending_deferred: Option<usize>,
     #[serde(default)]
@@ -360,6 +363,12 @@ impl MemoryPolicy {
             };
 
         let default_priority = file.defaults.priority.unwrap_or(Priority::Normal);
+        let max_hot_bytes = file.max_hot_bytes.unwrap_or(64 * 1024 * 1024);
+        if max_hot_bytes == 0 {
+            return Err(MemoryError::Configuration(
+                "memory.max_hot_bytes must be positive".into(),
+            ));
+        }
         let max_entries = file.max_entries.unwrap_or(10_000).max(1);
         let max_pending_deferred = file.max_pending_deferred.unwrap_or(1_024).max(1);
         let mut classes = BTreeMap::new();
@@ -474,6 +483,7 @@ impl MemoryPolicy {
         }
 
         Ok(Self {
+            max_hot_bytes,
             max_entries,
             max_pending_deferred,
             default_priority,

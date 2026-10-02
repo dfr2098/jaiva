@@ -146,11 +146,7 @@ pub fn load_users_file(path: &Path) -> Result<Vec<Principal>, FlowError> {
                 "usuario '{id}' sin token"
             )));
         }
-        let projects = if user.projects.is_empty() {
-            default_all_projects()
-        } else {
-            user.projects
-        };
+        let projects = user.projects;
         principals.push(Principal {
             id,
             role,
@@ -210,6 +206,34 @@ pub struct WhoAmI {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn users_file_preserves_explicit_empty_projects() {
+        let path = std::env::temp_dir().join(format!("jaiba-users-{}.json", uuid::Uuid::new_v4()));
+        fs::write(
+            &path,
+            r#"{"users":[
+            {"id":"empty","role":"viewer","token":"a","projects":[]},
+            {"id":"restricted","role":"viewer","token":"b","projects":["alpha"]},
+            {"id":"wildcard","role":"admin","token":"c","projects":["*"]},
+            {"id":"legacy","role":"admin","token":"d"}
+        ]}"#,
+        )
+        .unwrap();
+        let result = load_users_file(&path);
+        fs::remove_file(&path).unwrap();
+        let users = result.unwrap();
+        assert!(users[0].projects.is_empty());
+        assert_eq!(users[1].projects, ["alpha"]);
+        assert_eq!(users[2].projects, ["*"]);
+        assert_eq!(users[3].projects, ["*"]);
+        let ctx = AuthContext {
+            actor: users[0].id.clone(),
+            role: users[0].role,
+            projects: users[0].projects.clone(),
+        };
+        assert!(!ctx.allows_project("alpha"));
+    }
 
     #[test]
     fn role_ordering() {

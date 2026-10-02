@@ -38,6 +38,7 @@ struct TaskCompletion {
     partition_key: Option<String>,
     queue_id: Option<String>,
     failure: Option<(String, u32)>,
+    fatal: Option<FlowError>,
 }
 
 /// Validated executable flow.
@@ -96,10 +97,17 @@ impl FlowEngine {
     /// When persistence is enabled, abandoned and pending work is recovered
     /// before new source processors are scheduled.
     pub async fn run(&self) -> Result<FlowSummary, FlowError> {
+        self.run_started(None).await
+    }
+
+    pub(crate) async fn run_started(
+        &self,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> Result<FlowSummary, FlowError> {
         self.metrics.set_flow_id(&self.config.id);
         self.metrics.set_flow_status(1);
         self.control.starting();
-        let result = self.run_inner().await;
+        let result = self.run_inner(started).await;
         match &result {
             Ok(_) => {
                 self.metrics.flow_succeeded();
@@ -114,7 +122,10 @@ impl FlowEngine {
         result
     }
 
-    async fn run_inner(&self) -> Result<FlowSummary, FlowError> {
+    async fn run_inner(
+        &self,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> Result<FlowSummary, FlowError> {
         let aliases = referenced_db_aliases(&self.config);
         let connections = ConnectionManager::build(
             &self.config.database_connections,
@@ -189,7 +200,7 @@ impl FlowEngine {
             metrics.recovered(recovered);
             sync_repository_metrics(repository, &metrics).await?;
             for stored in repository.pending(&self.config.id).await? {
-                let reservation = memory.reserve(stored.packet.estimated_size()).await?;
+                let reservation = memory.try_reserve(stored.packet.estimated_size())?;
                 pending.push_back(WorkItem {
                     processor_id: stored.processor_id,
                     packet: stored.packet,
@@ -224,6 +235,9 @@ impl FlowEngine {
         metrics.set_connection_queues(empty_connection_queues(&self.config.connections));
         metrics.set_flow_status(2);
         self.control.running();
+        if let Some(started) = started {
+            let _ = started.send(());
+        }
         let mut domain_memory_tick = tokio::time::interval(std::time::Duration::from_millis(250));
         domain_memory_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -247,6 +261,7 @@ impl FlowEngine {
                     &active_per_processor,
                     repository.as_deref(),
                     &self.config.id,
+                    &memory,
                 )
                 .await?
             {
@@ -301,6 +316,7 @@ impl FlowEngine {
                 joined = running.join_next(), if !running.is_empty() => {
                     match joined {
                         Some(Ok(completion)) => {
+                            if let Some(error) = completion.fatal { return Err(error); }
                             if let Some(active) =
                                 active_per_processor.get_mut(&completion.processor_id)
                             {
@@ -343,6 +359,7 @@ impl FlowEngine {
                             &active_per_processor,
                             repository.as_deref(),
                             &self.config.id,
+                            &memory,
                         )
                         .await?
                     {
@@ -501,7 +518,8 @@ async fn schedule_available(
             memory.clone(),
             metrics.clone(),
         )
-        .with_routed_relationships(routed_relationships);
+        .with_routed_relationships(routed_relationships)
+        .with_input_reservation(item.reservation.is_some());
         let queue_id = item.queue_id.clone();
         let provenance_repository = repository.cloned();
         let execution_mode = match definition.scheduling.execution_mode {
@@ -522,8 +540,8 @@ async fn schedule_available(
                 provenance_repository,
                 queue_id.clone(),
             );
-            let failure = match worker_permit {
-                Err(error) => Some((error.to_string(), 0)),
+            let outcome = match worker_permit {
+                Err(error) => Err(error),
                 Ok(None) => execution.await,
                 Ok(Some(permit)) => {
                     let runtime = tokio::runtime::Handle::current();
@@ -534,15 +552,22 @@ async fn schedule_available(
                     .await
                     {
                         Ok(failure) => failure,
-                        Err(error) => Some((format!("worker task failed: {error}"), 0)),
+                        Err(error) => {
+                            Err(FlowError::Server(format!("worker task failed: {error}")))
+                        }
                     }
                 }
+            };
+            let (failure, fatal) = match outcome {
+                Ok(failure) => (failure, None),
+                Err(error) => (None, Some(error)),
             };
             TaskCompletion {
                 processor_id,
                 partition_key,
                 queue_id,
                 failure,
+                fatal,
             }
         });
     }
@@ -559,7 +584,7 @@ async fn execute_with_retry(
     output: OutputSender,
     repository: Option<LocalPacketRepository>,
     queue_id: Option<String>,
-) -> Option<(String, u32)> {
+) -> Result<Option<(String, u32)>, FlowError> {
     loop {
         let started = Instant::now();
         let input_records = packet
@@ -586,6 +611,7 @@ async fn execute_with_retry(
             "executing processor"
         );
 
+        let working_copy = output.reserve_working_copy(&packet)?;
         let execution = processor.execute(packet.clone(), &context, &output);
         let outcome = match timeout_ms {
             Some(milliseconds) => {
@@ -600,7 +626,11 @@ async fn execute_with_retry(
             None => execution.await,
         };
 
+        drop(working_copy);
         match outcome {
+            Err(error @ (FlowError::MemoryCapacity { .. } | FlowError::PacketTooLarge { .. })) => {
+                return Err(error);
+            }
             Ok(()) => {
                 if output.emitted_records() == 0 {
                     context
@@ -623,7 +653,7 @@ async fn execute_with_retry(
                         )
                         .await;
                 }
-                return None;
+                return Ok(None);
             }
             Err(error) if packet.attempt < retry.maximum_attempts => {
                 packet.attempt += 1;
@@ -677,7 +707,7 @@ async fn execute_with_retry(
                         "could not route failed packet"
                     );
                 }
-                return Some((error_message, attempt));
+                return Ok(Some((error_message, attempt)));
             }
         }
     }
@@ -694,6 +724,7 @@ async fn route_emission(
     active_per_processor: &HashMap<String, usize>,
     repository: Option<&LocalPacketRepository>,
     flow_id: &str,
+    memory: &MemoryLimiter,
 ) -> Result<bool, FlowError> {
     let next = outgoing(connections, &emission.processor_id, &emission.relationship);
     if next.is_empty() {
@@ -738,7 +769,11 @@ async fn route_emission(
         }
     }
 
-    for connection in next {
+    // Reserve every branch before cloning or publishing any of them.
+    let reservations = (0..next.len())
+        .map(|_| memory.try_reserve(emission.packet.estimated_size()))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (connection, reservation) in next.into_iter().zip(reservations) {
         let queue_id = if let Some(repository) = repository {
             let queue_id = repository
                 .enqueue(
@@ -768,7 +803,7 @@ async fn route_emission(
             processor_id: connection.to.clone(),
             packet: emission.packet.clone(),
             connection: Some(connection_id(connection)),
-            reservation: Some(emission.reservation.clone()),
+            reservation: Some(reservation),
             queue_id,
         });
         metrics.emitted(1);
@@ -1152,6 +1187,49 @@ fn validate(config: &FlowConfig) -> Result<(), FlowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn branches_reserve_independent_copies_before_routing() {
+        let config: FlowConfig = serde_yaml::from_str("id: branch-test\nprocessors: []\nconnections:\n  - {from: source, to: a, relationship: success}\n  - {from: source, to: b, relationship: success}\n").unwrap();
+        for budget in [65536, 4 * 65536] {
+            let metrics = FlowMetrics::default();
+            let memory = MemoryLimiter::from_budget(budget, metrics.clone());
+            let packet = DataPacket::with_records(vec![serde_json::json!({"payload": "value"})]);
+            let size = packet.estimated_size() as u64;
+            let emission = ProcessorEmission {
+                processor_id: "source".into(),
+                relationship: "success".into(),
+                _reservation: memory.reserve(size as usize).await.unwrap(),
+                packet,
+            };
+            let mut pending = VecDeque::new();
+            let result = route_emission(
+                &emission,
+                &mut pending,
+                &config.connections,
+                10,
+                &metrics,
+                &HashMap::new(),
+                &HashMap::new(),
+                None,
+                "branch-test",
+                &memory,
+            )
+            .await;
+            if budget == 65536 {
+                assert!(matches!(result, Err(FlowError::MemoryCapacity { .. })));
+                assert!(pending.is_empty());
+                assert_eq!(metrics.summary().memory_used_bytes, size);
+            } else {
+                assert!(result.unwrap());
+                assert_eq!(pending.len(), 2);
+                assert_eq!(metrics.summary().memory_used_bytes, size * 3);
+            }
+            drop(emission);
+            pending.clear();
+            assert_eq!(metrics.summary().memory_used_bytes, 0);
+        }
+    }
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

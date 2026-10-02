@@ -58,6 +58,15 @@ El cliente sigue enviando `Authorization: Bearer <token en claro>`. Si el
 campo `token` del fichero empieza por `sha256:`, se compara el hash SHA-256 del
 Bearer presentado.
 
+`projects: []` no permite acceder a ningún flujo. `projects: ["*"]` permite
+todos; omitir el campo conserva el acceso global por compatibilidad.
+
+`/runtime`, `/ws` y `/ws/v1` filtran los flujos según los proyectos del usuario.
+Con autenticación Bearer requieren token también en loopback, mediante header
+o `?access_token=` para WebSocket. Para desarrollo local sin token se debe
+configurar explícitamente `authentication: none`. Si no hay flujos autorizados,
+`/runtime` y `/ws` devuelven `null`; `/ws/v1` envía `flow: null` y `flows: []`.
+
 ## TLS
 
 ```bash

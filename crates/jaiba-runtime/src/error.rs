@@ -37,6 +37,11 @@ pub enum FlowError {
         budget_bytes: u64,
     },
 
+    #[error(
+        "packet memory capacity exhausted while reserving {packet_bytes} bytes; reduce packet size, branching or concurrent flows, or increase the budget"
+    )]
+    MemoryCapacity { packet_bytes: u64 },
+
     #[error("repository error: {0}")]
     Repository(String),
 

@@ -80,6 +80,7 @@ pub struct MemorySnapshot {
     pub evictions: u64,
     pub expired_removals: u64,
     pub max_entries: u64,
+    pub max_hot_bytes: u64,
     pub immediate_writes: u64,
     pub immediate_failures: u64,
     pub persist_queue: u64,
@@ -274,10 +275,11 @@ impl MemoryManager {
         frozen: Box<dyn FrozenStore>,
     ) -> Self {
         let max_entries = policy.max_entries;
+        let max_hot_bytes = policy.max_hot_bytes;
         let max_pending = policy.max_pending_deferred;
         Self {
             policy,
-            hot: HotStore::new(max_entries),
+            hot: HotStore::new(max_entries).with_max_bytes(max_hot_bytes),
             warm,
             cold,
             frozen,
@@ -428,14 +430,20 @@ impl MemoryManager {
 
         match class_policy.policy {
             Policy::Immediate | Policy::Persistent => {
+                let prepared =
+                    self.hot
+                        .prepare_upsert(key.clone(), value.clone(), &class_policy, now)?;
+                for (victim_key, entry) in &prepared.victims {
+                    self.demote_or_drop(victim_key, entry.clone())?;
+                }
                 self.persist_now(PersistRecord {
-                    key: key.clone(),
+                    key,
                     class: class_policy.name.clone(),
-                    value: value.clone(),
+                    value,
                     policy: class_policy.policy,
                     priority: class_policy.priority,
                 })?;
-                self.hot_upsert(key, value, &class_policy, now)?;
+                self.hot.commit_upsert(prepared);
             }
             Policy::Deferred => {
                 // Working set visible de inmediato; Cold en batch.
@@ -588,6 +596,7 @@ impl MemoryManager {
             evictions,
             expired_removals,
             max_entries: self.policy.max_entries as u64,
+            max_hot_bytes: self.policy.max_hot_bytes,
             immediate_writes: self.immediate_writes,
             immediate_failures: self.immediate_failures,
             persist_queue: self.deferred.len() as u64,
@@ -618,8 +627,12 @@ impl MemoryManager {
         class: &ClassPolicy,
         now: Instant,
     ) -> Result<(), MemoryError> {
-        let victims = self.hot.upsert(key, value, class, now)?;
-        self.apply_demotions(victims)
+        let prepared = self.hot.prepare_upsert(key, value, class, now)?;
+        for (key, entry) in &prepared.victims {
+            self.demote_or_drop(key, entry.clone())?;
+        }
+        self.hot.commit_upsert(prepared);
+        Ok(())
     }
 
     fn apply_demotions(&mut self, victims: Vec<(String, HotEntry)>) -> Result<(), MemoryError> {
@@ -871,6 +884,41 @@ mod tests {
     };
     use serde_json::json;
     use std::time::Duration;
+
+    #[test]
+    fn configured_hot_bytes_limit_applies_to_manager_writes() {
+        let mut manager = MemoryManager::from_yaml("memory:\n  max_hot_bytes: 5\n  classes:\n    v:\n      policy: volatile\n      ttl: 5m").unwrap();
+        manager.upsert("a", Value::Null, "v").unwrap();
+        assert!(matches!(
+            manager.upsert("b", Value::Null, "v"),
+            Err(MemoryError::HotByteCapacity { .. })
+        ));
+        assert_eq!(manager.get("a"), Some(Value::Null));
+        assert_eq!(manager.snapshot().hot_bytes, 5);
+        assert_eq!(manager.snapshot().max_hot_bytes, 5);
+    }
+
+    #[test]
+    fn rejected_immediate_and_persistent_writes_never_reach_sink() {
+        for policy in ["immediate", "persistent"] {
+            let dir = test_scratch_dir(policy);
+            let path = dir.join("persist.jsonl");
+            let yaml = format!(
+                "memory:\n  max_hot_bytes: 5\n  max_entries: 1\n  classes:\n    item:\n      policy: {policy}\n"
+            );
+            let mut manager =
+                MemoryManager::from_yaml_with_sink(&yaml, crate::sink::JsonlFileSink::new(&path))
+                    .unwrap();
+            manager.upsert("a", Value::Null, "item").unwrap();
+            for _ in 0..2 {
+                assert!(manager.upsert("a", json!("oversized"), "item").is_err());
+                assert!(manager.upsert("b", Value::Null, "item").is_err());
+            }
+            assert_eq!(manager.get("a"), Some(Value::Null));
+            assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 1);
+            assert_eq!(manager.snapshot().immediate_writes, 1);
+        }
+    }
 
     fn hot_only(max: usize) -> MemoryManager {
         MemoryManager::from_yaml(&format!(
@@ -1164,6 +1212,138 @@ memory:
         assert_eq!(snapshot.cold_objects, 0);
         assert_eq!(snapshot.cold_quota_rejections, 1);
         assert!(mm.get_keyed("telemetry", "large").is_some());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn failed_capacity_demotion_rejects_new_writes_and_retries_without_side_effects() {
+        for policy in ["immediate", "persistent", "deferred", "volatile", "cache"] {
+            let dir = test_scratch_dir("capacity-cold-quota");
+            let path = dir.join("persist.jsonl");
+            let extra = if policy == "deferred" {
+                "flush: 1h"
+            } else {
+                "ttl: 1h"
+            };
+            let yaml = format!(
+                r#"
+memory:
+  max_entries: 1
+  cold:
+    backend: segmented
+    path: {}
+    segment_max_bytes: 4096
+    max_disk_bytes: 4096
+    mmap: false
+  classes:
+    cache:
+      policy: cache
+      temperature: cold
+      ttl: 1h
+    incoming:
+      policy: {policy}
+      {extra}
+"#,
+                dir.join("cold").display()
+            );
+            let mut mm =
+                MemoryManager::from_yaml_with_sink(&yaml, crate::sink::JsonlFileSink::new(&path))
+                    .unwrap();
+            let payload = json!(
+                (0..8_000)
+                    .map(|index| format!("{index:08x}"))
+                    .collect::<Vec<_>>()
+            );
+            mm.upsert_keyed("cache", "old", payload.clone()).unwrap();
+            let bytes = mm.snapshot().hot_bytes;
+            for _ in 0..2 {
+                let error = mm.upsert_keyed("incoming", "new", json!(1)).unwrap_err();
+                assert!(
+                    error.to_string().contains("cuota de disco Cold"),
+                    "{policy}: {error}"
+                );
+                let snapshot = mm.snapshot();
+                assert_eq!(snapshot.hot_objects, 1, "{policy}");
+                assert_eq!(snapshot.hot_bytes, bytes, "{policy}");
+                assert_eq!(snapshot.evictions, 0, "{policy}");
+                assert_eq!(snapshot.immediate_writes, 0, "{policy}");
+                assert_eq!(snapshot.persist_queue, 0, "{policy}");
+                assert_eq!(mm.hot.get("incoming:new", Instant::now()), None);
+                assert_eq!(
+                    mm.hot.get("cache:old", Instant::now()),
+                    Some(payload.clone())
+                );
+                assert!(!path.exists(), "{policy}: rejected write reached the sink");
+            }
+            // After making the old record small enough for Cold, admission succeeds once.
+            mm.upsert_keyed("cache", "old", json!("small")).unwrap();
+            mm.upsert_keyed("incoming", "new", json!(1)).unwrap();
+            assert_eq!(mm.snapshot().hot_objects, 1);
+            assert_eq!(mm.snapshot().evictions, 1);
+            assert_eq!(mm.hot.get("incoming:new", Instant::now()), Some(json!(1)));
+            assert_eq!(
+                mm.cold.get("cache:old").unwrap().unwrap().value,
+                json!("small")
+            );
+            if matches!(policy, "immediate" | "persistent" | "deferred") {
+                mm.flush().unwrap();
+                assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 1);
+            } else {
+                assert!(!path.exists());
+            }
+            drop(mm);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn sink_failure_after_demotion_preserves_hot_until_retry_commits() {
+        let dir = test_scratch_dir("capacity-sink-failure");
+        let yaml = format!(
+            r#"
+memory:
+  max_entries: 1
+  cold:
+    backend: segmented
+    path: {}
+    mmap: false
+  classes:
+    cache:
+      policy: cache
+      temperature: cold
+      ttl: 1h
+    durable:
+      policy: immediate
+"#,
+            dir.display()
+        );
+        let mut mm = MemoryManager::from_yaml_with_sink(
+            &yaml,
+            RecordingSink {
+                fail_next: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        mm.upsert_keyed("cache", "old", json!("keep")).unwrap();
+        assert!(matches!(
+            mm.upsert_keyed("durable", "new", json!(1)),
+            Err(MemoryError::Persistence(_))
+        ));
+        assert_eq!(mm.hot.get("cache:old", Instant::now()), Some(json!("keep")));
+        assert_eq!(mm.hot.get("durable:new", Instant::now()), None);
+        assert_eq!(mm.snapshot().evictions, 0);
+        assert_eq!(mm.snapshot().immediate_writes, 0);
+        mm.upsert_keyed("durable", "new", json!(1)).unwrap();
+        assert_eq!(mm.snapshot().hot_objects, 1);
+        assert_eq!(mm.snapshot().evictions, 1);
+        assert_eq!(mm.snapshot().immediate_writes, 1);
+        assert_eq!(mm.hot.get("durable:new", Instant::now()), Some(json!(1)));
+        assert_eq!(
+            mm.cold.get("cache:old").unwrap().unwrap().value,
+            json!("keep")
+        );
+        drop(mm);
         let _ = std::fs::remove_dir_all(dir);
     }
 

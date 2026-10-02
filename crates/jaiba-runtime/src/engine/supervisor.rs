@@ -94,7 +94,19 @@ impl FlowSupervisor {
             .with_connection_resolver(self.resolver.clone());
         self.control.starting();
         self.metrics.set_flow_status(1);
-        *task = Some(tokio::spawn(async move { engine.run().await }));
+        let (started, ready) = tokio::sync::oneshot::channel();
+        *task = Some(tokio::spawn(async move {
+            engine.run_started(Some(started)).await
+        }));
+        if ready.await.is_err() {
+            let handle = task.take().expect("startup task");
+            handle
+                .await
+                .map_err(|error| FlowError::Server(error.to_string()))??;
+            return Err(FlowError::Server(
+                "flow terminated before initialization completed".into(),
+            ));
+        }
         Ok(true)
     }
 

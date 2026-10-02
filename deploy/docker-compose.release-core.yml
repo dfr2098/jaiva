@@ -69,6 +69,13 @@ services:
   prometheus:
     image: ${PROMETHEUS_IMAGE:-prom/prometheus:latest}
     container_name: jaiba_stable_prometheus
+    environment:
+      JAIBA_ADMIN_TOKEN: ${JAIBA_ADMIN_TOKEN:-jaiba-stable-admin-token}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - 'umask 077; printf "%s" "$$JAIBA_ADMIN_TOKEN" > /prometheus/jaiba-token; exec /bin/prometheus "$$@"'
+      - --
     restart: unless-stopped
     command:
       - --config.file=/etc/prometheus/prometheus.yml

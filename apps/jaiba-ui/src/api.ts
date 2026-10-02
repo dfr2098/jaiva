@@ -107,7 +107,7 @@ function adminToken(): string | null {
 function websocketUrl(path: string): string {
   const absolute = new URL(apiUrl(path), window.location.href);
   absolute.protocol = absolute.protocol === "https:" ? "wss:" : "ws:";
-  // Fuera de loopback el servidor exige Bearer; el navegador no envía
+  // Con autenticación Bearer el servidor exige token incluso en loopback; el navegador no envía
   // Authorization en WebSocket, así que se pasa ?access_token=.
   const token = adminToken();
   if (token && !absolute.searchParams.has("access_token")) {

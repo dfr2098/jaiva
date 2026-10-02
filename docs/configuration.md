@@ -65,7 +65,43 @@ engine:
 - `queue_capacity`: máximo global de paquetes en espera.
 - `max_concurrency`: objetivo global de tareas concurrentes.
 - `state_file`: checkpoints simples.
-- `maximum_percent`: presupuesto de memoria para paquetes.
+- `maximum_percent`: presupuesto de memoria estimada de paquetes por flujo,
+  sujeto además a un presupuesto compartido por todos los flujos del proceso.
+  Este presupuesto global usa por defecto el 42% de la memoria detectada;
+  `JAIBA_MEMORY_MAX_BYTES` permite fijarlo en bytes antes de arrancar el proceso
+  (mínimo 65536). Se inicializa con el primer flujo y permanece fijo hasta
+  reiniciar. Las reservas se redondean a bloques de 64 KiB y la capacidad
+  global se redondea hacia abajo. Un paquete que no cabe se rechaza. Las
+  fuentes pueden esperar capacidad; las transformaciones que retienen una
+  entrada y el distribuidor de ramas no esperan memoria que ellas mismas
+  podrían estar reteniendo: devuelven `MemoryCapacity` y el flujo falla.
+  Las copias de cada rama y de cada intento se reservan por separado. El
+  presupuesto debe permitir simultáneamente la entrada, la copia de trabajo
+  y la salida; 64 KiB es un mínimo de configuración, no una garantía de poder
+  ejecutar cualquier grafo. Ante un error, reducir lotes/ramas/concurrencia o
+  aumentar el presupuesto. La recuperación del repositorio también falla
+  explícitamente si sus paquetes pendientes no caben.
+  En Windows/macOS la detección sigue usando una base conservadora de 512 MiB.
+  Este contador no incluye Hot, drivers, asignaciones temporales ni toda la RAM
+  del proceso. Las métricas de cada flujo muestran sus propias reservas, no
+  un contador global.
+
+Los checkpoints que apuntan al mismo archivo comparten estado y exclusión
+mutua dentro del proceso, incluyendo serialización, escritura y renombrado.
+Una escritura fallida no publica su valor en memoria. Usar archivos distintos
+para procesos independientes; este almacén no implementa coordinación entre
+procesos.
+
+La API permite CORS para los orígenes de escritorio `tauri://localhost`,
+`http://tauri.localhost`, `https://tauri.localhost` y el desarrollo en
+`http://localhost:5173` / `http://127.0.0.1:5173`. Para otras consolas,
+configurar `JAIBA_CORS_ORIGINS` con una lista separada por comas de orígenes
+explícitos. CORS no reemplaza la autenticación Bearer.
+
+`/ready` es público y devuelve únicamente `{"ready": true/false}`. `/metrics`
+requiere autenticación según la configuración administrativa y solo incluye
+flujos permitidos para el usuario. El Compose de referencia suministra el
+token a Prometheus mediante un archivo privado en su volumen de datos.
 - `abandoned_after_seconds`: edad para recuperar trabajo `RUNNING`; cero es
   apropiado para el worker único actual.
 - `completed_retention_hours`: retención de paquetes completados.

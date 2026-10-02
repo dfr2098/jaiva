@@ -64,10 +64,7 @@ impl ClickHouseWriter {
         } else {
             urlencoding_decode(url.username())
         };
-        let password = url
-            .password()
-            .map(urlencoding_decode)
-            .unwrap_or_default();
+        let password = url.password().map(urlencoding_decode).unwrap_or_default();
         let base_url = format!("{scheme}://{host}:{port}");
         let client = Client::default()
             .with_url(&base_url)
@@ -135,18 +132,21 @@ impl ClickHouseWriter {
                 })?;
                 row.insert(destination_column.clone(), value.clone());
             }
-            body.push_str(&serde_json::to_string(&Value::Object(row)).map_err(|error| {
-                FlowError::DatabaseConnector(format!("JSONEachRow encode failed: {error}"))
-            })?);
+            body.push_str(
+                &serde_json::to_string(&Value::Object(row)).map_err(|error| {
+                    FlowError::DatabaseConnector(format!("JSONEachRow encode failed: {error}"))
+                })?,
+            );
             body.push('\n');
         }
         Ok(body.into_bytes())
     }
 
     async fn http_insert(&self, sql: &str, payload: Vec<u8>) -> Result<(), FlowError> {
-        let mut url = Url::parse(&format!("{}/", self.base_url.trim_end_matches('/'))).map_err(
-            |error| FlowError::Configuration(format!("invalid ClickHouse base URL: {error}")),
-        )?;
+        let mut url =
+            Url::parse(&format!("{}/", self.base_url.trim_end_matches('/'))).map_err(|error| {
+                FlowError::Configuration(format!("invalid ClickHouse base URL: {error}"))
+            })?;
         url.query_pairs_mut()
             .append_pair("database", &self.database)
             .append_pair("query", sql);

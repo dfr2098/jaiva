@@ -35,6 +35,9 @@ jobs:
       - name: smoke release-core
         run: bash scripts/smoke-release-core.sh
 
+      - name: Memory and administrative API regressions
+        run: python3 scripts/review-regression.py
+
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -91,3 +94,6 @@ jobs:
 
       - name: production build
         run: npm run build
+
+      - name: YAML preservation regressions (no browser required)
+        run: npm run e2e -- yaml-preservation.spec.ts

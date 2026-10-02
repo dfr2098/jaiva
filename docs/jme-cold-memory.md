@@ -194,7 +194,18 @@ requieren aproximadamente 5 GiB. Una cuota de 6–8 GiB deja espacio razonable
 para variaciones. Debe medirse `jaiba_memory_cold_bytes` en producción y ajustar
 con datos reales; la compresión depende mucho del contenido.
 
-`max_entries` limita cantidad de objetos Hot, no bytes exactos. La métrica
+`max_entries` limita cantidad de objetos Hot. `memory.max_hot_bytes` limita
+además los bytes estimados de las claves y el JSON serializado (64 MiB por
+defecto; debe ser positivo). Aplica también al ampliar una entrada existente.
+Cuando una escritura supera el límite se devuelve `HotByteCapacity` sin
+cambiar el contenido Hot anterior; no se expulsan objetos para satisfacer
+esta escritura. Reducir o eliminar entradas permite volver a escribir.
+Para `immediate` y `persistent`, esta validación de bytes y capacidad ocurre
+antes de enviar el registro al sink: rechazar la escritura no deja una línea
+persistida ni la duplica en reintentos.
+Este límite es por manager/flujo, independiente del presupuesto global de
+paquetes. El snapshot publica `max_hot_bytes` junto con `hot_bytes`.
+La métrica
 `jaiba_memory_hot_bytes` es una estimación del JSON y no incluye todo el
 overhead del allocator. Para cargas grandes se deben observar simultáneamente
 la RAM residente del proceso, Hot estimado y la caché de páginas del sistema.

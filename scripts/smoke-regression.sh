@@ -9,7 +9,7 @@ bash "$ROOT/scripts/release-core-up.sh"
 bash "$ROOT/scripts/smoke-stable-path.sh"
 
 cd "$ROOT/apps/jaiba-ui"
-if [[ ! -d node_modules ]]; then
+if [[ ! -x node_modules/.bin/playwright ]]; then
   npm ci
 fi
 if ! npx playwright --version >/dev/null 2>&1; then

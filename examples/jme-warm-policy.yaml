@@ -1,6 +1,7 @@
 # JME Paso 4 — WarmStore con backend none (sin Redis).
 # Las clases `cache` + temperature warm espejan al trait WarmStore (noop por defecto).
 memory:
+  version: 1
   max_entries: 1000
   warm:
     backend: none

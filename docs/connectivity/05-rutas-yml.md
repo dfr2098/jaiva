@@ -37,6 +37,8 @@ WorkingDirectory=/var/lib/jaiba        # cwd del proceso = rutas relativas del Y
 | YAML fuente (git / ops) | `/etc/jaiba/flows/` (o carpeta que elijas) |
 | Repositorio de paquetes (si el YAML usa `.jaiva/...`) | relativo al **cwd** del proceso → por eso `WorkingDirectory` fijo |
 | `write_file` paths relativos | igual: relativos al cwd |
+| JME: política | Embebida en el flujo (`engine.domain_memory.policy`), sin archivo |
+| JME: persistencia y Cold/Frozen sin `path` | `$JAIBA_DATA_DIR/jme/...` por `flow_id` |
 
 ## Desarrollo en este repo
 

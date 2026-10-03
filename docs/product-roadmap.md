@@ -21,7 +21,7 @@ Complementa [release-core.md](release-core.md) (defaults seguros / smoke).
 | Kafka | Beta |
 | Oracle | Experimental |
 | SQL Server | Experimental |
-| Memoria JME | Experimental (lab; ver política abajo) |
+| Memoria JME | Beta (madura en este repo; [checklist](history/priority-jme-memory-manager.md#checklist-beta-integración-oficial)) |
 | AI Prep toolkit | Experimental (lab; ver política abajo) |
 | Plugins externos (proceso / JSON Lines) | Preview |
 | Escritorio Tauri | Beta |
@@ -88,7 +88,8 @@ Trabajo de producto **sin** abrir `priority-11+`:
 | --- | --- |
 | **Observabilidad WS** | Dirty-check + throttle (`JAIBA_WS_POLL_MS`); sin snapshot ciego 1 s |
 | **Empaquetado** | Binario en GitHub Release + imagen GHCR `jaiba-serve` ([packaging.md](packaging.md)) |
-| **JME / AI Prep** | Madurar en lab **`DMA_JAIVA/`** (fuera de este repo). Al OSS solo se porta lo **estable** y documentado; no forman parte del recorrido Estable ni de la guía junior |
+| **JME** | **Beta** en este repo: smoke en CI (`scripts/smoke-jme.py`) y activo en el flujo de stress/soak/chaos. Pasa a Estable con compactación (Paso 9) y un soak largo verde. No forma parte del recorrido Estable ni de la guía junior |
+| **AI Prep** | Madurar en lab **`DMA_JAIVA/`** (fuera de este repo). Al OSS solo se porta lo **estable** y documentado |
 
 ## Ocho frentes
 

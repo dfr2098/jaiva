@@ -36,6 +36,7 @@ pub struct MemoryManager {
     cold_puts: u64,
     cold_hits: u64,
     cold_misses: u64,
+    cold_read_failures: u64,
     frozen_puts: u64,
     frozen_hits: u64,
     frozen_misses: u64,
@@ -67,6 +68,8 @@ pub struct MemorySnapshot {
     pub cold_bytes: u64,
     pub cold_max_disk_bytes: u64,
     pub cold_quota_rejections: u64,
+    pub cold_read_failures: u64,
+    pub cold_salvaged_segments: u64,
     pub frozen_puts: u64,
     pub frozen_hits: u64,
     pub frozen_misses: u64,
@@ -296,6 +299,7 @@ impl MemoryManager {
             cold_puts: 0,
             cold_hits: 0,
             cold_misses: 0,
+            cold_read_failures: 0,
             frozen_puts: 0,
             frozen_hits: 0,
             frozen_misses: 0,
@@ -335,7 +339,8 @@ impl MemoryManager {
             FrozenBackend::File => {
                 let path = policy.frozen_path.as_ref().ok_or_else(|| {
                     MemoryError::Configuration(
-                        "frozen.backend file sin path (bug de validación)".to_owned(),
+                        "frozen.backend 'file' requiere path fuera de engine.domain_memory"
+                            .to_owned(),
                     )
                 })?;
                 Ok(Box::new(FileFrozenStore::new(path)?))
@@ -349,7 +354,8 @@ impl MemoryManager {
             ColdBackend::Segmented => {
                 let path = policy.cold_path.as_ref().ok_or_else(|| {
                     MemoryError::Configuration(
-                        "cold.backend segmented sin path (bug de validación)".to_owned(),
+                        "cold.backend 'segmented' requiere path fuera de engine.domain_memory"
+                            .to_owned(),
                     )
                 })?;
                 Ok(Box::new(SegmentedColdStore::open_with_limit(
@@ -554,7 +560,9 @@ impl MemoryManager {
     pub fn poll(&mut self) -> Result<usize, MemoryError> {
         let now = Instant::now();
         let written = self.flush_deferred_at(now, false)?;
-        self.demote_idle_at(now, 64)?;
+        // Idle demotion is best-effort: failed victims are restored to Hot and
+        // counted in demotion_failures / cold_quota_rejections.
+        let _ = self.demote_idle_at(now, 64);
         Ok(written)
     }
 
@@ -583,6 +591,8 @@ impl MemoryManager {
             cold_bytes: self.cold.bytes_on_disk(),
             cold_max_disk_bytes: self.cold.max_disk_bytes().unwrap_or(0),
             cold_quota_rejections: self.cold.quota_rejections(),
+            cold_read_failures: self.cold_read_failures,
+            cold_salvaged_segments: self.cold.salvaged_segments(),
             frozen_puts: self.frozen_puts,
             frozen_hits: self.frozen_hits,
             frozen_misses: self.frozen_misses,
@@ -762,8 +772,13 @@ impl MemoryManager {
     fn promote_from_cold(&mut self, key: &str, now: Instant) -> Option<Value> {
         let entry = match self.cold.get(key) {
             Ok(Some(entry)) => entry,
-            Ok(None) | Err(_) => {
+            Ok(None) => {
                 self.cold_misses += 1;
+                return None;
+            }
+            Err(error) => {
+                self.cold_read_failures += 1;
+                tracing::warn!(key, error = %error, "JME Cold read failed; treated as a miss");
                 return None;
             }
         };
@@ -889,11 +904,13 @@ mod tests {
     fn configured_hot_bytes_limit_applies_to_manager_writes() {
         let mut manager = MemoryManager::from_yaml("memory:\n  max_hot_bytes: 5\n  classes:\n    v:\n      policy: volatile\n      ttl: 5m").unwrap();
         manager.upsert("a", Value::Null, "v").unwrap();
+        manager.upsert("b", Value::Null, "v").unwrap();
+        assert_eq!(manager.get("a"), None);
+        assert_eq!(manager.get("b"), Some(Value::Null));
         assert!(matches!(
-            manager.upsert("b", Value::Null, "v"),
+            manager.upsert("c", json!("oversized"), "v"),
             Err(MemoryError::HotByteCapacity { .. })
         ));
-        assert_eq!(manager.get("a"), Some(Value::Null));
         assert_eq!(manager.snapshot().hot_bytes, 5);
         assert_eq!(manager.snapshot().max_hot_bytes, 5);
     }
@@ -1134,6 +1151,73 @@ memory:
                     .is_some()
             );
         }
+
+        let policy = mm.policy().clone();
+        let mut mm = MemoryManager::with_cold_store(policy, FailColdStore).unwrap();
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(2))
+            .expect("monotonic clock has run for two seconds");
+        mm.upsert_at("carrier:a", json!("a"), "carrier", past)
+            .unwrap();
+        mm.poll()
+            .expect("idle demotion failure must not fail maintenance");
+        assert_eq!(mm.snapshot().demotion_failures, 1);
+        assert_eq!(mm.snapshot().hot_objects, 1);
+    }
+
+    #[test]
+    fn corrupt_cold_reads_are_counted_apart_from_misses() {
+        struct CorruptColdStore;
+        impl ColdStore for CorruptColdStore {
+            fn get(&self, key: &str) -> Result<Option<ColdEntry>, MemoryError> {
+                if key == "carrier:bad" {
+                    Err(MemoryError::Cold("checksum inválido".to_owned()))
+                } else {
+                    Ok(None)
+                }
+            }
+
+            fn put(&mut self, _: &str, _: ColdEntry) -> Result<(), MemoryError> {
+                Ok(())
+            }
+
+            fn remove(&mut self, _: &str) -> Result<bool, MemoryError> {
+                Ok(false)
+            }
+
+            fn len(&self) -> usize {
+                0
+            }
+
+            fn bytes_on_disk(&self) -> u64 {
+                0
+            }
+
+            fn name(&self) -> &'static str {
+                "corrupt"
+            }
+        }
+
+        let policy = MemoryPolicy::from_yaml(
+            r#"
+memory:
+  cold:
+    backend: segmented
+    path: target/not-opened-in-custom-test
+  classes:
+    carrier:
+      policy: cache
+      temperature: cold
+      ttl: 1h
+"#,
+        )
+        .unwrap();
+        let mut mm = MemoryManager::with_cold_store(policy, CorruptColdStore).unwrap();
+        assert_eq!(mm.get("carrier:bad"), None);
+        assert_eq!(mm.get("carrier:absent"), None);
+        let snapshot = mm.snapshot();
+        assert_eq!(snapshot.cold_read_failures, 1);
+        assert_eq!(snapshot.cold_misses, 1);
     }
 
     #[test]

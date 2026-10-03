@@ -140,8 +140,13 @@ struct FileRoot {
     memory: FileMemory,
 }
 
+/// Versión del contrato YAML de políticas que acepta este motor.
+pub const POLICY_VERSION: u32 = 1;
+
 #[derive(Debug, Default, Deserialize)]
 struct FileMemory {
+    #[serde(default)]
+    version: Option<u32>,
     #[serde(default)]
     max_entries: Option<usize>,
     #[serde(default)]
@@ -244,7 +249,22 @@ impl MemoryPolicy {
         Self::from_file(root.memory)
     }
 
+    /// Construye la política desde el contenido del bloque `memory` ya parseado
+    /// (p. ej. embebido en `engine.domain_memory.policy` del flujo).
+    pub fn from_memory_value(value: serde_json::Value) -> Result<Self, MemoryError> {
+        let file: FileMemory = serde_json::from_value(value)
+            .map_err(|error| MemoryError::Configuration(error.to_string()))?;
+        Self::from_file(file)
+    }
+
     fn from_file(file: FileMemory) -> Result<Self, MemoryError> {
+        if let Some(version) = file.version
+            && version != POLICY_VERSION
+        {
+            return Err(MemoryError::Configuration(format!(
+                "memory.version {version} no soportada (esta versión acepta {POLICY_VERSION})"
+            )));
+        }
         let (warm_backend, warm_url_env, warm_key_prefix) = match file.warm.as_ref() {
             None => (
                 WarmBackend::None,
@@ -289,12 +309,8 @@ impl MemoryPolicy {
                             .as_deref()
                             .map(str::trim)
                             .filter(|p| !p.is_empty())
-                            .ok_or_else(|| {
-                                MemoryError::Configuration(
-                                    "frozen.backend 'file' requiere path".to_owned(),
-                                )
-                            })?;
-                        (FrozenBackend::File, Some(PathBuf::from(path)))
+                            .map(PathBuf::from);
+                        (FrozenBackend::File, path)
                     }
                     other => {
                         return Err(MemoryError::Configuration(format!(
@@ -318,11 +334,7 @@ impl MemoryPolicy {
                                 .as_deref()
                                 .map(str::trim)
                                 .filter(|path| !path.is_empty())
-                                .ok_or_else(|| {
-                                    MemoryError::Configuration(
-                                        "cold.backend 'segmented' requiere path".to_owned(),
-                                    )
-                                })?;
+                                .map(PathBuf::from);
                             if !cold.compression.trim().eq_ignore_ascii_case("lz4") {
                                 return Err(MemoryError::Configuration(format!(
                                     "cold.compression '{}' no soportado (lz4)",
@@ -347,7 +359,7 @@ impl MemoryPolicy {
                             }
                             (
                                 ColdBackend::Segmented,
-                                Some(PathBuf::from(path)),
+                                path,
                                 segment_max_bytes,
                                 cold.max_disk_bytes,
                                 cold.mmap,
@@ -553,6 +565,32 @@ memory:
             policy.class("carrier").unwrap().temperature,
             Temperature::Warm
         );
+    }
+
+    #[test]
+    fn policy_version_is_optional_but_must_match() {
+        let classes = "  classes:\n    v:\n      policy: volatile\n      ttl: 5m\n";
+        assert!(MemoryPolicy::from_yaml(&format!("memory:\n{classes}")).is_ok());
+        assert!(MemoryPolicy::from_yaml(&format!("memory:\n  version: 1\n{classes}")).is_ok());
+        let error = MemoryPolicy::from_yaml(&format!("memory:\n  version: 2\n{classes}"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("memory.version 2"), "{error}");
+    }
+
+    #[test]
+    fn inline_memory_block_matches_yaml_file() {
+        let policy = MemoryPolicy::from_memory_value(serde_json::json!({
+            "version": 1,
+            "max_entries": 7,
+            "cold": {"backend": "segmented"},
+            "classes": {"carrier": {"policy": "cache", "temperature": "cold", "ttl": "1h"}}
+        }))
+        .unwrap();
+        assert_eq!(policy.max_entries, 7);
+        assert_eq!(policy.cold_backend, ColdBackend::Segmented);
+        assert_eq!(policy.cold_path, None);
+        assert!(MemoryPolicy::from_memory_value(serde_json::json!({"classes": {}})).is_err());
     }
 
     #[test]

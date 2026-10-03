@@ -7,9 +7,10 @@ No es un caché genérico ni un Redis. No sustituye el repositorio de paquetes d
 DAG (`PacketRepository`). Es una capa paralela para estado operativo
 (telegramas, carriers, alarmas, inventarios, configuración, …).
 
-> **Estado actual:** integrado al runtime con Hot RAM, Warm distribuido
-> opcional (Redis es un proveedor), Cold SSD segmentado con LZ4 y lectura bajo
-> demanda, Frozen y persistencia/rebuild.
+> **Estado actual:** **Beta**, madura en este repositorio. Integrado al runtime
+> con Hot RAM, Warm distribuido opcional (Redis es un proveedor), Cold SSD
+> segmentado con LZ4 y lectura bajo demanda, Frozen y persistencia/rebuild.
+> Ver la checklist Beta al final.
 
 ## Motivación
 
@@ -370,6 +371,22 @@ sin almacenamiento.
 - [ ] Compactación, manifiesto durable y publicación por rename atómico (Paso 9)
 - [x] Guía [`jme-cold-memory.md`](../jme-cold-memory.md) y ejemplo
   [`examples/jme-cold-policy.yaml`](../examples/jme-cold-policy.yaml)
+
+## Checklist Beta (integración oficial)
+
+- [x] JME madura en este repositorio (deja de depender del lab `DMA_JAIVA/`)
+- [x] Contrato `memory.version: 1`; otra versión se rechaza al arrancar
+- [x] Política embebida `engine.domain_memory.policy` (excluyente con `policy_file`)
+- [x] Cold/Frozen sin `path` y persistencia bajo `JAIBA_DATA_DIR/jme/...` por flujo
+- [x] `max_hot_bytes` desaloja entradas no `critical` en vez de rechazar
+- [x] Degradación por inactividad no detiene el flujo si falla (cuota, E/S)
+- [x] Smoke CI `scripts/smoke-jme.py`: política embebida, Cold tras reinicio,
+  persistencia `immediate` y rechazo de versión
+- [x] Flujo de stress/soak/chaos con JME activo (`examples/stable-runtime-stress.yaml`)
+- [x] Inyección de fallas `scripts/chaos-jme.py` en CI; rescate de segmentos
+  dañados con copia `.corrupt` y métrica de lecturas Cold fallidas
+- [ ] Para Estable: compactación y manifiesto (Paso 9), soak largo con JME
+  verde y esquema ortogonal versionado (`lifecycle` / `durability`)
 
 Uso rápido (Hot only):
 

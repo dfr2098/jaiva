@@ -205,8 +205,16 @@ alcanzó a ejecutarse se recupera al reiniciar.
 El nivel Cold puede limitarse por flujo con `memory.cold.max_disk_bytes`. Al
 alcanzar la cuota, JME conserva el objeto en Hot y publica
 `jaiba_memory_cold_quota_rejections_total`; no elimina silenciosamente datos ni
-segmentos. La guía de dimensionamiento, alertas y recuperación está en
+segmentos. El mantenimiento periódico no detiene el flujo por esos rechazos.
+Los segmentos viven en `$JAIBA_DATA_DIR/jme/cold/<flow_id>` cuando la política
+omite `cold.path`. La guía de dimensionamiento, alertas y recuperación está en
 [JME Cold Memory segmentado](jme-cold-memory.md#dimensionamiento-por-flujo).
+
+Si al arrancar aparece `JME Cold segment salvaged` o sube
+`jaiba_memory_cold_salvaged_segments_total`, un segmento estaba dañado: JME dejó
+la copia original como `segment-<id>.jmc.corrupt` y siguió con los registros
+válidos. `jaiba_memory_cold_read_failures_total` cuenta valores con checksum
+inválido. Ver [Daños en disco](jme-cold-memory.md#daños-en-disco).
 
 No se deben borrar archivos `.jmc` mientras Jaiba esté en ejecución. Cold es
 una caché reconstruible y nunca debe ser la única copia de datos críticos.

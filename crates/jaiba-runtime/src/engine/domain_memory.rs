@@ -1,9 +1,9 @@
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
-use jaiba_memory::{JsonlFileSink, MemoryManager, MemoryPolicy};
+use jaiba_memory::{ColdBackend, FrozenBackend, JsonlFileSink, MemoryManager, MemoryPolicy};
 
 use super::FlowMetrics;
 use crate::{config::DomainMemoryConfig, error::FlowError};
@@ -71,17 +71,14 @@ pub fn open_domain_memory(
     if !config.enabled {
         return Ok(None);
     }
-    let yaml = std::fs::read_to_string(&config.policy_file).map_err(|error| {
-        FlowError::Configuration(format!(
-            "domain_memory.policy_file '{}': {error}",
-            config.policy_file.display()
-        ))
-    })?;
-    let mut policy = MemoryPolicy::from_yaml(&yaml)
-        .map_err(|error| FlowError::Configuration(format!("domain_memory policy: {error}")))?;
-    scope_cold_path(&mut policy, flow_id);
+    let mut policy = load_policy(config)?;
+    let data_root = data_root();
+    scope_store_paths(&mut policy, &data_root, flow_id);
     let manager = if policy.requires_persist_sink() {
-        let path = persist_sink_path(flow_id);
+        let path = data_root
+            .join("jme")
+            .join(safe_flow_id(flow_id))
+            .join("persist.jsonl");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -95,21 +92,52 @@ pub fn open_domain_memory(
     Ok(Some(DomainMemoryHandle::new(manager, metrics)))
 }
 
-fn persist_sink_path(flow_id: &str) -> PathBuf {
-    let data_dir =
-        PathBuf::from(std::env::var("JAIBA_DATA_DIR").unwrap_or_else(|_| "data".to_owned()));
-    let safe_flow_id = safe_flow_id(flow_id);
-    data_dir
-        .join("jme")
-        .join(safe_flow_id)
-        .join("persist.jsonl")
+fn load_policy(config: &DomainMemoryConfig) -> Result<MemoryPolicy, FlowError> {
+    let policy = match (&config.policy, &config.policy_file) {
+        (Some(_), Some(_)) => {
+            return Err(FlowError::Configuration(
+                "domain_memory: use policy (embebida) o policy_file, no ambas".to_owned(),
+            ));
+        }
+        (None, None) => {
+            return Err(FlowError::Configuration(
+                "domain_memory.enabled requiere policy (embebida) o policy_file".to_owned(),
+            ));
+        }
+        (Some(inline), None) => MemoryPolicy::from_memory_value(inline.clone()),
+        (None, Some(path)) => {
+            let yaml = std::fs::read_to_string(path).map_err(|error| {
+                FlowError::Configuration(format!(
+                    "domain_memory.policy_file '{}': {error}",
+                    path.display()
+                ))
+            })?;
+            MemoryPolicy::from_yaml(&yaml)
+        }
+    };
+    policy.map_err(|error| FlowError::Configuration(format!("domain_memory policy: {error}")))
 }
 
-/// En runtime, `memory.cold.path` es un directorio base. Cada flujo recibe un
-/// subdirectorio propio para evitar writers concurrentes sobre los segmentos.
-fn scope_cold_path(policy: &mut MemoryPolicy, flow_id: &str) {
-    if let Some(base) = policy.cold_path.take() {
-        policy.cold_path = Some(base.join(safe_flow_id(flow_id)));
+fn data_root() -> PathBuf {
+    std::env::var("JAIBA_DATA_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map_or_else(|| PathBuf::from("data"), PathBuf::from)
+}
+
+/// Cold y Frozen sin `path` viven bajo `<data_root>/jme/{cold,frozen}`. Cada
+/// flujo recibe un subdirectorio propio para evitar writers concurrentes.
+fn scope_store_paths(policy: &mut MemoryPolicy, data_root: &Path, flow_id: &str) {
+    let flow = safe_flow_id(flow_id);
+    if matches!(policy.cold_backend, ColdBackend::Segmented) {
+        let base = policy
+            .cold_path
+            .take()
+            .unwrap_or_else(|| data_root.join("jme").join("cold"));
+        policy.cold_path = Some(base.join(&flow));
+    }
+    if matches!(policy.frozen_backend, FrozenBackend::File) && policy.frozen_path.is_none() {
+        policy.frozen_path = Some(data_root.join("jme").join("frozen").join(&flow));
     }
 }
 
@@ -148,7 +176,8 @@ mod tests {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/jme-hot-policy.yaml");
         let config = DomainMemoryConfig {
             enabled: true,
-            policy_file,
+            policy: None,
+            policy_file: Some(policy_file),
         };
         let handle = open_domain_memory(&config, "test", FlowMetrics::default())
             .unwrap()
@@ -200,10 +229,67 @@ memory:
 "#,
         )
         .unwrap();
-        scope_cold_path(&mut policy, "plant/a 1");
+        scope_store_paths(&mut policy, Path::new("/srv/jaiba"), "plant/a 1");
         assert_eq!(
             policy.cold_path,
             Some(PathBuf::from("data/jme/cold/plant_a_1"))
         );
+    }
+
+    #[test]
+    fn omitted_store_paths_live_under_data_root() {
+        let mut policy = MemoryPolicy::from_memory_value(serde_json::json!({
+            "cold": {"backend": "segmented"},
+            "frozen": {"backend": "file"},
+            "classes": {"carrier": {"policy": "cache", "temperature": "cold", "ttl": "1h"}}
+        }))
+        .unwrap();
+        scope_store_paths(&mut policy, Path::new("/srv/jaiba"), "plant-a");
+        assert_eq!(
+            policy.cold_path,
+            Some(PathBuf::from("/srv/jaiba/jme/cold/plant-a"))
+        );
+        assert_eq!(
+            policy.frozen_path,
+            Some(PathBuf::from("/srv/jaiba/jme/frozen/plant-a"))
+        );
+    }
+
+    #[test]
+    fn inline_policy_opens_without_files() {
+        let config = DomainMemoryConfig {
+            enabled: true,
+            policy: Some(serde_json::json!({
+                "version": 1,
+                "classes": {"telegram": {"policy": "volatile", "ttl": "5m"}}
+            })),
+            policy_file: None,
+        };
+        let handle = open_domain_memory(&config, "inline", FlowMetrics::default())
+            .unwrap()
+            .expect("handle");
+        let mut mm = handle.lock().unwrap();
+        mm.upsert_keyed("telegram", "t1", serde_json::json!(1))
+            .unwrap();
+        assert_eq!(mm.get_keyed("telegram", "t1"), Some(serde_json::json!(1)));
+    }
+
+    #[test]
+    fn policy_source_must_be_exactly_one() {
+        let neither = DomainMemoryConfig {
+            enabled: true,
+            ..DomainMemoryConfig::default()
+        };
+        let both = DomainMemoryConfig {
+            enabled: true,
+            policy: Some(serde_json::json!({})),
+            policy_file: Some(PathBuf::from("policy.yaml")),
+        };
+        for config in [neither, both] {
+            assert!(matches!(
+                open_domain_memory(&config, "test", FlowMetrics::default()),
+                Err(FlowError::Configuration(_))
+            ));
+        }
     }
 }

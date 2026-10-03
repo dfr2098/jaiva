@@ -85,45 +85,6 @@ impl HotStore {
         }
     }
 
-    pub(crate) fn validate_upsert(
-        &self,
-        key: &str,
-        value: &Value,
-        now: Instant,
-    ) -> Result<(), MemoryError> {
-        let live = |entry: &&HotEntry| !entry.expires_at.is_some_and(|deadline| now >= deadline);
-        let size_bytes = serde_json::to_vec(value)
-            .map_err(|error| MemoryError::Configuration(error.to_string()))?
-            .len();
-        let requested_bytes = self
-            .entries
-            .iter()
-            .filter(|(existing, entry)| existing.as_str() != key && live(entry))
-            .map(|(key, entry)| key.len().saturating_add(entry.size_bytes) as u64)
-            .sum::<u64>()
-            .saturating_add(key.len() as u64)
-            .saturating_add(size_bytes as u64);
-        if requested_bytes > self.max_bytes {
-            return Err(MemoryError::HotByteCapacity {
-                requested_bytes,
-                max_bytes: self.max_bytes,
-            });
-        }
-        if !self.entries.get(key).is_some_and(|entry| live(&entry))
-            && self.entries.values().filter(live).count() >= self.max_entries
-            && !self
-                .entries
-                .values()
-                .filter(live)
-                .any(|entry| entry.priority < Priority::Critical)
-        {
-            return Err(MemoryError::CriticalCapacity {
-                max_entries: self.max_entries,
-            });
-        }
-        Ok(())
-    }
-
     /// Inserta o actualiza. Devuelve víctimas de eviction (para demote en el manager).
     pub fn upsert(
         &mut self,
@@ -143,23 +104,44 @@ impl HotStore {
         class: &ClassPolicy,
         now: Instant,
     ) -> Result<PreparedUpsert, MemoryError> {
-        self.validate_upsert(&key, &value, now)?;
-        let size_bytes = serde_json::to_vec(&value).map_or(0, |bytes| bytes.len());
-        let live = |entry: &&HotEntry| !entry.expires_at.is_some_and(|deadline| now >= deadline);
-        let needed = if self.entries.get(&key).is_some_and(|entry| live(&entry)) {
+        let size_bytes = serde_json::to_vec(&value)
+            .map_err(|error| MemoryError::Configuration(error.to_string()))?
+            .len();
+        let live = |entry: &HotEntry| !entry.expires_at.is_some_and(|deadline| now >= deadline);
+        let entry_bytes =
+            |key: &str, entry: &HotEntry| key.len().saturating_add(entry.size_bytes) as u64;
+        let incoming_bytes = key.len().saturating_add(size_bytes) as u64;
+        if incoming_bytes > self.max_bytes {
+            return Err(MemoryError::HotByteCapacity {
+                requested_bytes: incoming_bytes,
+                max_bytes: self.max_bytes,
+            });
+        }
+        let replaces_live = self.entries.get(&key).is_some_and(live);
+        let needed = if replaces_live {
             0
         } else {
-            (self.entries.values().filter(live).count() + 1).saturating_sub(self.max_entries)
+            (self.entries.values().filter(|entry| live(entry)).count() + 1)
+                .saturating_sub(self.max_entries)
         };
+        let mut resident_bytes = self
+            .entries
+            .iter()
+            .filter(|(existing, entry)| existing.as_str() != key && live(entry))
+            .map(|(existing, entry)| entry_bytes(existing, entry))
+            .sum::<u64>();
         let mut victims: Vec<(String, HotEntry)> = Vec::new();
-        while victims.len() < needed {
-            let victim = self
+        while victims.len() < needed
+            || resident_bytes.saturating_add(incoming_bytes) > self.max_bytes
+        {
+            let Some((victim_key, victim)) = self
                 .entries
                 .iter()
-                .filter(|(key, entry)| {
-                    live(entry)
+                .filter(|(existing, entry)| {
+                    existing.as_str() != key
+                        && live(entry)
                         && entry.priority < Priority::Critical
-                        && !victims.iter().any(|(selected, _)| selected == *key)
+                        && !victims.iter().any(|(selected, _)| selected == *existing)
                 })
                 .min_by(|(_, left), (_, right)| {
                     left.priority
@@ -168,10 +150,20 @@ impl HotStore {
                         .then_with(|| right.size_bytes.cmp(&left.size_bytes))
                         .then_with(|| left.last_access.cmp(&right.last_access))
                 })
-                .ok_or(MemoryError::CriticalCapacity {
-                    max_entries: self.max_entries,
-                })?;
-            victims.push((victim.0.clone(), victim.1.clone()));
+            else {
+                return Err(if victims.len() < needed {
+                    MemoryError::CriticalCapacity {
+                        max_entries: self.max_entries,
+                    }
+                } else {
+                    MemoryError::HotByteCapacity {
+                        requested_bytes: resident_bytes.saturating_add(incoming_bytes),
+                        max_bytes: self.max_bytes,
+                    }
+                });
+            };
+            resident_bytes = resident_bytes.saturating_sub(entry_bytes(victim_key, victim));
+            victims.push((victim_key.clone(), victim.clone()));
         }
         let expires_at = class.ttl.map(|ttl| now + ttl);
         Ok(PreparedUpsert {
@@ -303,7 +295,7 @@ mod tests {
     use crate::policy::MemoryPolicy;
 
     #[test]
-    fn byte_limit_preserves_values_and_reuses_freed_capacity() {
+    fn byte_limit_evicts_non_critical_entries() {
         let policy = MemoryPolicy::from_yaml(
             "memory:\n  classes:\n    cache:\n      policy: volatile\n      ttl: 5m\n",
         )
@@ -314,21 +306,45 @@ mod tests {
         hot.upsert("a".into(), serde_json::json!("1234567"), class, now)
             .unwrap();
         assert_eq!(hot.metrics().bytes, 10);
-        assert!(matches!(
-            hot.upsert("b".into(), Value::Null, class, now),
-            Err(MemoryError::HotByteCapacity { .. })
-        ));
-        assert!(
-            hot.upsert("a".into(), serde_json::json!("12345678"), class, now)
-                .is_err()
-        );
-        assert_eq!(hot.get("a", now), Some(serde_json::json!("1234567")));
-        hot.upsert("a".into(), Value::Null, class, now).unwrap();
-        hot.upsert("b".into(), Value::Null, class, now).unwrap();
-        assert_eq!(hot.metrics().bytes, 10);
-        hot.remove("a");
+        let victims = hot.upsert("b".into(), Value::Null, class, now).unwrap();
+        assert_eq!(victims.len(), 1);
+        assert_eq!(victims[0].0, "a");
+        assert_eq!(hot.get("a", now), None);
+        assert_eq!(hot.get("b", now), Some(Value::Null));
+        assert_eq!(hot.metrics().evictions, 1);
+
         hot.upsert("c".into(), Value::Null, class, now).unwrap();
         assert_eq!(hot.metrics().bytes, 10);
+        let victims = hot
+            .upsert("b".into(), serde_json::json!("12345"), class, now)
+            .unwrap();
+        assert_eq!(victims.len(), 1);
+        assert_eq!(victims[0].0, "c");
+        assert_eq!(hot.metrics().bytes, 8);
+    }
+
+    #[test]
+    fn byte_limit_rejects_oversized_values_and_never_evicts_critical() {
+        let policy = MemoryPolicy::from_yaml(
+            "memory:\n  classes:\n    cache:\n      policy: volatile\n      ttl: 5m\n    safety:\n      policy: cache\n      ttl: 5m\n      priority: critical\n",
+        )
+        .unwrap();
+        let cache = policy.class("cache").unwrap();
+        let safety = policy.class("safety").unwrap();
+        let now = Instant::now();
+        let mut hot = HotStore::new(10).with_max_bytes(10);
+        assert!(matches!(
+            hot.upsert("a".into(), serde_json::json!("123456789"), cache, now),
+            Err(MemoryError::HotByteCapacity { .. })
+        ));
+        hot.upsert("s".into(), serde_json::json!("1234567"), safety, now)
+            .unwrap();
+        assert!(matches!(
+            hot.upsert("b".into(), Value::Null, cache, now),
+            Err(MemoryError::HotByteCapacity { .. })
+        ));
+        assert_eq!(hot.get("s", now), Some(serde_json::json!("1234567")));
+        assert_eq!(hot.metrics().evictions, 0);
     }
 
     #[test]

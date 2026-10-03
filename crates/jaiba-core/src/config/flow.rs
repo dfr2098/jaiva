@@ -439,26 +439,16 @@ fn default_memory_percent() -> u8 {
 }
 
 /// Configuración del Jaiba Memory Engine (ciclo de vida de dominio).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct DomainMemoryConfig {
     #[serde(default)]
     pub enabled: bool,
-    /// YAML de políticas JME (`memory.classes`, etc.).
-    #[serde(default = "default_domain_memory_policy_file")]
-    pub policy_file: PathBuf,
-}
-
-impl Default for DomainMemoryConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            policy_file: default_domain_memory_policy_file(),
-        }
-    }
-}
-
-fn default_domain_memory_policy_file() -> PathBuf {
-    "examples/jme-hot-policy.yaml".into()
+    /// Contenido del bloque `memory` embebido en el flujo. Excluyente con `policy_file`.
+    #[serde(default)]
+    pub policy: Option<serde_json::Value>,
+    /// YAML de políticas JME en disco, relativo al directorio de trabajo del proceso.
+    #[serde(default)]
+    pub policy_file: Option<PathBuf>,
 }
 
 fn default_queue_capacity() -> usize {
@@ -649,7 +639,30 @@ connections: []
         assert!(config.engine.domain_memory.enabled);
         assert_eq!(
             config.engine.domain_memory.policy_file,
-            PathBuf::from("examples/jme-hot-policy.yaml")
+            Some(PathBuf::from("examples/jme-hot-policy.yaml"))
         );
+        assert!(config.engine.domain_memory.policy.is_none());
+    }
+
+    #[test]
+    fn parses_inline_domain_memory_policy() {
+        let config: FlowConfig = serde_yaml::from_str(
+            r#"
+id: jme-inline
+engine:
+  domain_memory:
+    enabled: true
+    policy:
+      version: 1
+      classes:
+        telegram: {policy: volatile, ttl: 5m}
+processors: []
+connections: []
+"#,
+        )
+        .unwrap();
+        let policy = config.engine.domain_memory.policy.expect("inline policy");
+        assert_eq!(policy["classes"]["telegram"]["ttl"], "5m");
+        assert!(config.engine.domain_memory.policy_file.is_none());
     }
 }

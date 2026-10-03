@@ -1,6 +1,7 @@
 # JME Paso 6 — Frozen (archivo) + Warm none.
 # Redis: warm.backend: redis + feature `redis` + REDIS_URL.
 memory:
+  version: 1
   max_entries: 64
   warm:
     backend: none

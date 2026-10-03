@@ -306,8 +306,9 @@ El guardado debe colocarse después del commit del destino.
 
 ## Estado de dominio JME
 
-Estos procesadores requieren `engine.domain_memory.enabled: true` y una
-`policy_file` válida. La clase debe existir en esa política.
+Estos procesadores requieren `engine.domain_memory.enabled: true` con una
+política embebida (`policy`) o un `policy_file`. La clase debe existir en esa
+política. Ver [configuration.md](configuration.md#memoria-de-dominio-jme).
 
 ```yaml
 type: memory_upsert

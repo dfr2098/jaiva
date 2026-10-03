@@ -41,6 +41,42 @@ struct TaskCompletion {
     fatal: Option<FlowError>,
 }
 
+/// Maximum time a deferred emission may wait for packet memory while no task completes.
+const MEMORY_STALL_TIMEOUT: Duration = Duration::from_secs(30);
+
+enum RouteOutcome {
+    Routed,
+    QueueFull,
+    MemoryFull(FlowError),
+}
+
+struct MemoryStall {
+    error: FlowError,
+    deadline: tokio::time::Instant,
+}
+
+fn hold_unrouted(
+    outcome: RouteOutcome,
+    emission: ProcessorEmission,
+    deferred: &mut Option<ProcessorEmission>,
+    memory_stall: &mut Option<MemoryStall>,
+) {
+    match outcome {
+        RouteOutcome::Routed => *memory_stall = None,
+        RouteOutcome::QueueFull => {
+            *memory_stall = None;
+            *deferred = Some(emission);
+        }
+        RouteOutcome::MemoryFull(error) => {
+            memory_stall.get_or_insert_with(|| MemoryStall {
+                error,
+                deadline: tokio::time::Instant::now() + MEMORY_STALL_TIMEOUT,
+            });
+            *deferred = Some(emission);
+        }
+    }
+}
+
 /// Validated executable flow.
 pub struct FlowEngine {
     config: FlowConfig,
@@ -231,6 +267,7 @@ impl FlowEngine {
         let mut active_per_processor: HashMap<String, usize> = HashMap::new();
         let mut active_partitions: HashMap<String, HashSet<String>> = HashMap::new();
         let mut deferred: Option<ProcessorEmission> = None;
+        let mut memory_stall: Option<MemoryStall> = None;
         let concurrency_limit = self.config.engine.max_concurrency;
         metrics.set_connection_queues(empty_connection_queues(&self.config.connections));
         metrics.set_flow_status(2);
@@ -250,8 +287,8 @@ impl FlowEngine {
                 }
                 _ => {}
             }
-            if let Some(emission) = deferred.take()
-                && !route_emission(
+            if let Some(emission) = deferred.take() {
+                let outcome = route_emission(
                     &emission,
                     &mut pending,
                     &self.config.connections,
@@ -263,9 +300,8 @@ impl FlowEngine {
                     &self.config.id,
                     &memory,
                 )
-                .await?
-            {
-                deferred = Some(emission);
+                .await?;
+                hold_unrouted(outcome, emission, &mut deferred, &mut memory_stall);
             }
 
             schedule_available(
@@ -306,6 +342,11 @@ impl FlowEngine {
                     Err(mpsc::error::TryRecvError::Disconnected) => break,
                 }
             }
+            if running.is_empty()
+                && let Some(stall) = memory_stall.take()
+            {
+                return Err(stall.error);
+            }
 
             tokio::select! {
                 _ = domain_memory_tick.tick(), if domain_memory.is_some() => {
@@ -317,6 +358,7 @@ impl FlowEngine {
                     match joined {
                         Some(Ok(completion)) => {
                             if let Some(error) = completion.fatal { return Err(error); }
+                            memory_stall = None;
                             if let Some(active) =
                                 active_per_processor.get_mut(&completion.processor_id)
                             {
@@ -348,8 +390,8 @@ impl FlowEngine {
                     }
                 }
                 emission = emission_receiver.recv(), if deferred.is_none() => {
-                    if let Some(emission) = emission
-                        && !route_emission(
+                    if let Some(emission) = emission {
+                        let outcome = route_emission(
                             &emission,
                             &mut pending,
                             &self.config.connections,
@@ -361,9 +403,17 @@ impl FlowEngine {
                             &self.config.id,
                             &memory,
                         )
-                        .await?
-                    {
-                        deferred = Some(emission);
+                        .await?;
+                        hold_unrouted(outcome, emission, &mut deferred, &mut memory_stall);
+                    }
+                }
+                _ = tokio::time::sleep_until(
+                    memory_stall
+                        .as_ref()
+                        .map_or_else(tokio::time::Instant::now, |stall| stall.deadline),
+                ), if memory_stall.is_some() => {
+                    if let Some(stall) = memory_stall.take() {
+                        return Err(stall.error);
                     }
                 }
                 else => {
@@ -389,6 +439,10 @@ impl FlowEngine {
         }
         Ok(metrics.summary())
     }
+}
+
+fn is_source_seed(item: &WorkItem) -> bool {
+    item.connection.is_none() && item.queue_id.is_none()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -417,9 +471,24 @@ async fn schedule_available(
     if control.state() != FlowLifecycle::Running {
         return Ok(());
     }
+    // Source seeds only start while their output fits: routed work, unread
+    // emissions and running tasks must stay below the queue capacity, or the
+    // downstream stages cannot emit and the router deadlocks.
+    let routed_backlog = pending
+        .iter()
+        .filter(|item| !is_source_seed(item))
+        .count()
+        .saturating_add(emission_sender.max_capacity() - emission_sender.capacity());
     let mut inspected = 0;
     while running.len() < concurrency_limit && inspected < pending.len() {
         let item = pending.pop_front().expect("pending item");
+        if is_source_seed(&item)
+            && routed_backlog.saturating_add(running.len()) >= config.engine.queue_capacity
+        {
+            pending.push_back(item);
+            inspected += 1;
+            continue;
+        }
         let definition = definitions.get(&item.processor_id).expect("validated");
         let active = active_per_processor
             .get(&item.processor_id)
@@ -611,26 +680,29 @@ async fn execute_with_retry(
             "executing processor"
         );
 
-        let working_copy = output.reserve_working_copy(&packet)?;
-        let execution = processor.execute(packet.clone(), &context, &output);
-        let outcome = match timeout_ms {
-            Some(milliseconds) => {
-                tokio::time::timeout(Duration::from_millis(milliseconds), execution)
-                    .await
-                    .map_err(|_| FlowError::Processor {
-                        processor_id: context.processor_id.clone(),
-                        message: format!("execution exceeded timeout of {milliseconds} ms"),
-                    })
-                    .and_then(|result| result)
+        let outcome = match output.reserve_working_copy(&packet) {
+            Err(error) => Err(error),
+            Ok(working_copy) => {
+                let execution = processor.execute(packet.clone(), &context, &output);
+                let outcome = match timeout_ms {
+                    Some(milliseconds) => {
+                        tokio::time::timeout(Duration::from_millis(milliseconds), execution)
+                            .await
+                            .map_err(|_| FlowError::Processor {
+                                processor_id: context.processor_id.clone(),
+                                message: format!("execution exceeded timeout of {milliseconds} ms"),
+                            })
+                            .and_then(|result| result)
+                    }
+                    None => execution.await,
+                };
+                drop(working_copy);
+                outcome
             }
-            None => execution.await,
         };
 
-        drop(working_copy);
         match outcome {
-            Err(error @ (FlowError::MemoryCapacity { .. } | FlowError::PacketTooLarge { .. })) => {
-                return Err(error);
-            }
+            Err(error @ FlowError::PacketTooLarge { .. }) => return Err(error),
             Ok(()) => {
                 if output.emitted_records() == 0 {
                     context
@@ -693,6 +765,13 @@ async fn execute_with_retry(
                     .metrics
                     .processor_finished(&context.processor_id, started.elapsed(), false);
                 let error_message = error.to_string();
+                warn!(
+                    processor_id = %context.processor_id,
+                    packet_id = %packet.id,
+                    attempt = packet.attempt,
+                    error = %error_message,
+                    "processor failed"
+                );
                 packet
                     .attributes
                     .insert("error.processor".to_owned(), context.processor_id.clone());
@@ -725,7 +804,7 @@ async fn route_emission(
     repository: Option<&LocalPacketRepository>,
     flow_id: &str,
     memory: &MemoryLimiter,
-) -> Result<bool, FlowError> {
+) -> Result<RouteOutcome, FlowError> {
     let next = outgoing(connections, &emission.processor_id, &emission.relationship);
     if next.is_empty() {
         warn!(
@@ -733,11 +812,14 @@ async fn route_emission(
             relationship = emission.relationship,
             "packet reached the end of the flow"
         );
-        return Ok(true);
+        return Ok(RouteOutcome::Routed);
     }
 
-    if pending.len().saturating_add(next.len()) > global_capacity {
-        return Ok(false);
+    // Source seeds (no connection) are bounded by the processor count and must
+    // not consume queue capacity, or many sources deadlock the router.
+    let queued = pending.iter().filter(|item| !is_source_seed(item)).count();
+    if queued.saturating_add(next.len()) > global_capacity {
+        return Ok(RouteOutcome::QueueFull);
     }
     for connection in &next {
         let edge_size = pending
@@ -745,7 +827,7 @@ async fn route_emission(
             .filter(|item| item.connection.as_deref() == Some(connection_id(connection).as_str()))
             .count();
         if edge_size >= connection.queue.capacity {
-            return Ok(false);
+            return Ok(RouteOutcome::QueueFull);
         }
         if let Some(maximum) = definitions
             .get(&connection.to)
@@ -764,15 +846,22 @@ async fn route_emission(
                 .filter(|candidate| candidate.to == connection.to)
                 .count();
             if queued.saturating_add(active).saturating_add(incoming) > maximum {
-                return Ok(false);
+                return Ok(RouteOutcome::QueueFull);
             }
         }
     }
 
     // Reserve every branch before cloning or publishing any of them.
-    let reservations = (0..next.len())
-        .map(|_| memory.try_reserve(emission.packet.estimated_size()))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut reservations = Vec::with_capacity(next.len());
+    for _ in &next {
+        match memory.try_reserve(emission.packet.estimated_size()) {
+            Ok(reservation) => reservations.push(reservation),
+            Err(error @ FlowError::MemoryCapacity { .. }) => {
+                return Ok(RouteOutcome::MemoryFull(error));
+            }
+            Err(error) => return Err(error),
+        }
+    }
     for (connection, reservation) in next.into_iter().zip(reservations) {
         let queue_id = if let Some(repository) = repository {
             let queue_id = repository
@@ -811,7 +900,7 @@ async fn route_emission(
     if let Some(repository) = repository {
         sync_repository_metrics(repository, metrics).await?;
     }
-    Ok(true)
+    Ok(RouteOutcome::Routed)
 }
 
 async fn sync_repository_metrics(
@@ -1217,11 +1306,14 @@ mod tests {
             )
             .await;
             if budget == 65536 {
-                assert!(matches!(result, Err(FlowError::MemoryCapacity { .. })));
+                assert!(matches!(
+                    result,
+                    Ok(RouteOutcome::MemoryFull(FlowError::MemoryCapacity { .. }))
+                ));
                 assert!(pending.is_empty());
                 assert_eq!(metrics.summary().memory_used_bytes, size);
             } else {
-                assert!(result.unwrap());
+                assert!(matches!(result, Ok(RouteOutcome::Routed)));
                 assert_eq!(pending.len(), 2);
                 assert_eq!(metrics.summary().memory_used_bytes, size * 3);
             }
@@ -1333,6 +1425,66 @@ mod tests {
             self.active.fetch_sub(1, Ordering::SeqCst);
             Ok(())
         }
+    }
+
+    #[test]
+    fn bundled_jme_flows_validate() {
+        let flows = [
+            include_str!("../../../../examples/stable-runtime-stress.yaml")
+                .replace("__ROWS__", "1000"),
+            include_str!("../../../../examples/jme-runtime-flow.yaml").to_owned(),
+        ];
+        for yaml in flows {
+            let config = parse(&yaml);
+            let domain_memory = config.engine.domain_memory.clone();
+            assert!(domain_memory.enabled, "{}", config.id);
+            jaiba_memory::MemoryPolicy::from_memory_value(
+                domain_memory.policy.expect("inline JME policy"),
+            )
+            .unwrap();
+            FlowEngine::new(config).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn exhausted_packet_memory_fails_the_packet_not_the_flow() {
+        let metrics = FlowMetrics::default();
+        let memory = MemoryLimiter::from_budget(65536, metrics.clone());
+        let input = memory.reserve(1).await.unwrap();
+        let (sender, _receiver) = mpsc::channel(4);
+        let output = OutputSender::new(sender, "transform", memory, metrics.clone())
+            .with_input_reservation(true);
+        let state_path =
+            std::env::temp_dir().join(format!("jaiba-exec-state-{}.json", uuid::Uuid::new_v4()));
+        let context = ProcessorContext {
+            flow_id: "memory-test".into(),
+            processor_id: "transform".into(),
+            parameters: Arc::new(HashMap::new()),
+            connections: ConnectionManager::default(),
+            metrics: metrics.clone(),
+            state: StateStore::load(&state_path).unwrap(),
+            circuits: CircuitBreakers::new(crate::config::CircuitBreakerConfig {
+                enabled: false,
+                ..Default::default()
+            })
+            .unwrap(),
+            domain_memory: None,
+        };
+        let result = execute_with_retry(
+            Arc::new(ForwardingCpuSink),
+            DataPacket::empty(),
+            context,
+            RetryConfig::default(),
+            None,
+            output,
+            None,
+            None,
+        )
+        .await;
+        let (message, _) = result.unwrap().expect("packet routed to failure");
+        assert!(message.contains("memory capacity exhausted"));
+        drop(input);
+        assert_eq!(metrics.summary().memory_used_bytes, 0);
     }
 
     fn lifecycle_registry() -> ProcessorRegistry {
@@ -1758,6 +1910,36 @@ connections:
         .expect("terminal output must bypass the full routing channel")
         .unwrap();
         assert_eq!(summary.processed, 7);
+        assert_eq!(summary.failed, 0);
+    }
+
+    #[tokio::test]
+    async fn more_sources_than_queue_capacity_do_not_deadlock() {
+        let sources = 40;
+        let mut yaml = String::from(
+            "id: many-sources\nengine:\n  max_concurrency: 3\n  queue_capacity: 4\n  repository: { enabled: false }\nprocessors:\n",
+        );
+        for index in 0..sources {
+            yaml.push_str(&format!(
+                "  - {{ id: source{index}, type: generate_records, config: {{ records: [{{ id: {index} }}] }} }}\n"
+            ));
+        }
+        yaml.push_str("  - { id: middle, type: log_records, config: {} }\n");
+        yaml.push_str("  - { id: sink, type: log_records, config: {} }\nconnections:\n");
+        for index in 0..sources {
+            yaml.push_str(&format!(
+                "  - {{ from: source{index}, relationship: success, to: middle }}\n"
+            ));
+        }
+        yaml.push_str("  - { from: middle, relationship: success, to: sink }\n");
+        let summary = tokio::time::timeout(
+            Duration::from_secs(10),
+            FlowEngine::new(parse(&yaml)).unwrap().run(),
+        )
+        .await
+        .expect("source seeds must not fill the routing queue")
+        .unwrap();
+        assert_eq!(summary.processed, sources * 3);
         assert_eq!(summary.failed, 0);
     }
 

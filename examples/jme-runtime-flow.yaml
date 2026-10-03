@@ -7,9 +7,19 @@ engine:
   max_concurrency: 8
   repository:
     enabled: false
+  # Política embebida: el flujo no depende del directorio de trabajo.
+  # Alternativa: policy_file: ruta/a/politica.yaml (relativa al cwd).
   domain_memory:
     enabled: true
-    policy_file: examples/jme-hot-policy.yaml
+    policy:
+      version: 1
+      max_entries: 1000
+      classes:
+        carrier:
+          policy: cache
+          temperature: warm
+          ttl: 30m
+          priority: high
 
 processors:
   - id: source

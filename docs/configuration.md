@@ -134,41 +134,50 @@ token a Prometheus mediante un archivo privado en su volumen de datos.
 ### Memoria de dominio JME
 
 `engine.memory` limita la RAM de paquetes. `engine.domain_memory` habilita, de
-forma independiente, el ciclo de vida de objetos de negocio:
+forma independiente, el ciclo de vida de objetos de negocio (JME, **Beta**).
+
+La forma recomendada es embeber la política en el flujo. Así un despliegue por
+API o UI no depende de archivos ni del directorio de trabajo:
 
 ```yaml
 engine:
   domain_memory:
     enabled: true
-    policy_file: examples/jme-cold-policy.yaml
+    policy:              # contenido del bloque memory
+      version: 1
+      max_entries: 5000
+      cold:
+        backend: segmented      # sin path: JAIBA_DATA_DIR/jme/cold/<flow_id>
+        max_disk_bytes: 10737418240
+      classes:
+        carrier:
+          policy: cache
+          temperature: cold
+          demote_after: 30m
+          ttl: 24h
 ```
 
-El archivo de política define clases, TTL, prioridad y niveles Hot, Warm, Cold
-y Frozen. Para Cold local segmentado:
+Alternativa: `policy_file: ruta/politica.yaml`, un YAML con raíz `memory:`. La
+ruta es relativa al directorio de trabajo del proceso. `policy` y `policy_file`
+son excluyentes y, con `enabled: true`, una de las dos es obligatoria.
 
-```yaml
-memory:
-  cold:
-    backend: segmented
-    path: data/jme/cold
-    segment_max_bytes: 67108864
-    max_disk_bytes: 10737418240
-    compression: lz4
-    mmap: true
-  classes:
-    carrier:
-      policy: cache
-      temperature: cold
-      demote_after: 30m
-      ttl: 24h
-```
+| Campo | Regla |
+| --- | --- |
+| `memory.version` | Opcional; si aparece debe ser `1`. Otra versión se rechaza al arrancar |
+| `cold.path` / `frozen.path` | Opcionales en el runtime. Si se omiten: `<datos>/jme/cold/<flow_id>` y `<datos>/jme/frozen/<flow_id>` |
+| Persistencia `immediate` / `deferred` | Siempre `<datos>/jme/<flow_id>/persist.jsonl` |
+
+`<datos>` es `JAIBA_DATA_DIR`, o `data` relativo al cwd si no está definido. Un
+`cold.path` explícito y relativo se resuelve contra el cwd y recibe igualmente
+el subdirectorio `<flow_id>`. Para servicios empaquetados conviene omitirlo.
 
 Consulta [jme-cold-memory.md](jme-cold-memory.md) para el formato, recuperación,
 métricas y límites de durabilidad.
 
-`max_disk_bytes` limita el espacio Cold del flujo (el runtime crea un
-subdirectorio por `flow_id`). Si una degradación excedería la cuota, JME no
-publica el registro y conserva el objeto en Hot. Este límite no sustituye la
+`max_disk_bytes` limita el espacio Cold del flujo. Si una degradación excedería
+la cuota, JME no publica el registro y conserva el objeto en Hot. Las
+degradaciones por inactividad que fallan no detienen el flujo: se cuentan en
+`demotion_failures` y `cold_quota_rejections`. Este límite no sustituye la
 compactación: las versiones antiguas siguen ocupando espacio hasta el Paso 9.
 
 Los eventos continúan apareciendo en consola y se escriben de forma no

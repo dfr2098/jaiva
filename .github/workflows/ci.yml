@@ -35,8 +35,17 @@ jobs:
       - name: smoke release-core
         run: bash scripts/smoke-release-core.sh
 
+      - name: Build CLI for offline regressions
+        run: cargo build -p jaiba-cli --bin jaiba
+
       - name: Memory and administrative API regressions
         run: python3 scripts/review-regression.py
+
+      - name: JME smoke (inline policy, Cold restart, data dir)
+        run: python3 scripts/smoke-jme.py
+
+      - name: JME fault injection (quota, read-only, torn/corrupt segments, kill -9)
+        run: python3 scripts/chaos-jme.py
 
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings

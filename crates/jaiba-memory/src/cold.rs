@@ -38,6 +38,9 @@ pub trait ColdStore: Send {
     fn quota_rejections(&self) -> u64 {
         0
     }
+    fn salvaged_segments(&self) -> u64 {
+        0
+    }
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -135,6 +138,7 @@ pub struct SegmentedColdStore {
     bytes_on_disk: u64,
     max_disk_bytes: Option<u64>,
     quota_rejections: u64,
+    salvaged_segments: u64,
 }
 
 impl SegmentedColdStore {
@@ -154,17 +158,18 @@ impl SegmentedColdStore {
     ) -> Result<Self, MemoryError> {
         let root = path.into();
         fs::create_dir_all(&root).map_err(|error| cold_io("crear directorio", &root, error))?;
-        let (index, bytes_on_disk) = rebuild_index(&root)?;
+        let rebuilt = rebuild_index(&root)?;
         Ok(Self {
             root,
             segment_max_bytes: segment_max_bytes.max(4096),
             mmap_reads,
-            index,
+            index: rebuilt.index,
             writers: HashMap::new(),
             maps: Mutex::new(HashMap::new()),
-            bytes_on_disk,
+            bytes_on_disk: rebuilt.bytes_on_disk,
             max_disk_bytes,
             quota_rejections: 0,
+            salvaged_segments: rebuilt.salvaged_segments,
         })
     }
 
@@ -368,14 +373,38 @@ impl ColdStore for SegmentedColdStore {
         self.quota_rejections
     }
 
+    fn salvaged_segments(&self) -> u64 {
+        self.salvaged_segments
+    }
+
     fn name(&self) -> &'static str {
         "segmented_lz4"
     }
 }
 
-fn rebuild_index(root: &Path) -> Result<(HashMap<String, RecordLocation>, u64), MemoryError> {
+struct RebuiltIndex {
+    index: HashMap<String, RecordLocation>,
+    bytes_on_disk: u64,
+    salvaged_segments: u64,
+}
+
+/// Damage found while indexing a segment. `Corrupt` is recoverable by
+/// salvaging the segment; `Fatal` (I/O, inconsistent classes) is not.
+enum ScanError {
+    Corrupt(String),
+    Fatal(MemoryError),
+}
+
+impl From<MemoryError> for ScanError {
+    fn from(error: MemoryError) -> Self {
+        Self::Fatal(error)
+    }
+}
+
+fn rebuild_index(root: &Path) -> Result<RebuiltIndex, MemoryError> {
     let mut index = HashMap::new();
     let mut bytes_on_disk = 0u64;
+    let mut salvaged_segments = 0u64;
     let mut class_dirs = fs::read_dir(root)
         .map_err(|error| cold_io("listar cold root", root, error))?
         .filter_map(Result::ok)
@@ -387,7 +416,24 @@ fn rebuild_index(root: &Path) -> Result<(HashMap<String, RecordLocation>, u64), 
         let mut files = segment_files(&dir)?;
         files.sort();
         for path in files {
-            let valid_len = scan_segment(&path, &mut index)?;
+            let valid_len = match scan_segment(&path, &mut index) {
+                Ok(valid_len) => valid_len,
+                Err(ScanError::Corrupt(reason)) => {
+                    salvage_segment(&path, &reason)?;
+                    salvaged_segments += 1;
+                    match scan_segment(&path, &mut index) {
+                        Ok(valid_len) => valid_len,
+                        Err(ScanError::Corrupt(reason)) => {
+                            return Err(MemoryError::Cold(format!(
+                                "segmento {} sigue dañado tras el rescate: {reason}",
+                                path.display()
+                            )));
+                        }
+                        Err(ScanError::Fatal(error)) => return Err(error),
+                    }
+                }
+                Err(ScanError::Fatal(error)) => return Err(error),
+            };
             let actual_len = fs::metadata(&path)
                 .map_err(|error| cold_io("metadata segmento", &path, error))?
                 .len();
@@ -401,13 +447,17 @@ fn rebuild_index(root: &Path) -> Result<(HashMap<String, RecordLocation>, u64), 
             bytes_on_disk += valid_len;
         }
     }
-    Ok((index, bytes_on_disk))
+    Ok(RebuiltIndex {
+        index,
+        bytes_on_disk,
+        salvaged_segments,
+    })
 }
 
 fn scan_segment(
     path: &Path,
     index: &mut HashMap<String, RecordLocation>,
-) -> Result<u64, MemoryError> {
+) -> Result<u64, ScanError> {
     let mut file = File::open(path).map_err(|error| cold_io("abrir índice", path, error))?;
     let file_len = file
         .metadata()
@@ -415,13 +465,20 @@ fn scan_segment(
         .len();
     let mut offset = 0u64;
     while offset < file_len {
-        let Some(header) = read_header_or_tail(&mut file, path)? else {
-            break;
+        let mut header_bytes = [0u8; HEADER_LEN];
+        match file.read_exact(&mut header_bytes) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::UnexpectedEof => {
+                return tail_or_corrupt(path, offset);
+            }
+            Err(error) => return Err(cold_io("leer header", path, error).into()),
+        }
+        let Ok(header) = parse_header(&header_bytes) else {
+            return tail_or_corrupt(path, offset);
         };
-        validate_header(&header)?;
         let total_len = HEADER_LEN + header.key_len + header.class_len + header.payload_len;
         if offset.saturating_add(total_len as u64) > file_len {
-            break;
+            return tail_or_corrupt(path, offset);
         }
         let mut key = vec![0; header.key_len];
         let mut class = vec![0; header.class_len];
@@ -430,10 +487,11 @@ fn scan_segment(
             .map_err(|error| cold_io("leer índice", path, error))?;
         file.seek(SeekFrom::Current(header.payload_len as i64))
             .map_err(|error| cold_io("saltar payload", path, error))?;
-        let key = String::from_utf8(key)
-            .map_err(|error| MemoryError::Cold(format!("key UTF-8 inválida: {error}")))?;
-        let class = String::from_utf8(class)
-            .map_err(|error| MemoryError::Cold(format!("class UTF-8 inválida: {error}")))?;
+        let (Ok(key), Ok(class)) = (String::from_utf8(key), String::from_utf8(class)) else {
+            return Err(ScanError::Corrupt(format!(
+                "key/class UTF-8 inválida en offset {offset}"
+            )));
+        };
         match header.flag {
             FLAG_VALUE => {
                 if let Some(existing) = index.get(&key)
@@ -442,7 +500,8 @@ fn scan_segment(
                     return Err(MemoryError::Cold(format!(
                         "clave '{key}' duplicada entre clases '{}' y '{class}'",
                         existing.class
-                    )));
+                    ))
+                    .into());
                 }
                 index.insert(
                     key,
@@ -458,15 +517,103 @@ fn scan_segment(
                 index.remove(&key);
             }
             other => {
-                return Err(MemoryError::Cold(format!(
-                    "flag {other} inválido en {}",
-                    path.display()
+                return Err(ScanError::Corrupt(format!(
+                    "flag {other} inválido en offset {offset}"
                 )));
             }
         }
         offset += total_len as u64;
     }
     Ok(offset)
+}
+
+/// Bytes after the last valid record are a torn tail (truncate) unless a
+/// complete record follows them, which means the damage is in the middle.
+fn tail_or_corrupt(path: &Path, offset: u64) -> Result<u64, ScanError> {
+    let bytes = fs::read(path).map_err(|error| cold_io("leer cola", path, error))?;
+    let rest = &bytes[offset as usize..];
+    if find_record(rest, 1).is_some() {
+        return Err(ScanError::Corrupt(format!(
+            "registro ilegible en offset {offset} seguido de registros válidos"
+        )));
+    }
+    Ok(offset)
+}
+
+/// Length of a structurally valid record starting at `bytes[0]`.
+fn record_len(bytes: &[u8]) -> Option<usize> {
+    let header = parse_header(bytes.get(..HEADER_LEN)?).ok()?;
+    if header.flag != FLAG_VALUE && header.flag != FLAG_TOMBSTONE {
+        return None;
+    }
+    let key_end = HEADER_LEN + header.key_len;
+    let class_end = key_end + header.class_len;
+    let total = class_end + header.payload_len;
+    if total > bytes.len() {
+        return None;
+    }
+    std::str::from_utf8(&bytes[HEADER_LEN..key_end]).ok()?;
+    std::str::from_utf8(&bytes[key_end..class_end]).ok()?;
+    Some(total)
+}
+
+fn find_record(bytes: &[u8], from: usize) -> Option<usize> {
+    (from..bytes.len().saturating_sub(HEADER_LEN - 1))
+        .find(|&start| bytes[start..].starts_with(MAGIC) && record_len(&bytes[start..]).is_some())
+}
+
+/// Keeps a byte-for-byte `.corrupt` copy, then rewrites the segment with the
+/// records that are still structurally valid. Records inside the damaged range
+/// are lost; an older version of those keys in an earlier segment becomes
+/// visible again.
+fn salvage_segment(path: &Path, reason: &str) -> Result<(), MemoryError> {
+    let bytes = fs::read(path).map_err(|error| cold_io("leer para rescate", path, error))?;
+    let mut kept = Vec::with_capacity(bytes.len());
+    let mut offset = 0usize;
+    let mut dropped = 0usize;
+    while offset < bytes.len() {
+        if let Some(total) = record_len(&bytes[offset..]) {
+            kept.extend_from_slice(&bytes[offset..offset + total]);
+            offset += total;
+            continue;
+        }
+        let next = find_record(&bytes, offset + 1).unwrap_or(bytes.len());
+        dropped += next - offset;
+        offset = next;
+    }
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("segment");
+    let mut quarantine = path.with_file_name(format!("{file_name}.corrupt"));
+    let mut attempt = 1;
+    while quarantine.exists() {
+        quarantine = path.with_file_name(format!("{file_name}.corrupt.{attempt}"));
+        attempt += 1;
+    }
+    fs::copy(path, &quarantine).map_err(|error| cold_io("copiar a cuarentena", path, error))?;
+
+    let staging = path.with_file_name(format!("{file_name}.salvage"));
+    let mut file =
+        File::create(&staging).map_err(|error| cold_io("crear rescate", &staging, error))?;
+    file.write_all(&kept)
+        .and_then(|_| file.sync_all())
+        .map_err(|error| cold_io("escribir rescate", &staging, error))?;
+    fs::rename(&staging, path).map_err(|error| cold_io("publicar rescate", path, error))?;
+    if let Some(parent) = path.parent()
+        && let Ok(dir) = File::open(parent)
+    {
+        let _ = dir.sync_all();
+    }
+    tracing::warn!(
+        segment = %path.display(),
+        quarantine = %quarantine.display(),
+        dropped_bytes = dropped,
+        reason,
+        "JME Cold segment salvaged"
+    );
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -496,15 +643,6 @@ fn write_header(
         .and_then(|_| file.write_all(&(payload_len as u32).to_le_bytes()))
         .and_then(|_| file.write_all(checksum))
         .map_err(|error| MemoryError::Cold(format!("escribir header: {error}")))
-}
-
-fn read_header_or_tail(file: &mut File, path: &Path) -> Result<Option<Header>, MemoryError> {
-    let mut bytes = [0u8; HEADER_LEN];
-    match file.read_exact(&mut bytes) {
-        Ok(()) => parse_header(&bytes).map(Some),
-        Err(error) if error.kind() == ErrorKind::UnexpectedEof => Ok(None),
-        Err(error) => Err(cold_io("leer header", path, error)),
-    }
 }
 
 fn parse_header(bytes: &[u8]) -> Result<Header, MemoryError> {
@@ -715,6 +853,106 @@ mod tests {
         assert_eq!(store.len(), 0);
         assert_eq!(store.bytes_on_disk(), 0);
         assert_eq!(store.quota_rejections(), 1);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    fn filled_segment(label: &str, records: usize) -> (PathBuf, PathBuf) {
+        let dir = scratch(label);
+        let mut store = SegmentedColdStore::open(&dir, 1 << 20, false).unwrap();
+        for id in 0..records {
+            store
+                .put(
+                    &format!("carrier:{id}"),
+                    ColdEntry {
+                        class: "carrier".to_owned(),
+                        value: json!({"id": id, "payload": format!("{id:x}").repeat(64)}),
+                    },
+                )
+                .unwrap();
+        }
+        drop(store);
+        let segment = segment_files(&dir.join(class_directory("carrier")))
+            .unwrap()
+            .pop()
+            .unwrap();
+        (dir, segment)
+    }
+
+    fn record_offsets(bytes: &[u8]) -> Vec<usize> {
+        let mut offsets = Vec::new();
+        let mut offset = 0;
+        while let Some(total) = record_len(&bytes[offset..]) {
+            offsets.push(offset);
+            offset += total;
+        }
+        offsets
+    }
+
+    #[test]
+    fn zero_filled_tail_is_truncated_like_a_torn_write() {
+        let (dir, segment) = filled_segment("zeros", 3);
+        let clean_len = fs::metadata(&segment).unwrap().len();
+        OpenOptions::new()
+            .append(true)
+            .open(&segment)
+            .unwrap()
+            .write_all(&[0; 4096])
+            .unwrap();
+        let store = SegmentedColdStore::open(&dir, 1 << 20, false).unwrap();
+        assert_eq!(store.len(), 3);
+        assert_eq!(store.salvaged_segments(), 0);
+        assert_eq!(fs::metadata(&segment).unwrap().len(), clean_len);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn corrupt_header_mid_segment_is_salvaged_and_quarantined() {
+        let (dir, segment) = filled_segment("salvage", 4);
+        let original = fs::read(&segment).unwrap();
+        let offsets = record_offsets(&original);
+        let mut damaged = original.clone();
+        damaged[offsets[1]] ^= 0xFF;
+        fs::write(&segment, &damaged).unwrap();
+
+        let store = SegmentedColdStore::open(&dir, 1 << 20, true).unwrap();
+        assert_eq!(store.salvaged_segments(), 1);
+        assert_eq!(store.len(), 3);
+        assert!(store.get("carrier:1").unwrap().is_none());
+        for id in [0, 2, 3] {
+            assert_eq!(
+                store.get(&format!("carrier:{id}")).unwrap().unwrap().value["id"],
+                id
+            );
+        }
+        let quarantine = segment.with_file_name(format!(
+            "{}.corrupt",
+            segment.file_name().unwrap().to_str().unwrap()
+        ));
+        assert_eq!(fs::read(&quarantine).unwrap(), damaged);
+        drop(store);
+
+        let reopened = SegmentedColdStore::open(&dir, 1 << 20, false).unwrap();
+        assert_eq!(reopened.salvaged_segments(), 0);
+        assert_eq!(reopened.len(), 3);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn corrupt_length_mid_segment_does_not_truncate_later_records() {
+        let (dir, segment) = filled_segment("length", 4);
+        let mut bytes = fs::read(&segment).unwrap();
+        let offsets = record_offsets(&bytes);
+        bytes[offsets[1] + 17..offsets[1] + 21].copy_from_slice(&(1u32 << 20).to_le_bytes());
+        fs::write(&segment, &bytes).unwrap();
+
+        let store = SegmentedColdStore::open(&dir, 1 << 20, false).unwrap();
+        assert_eq!(store.salvaged_segments(), 1);
+        for id in [0, 2, 3] {
+            assert!(
+                store.get(&format!("carrier:{id}")).unwrap().is_some(),
+                "{id}"
+            );
+        }
         let _ = fs::remove_dir_all(dir);
     }
 

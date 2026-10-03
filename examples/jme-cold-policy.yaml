@@ -1,6 +1,7 @@
 # JME Cold segmentado: objetos cache se degradan de RAM a SSD por inactividad
 # o presión y se promueven transparentemente al volver a consultarlos.
 memory:
+  version: 1
   max_entries: 5000
   cold:
     backend: segmented

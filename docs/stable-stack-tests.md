@@ -13,6 +13,10 @@ Prerrequisito siempre:
 
 Flow de carga: [`examples/stable-runtime-stress.yaml`](../examples/stable-runtime-stress.yaml)
 (`query_postgres` → `encode_json`, con `retry` y `scheduling.timeout_ms`).
+Una segunda rama `memory_upsert` escribe cada lote en JME (política embebida,
+Cold bajo `JAIBA_DATA_DIR/jme/cold/stable-runtime-stress`). El stress falla si
+JME no registra objetos; el soak y el chaos fallan con cualquier `failed > 0`,
+incluidos los de esa rama.
 
 `DATABASE_URL` del contenedor Jaiba usa el hostname
 `jaiba_stable_postgres` (no solo el alias Compose `postgres`), para que un

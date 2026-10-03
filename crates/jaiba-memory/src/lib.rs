@@ -29,8 +29,8 @@ pub use frozen::{
 pub use hot::{HotEntry, HotMetrics, HotStore};
 pub use manager::{MemoryManager, MemorySnapshot};
 pub use policy::{
-    ClassPolicy, ColdBackend, FrozenBackend, MemoryPolicy, Policy, Priority, Temperature,
-    WarmBackend,
+    ClassPolicy, ColdBackend, FrozenBackend, MemoryPolicy, POLICY_VERSION, Policy, Priority,
+    Temperature, WarmBackend,
 };
 pub use rebuild::{MapRebuildHook, RebuildHook};
 pub use sink::{ImmediateSink, JsonlFileSink, PersistRecord, RecordingSink};

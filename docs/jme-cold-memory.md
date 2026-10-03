@@ -1,8 +1,11 @@
 # JME Cold Memory segmentado
 
-> **Política:** JME es **Experimental**. El lab de integración (DMA) vive en
-> `DMA_JAIVA/` fuera de este repo; al OSS solo se porta lo estable. No es el
-> recorrido [Estable](product-roadmap.md).
+> **Estado:** JME es **Beta** y madura en este repositorio. Su contrato de
+> política es `memory.version: 1`; la evidencia automática es
+> `scripts/smoke-jme.py` y `scripts/chaos-jme.py` en CI y el flujo de
+> stress/soak/chaos. No es el
+> recorrido [Estable](product-roadmap.md); la compactación (Paso 9) es requisito
+> para pasar a Estable.
 
 Cold Memory es el nivel SSD local del Jaiba Memory Engine. No es swap del
 sistema operativo: JME mueve objetos completos porque conoce su clase,
@@ -50,6 +53,7 @@ durabilidad ni obliga a habilitarlos todos.
 
 ```yaml
 memory:
+  version: 1
   max_entries: 5000
   cold:
     backend: segmented
@@ -73,7 +77,7 @@ Referencia ejecutable: [`examples/jme-cold-policy.yaml`](../examples/jme-cold-po
 | Campo | Significado |
 |---|---|
 | `backend` | `none` o `segmented` (`file` es alias compatible) |
-| `path` | Directorio base de segmentos |
+| `path` | Directorio base de segmentos; en el runtime es opcional (default `JAIBA_DATA_DIR/jme/cold`) |
 | `segment_max_bytes` | Rotación por clase; mínimo 4096, default 64 MiB |
 | `max_disk_bytes` | Cuota total por flujo; omitido significa ilimitado |
 | `compression` | Actualmente `lz4` |
@@ -149,6 +153,21 @@ RAM. Si el proceso cae durante el append, el arranque descarta la cola parcial y
 reconstruye el índice desde registros completos. El esquema no afirma todavía
 que exista un manifiesto durable ni publicación por rename atómico.
 
+### Daños en disco
+
+| Daño | Qué hace JME al abrir |
+| --- | --- |
+| Registro o cabecera incompletos al final | Recorta el segmento al último registro completo |
+| Relleno de ceros al final (corte de luz) | Igual que una cola parcial: recorta |
+| Registro ilegible en medio, con registros válidos después | Copia el segmento intacto a `segment-<id>.jmc.corrupt`, lo reescribe solo con los registros válidos y registra `JME Cold segment salvaged` |
+| Payload alterado (checksum no coincide) | No entrega el valor; `memory_get` lo trata como ausente, suma `jaiba_memory_cold_read_failures_total` y registra `JME Cold read failed` |
+
+En un rescate se pierden los registros del tramo dañado. Si una versión
+anterior de esa clave vive en un segmento previo, vuelve a ser la visible. La
+copia `.corrupt` no se borra sola: sirve para análisis y se elimina a mano.
+Fallas de E/S (permisos, disco lleno) y claves duplicadas entre clases siguen
+impidiendo abrir el store con un error explícito.
+
 ## Durabilidad, cuota y límites
 
 Cada append ejecuta `sync_all()` antes de publicar la ubicación en el índice.
@@ -197,9 +216,12 @@ con datos reales; la compresión depende mucho del contenido.
 `max_entries` limita cantidad de objetos Hot. `memory.max_hot_bytes` limita
 además los bytes estimados de las claves y el JSON serializado (64 MiB por
 defecto; debe ser positivo). Aplica también al ampliar una entrada existente.
-Cuando una escritura supera el límite se devuelve `HotByteCapacity` sin
-cambiar el contenido Hot anterior; no se expulsan objetos para satisfacer
-esta escritura. Reducir o eliminar entradas permite volver a escribir.
+Si una escritura excede cualquiera de los dos límites, JME desaloja entradas no
+`critical` con el mismo orden de degradación descrito arriba; las víctimas se
+degradan a Warm/Cold/Frozen según su clase o se descartan si son volátiles.
+Solo se devuelve `HotByteCapacity` (o `CriticalCapacity`) cuando el valor por sí
+solo no cabe o lo residente restante es todo `critical`; en ese caso el
+contenido Hot anterior no cambia.
 Para `immediate` y `persistent`, esta validación de bytes y capacidad ocurre
 antes de enviar el registro al sink: rechazar la escritura no deja una línea
 persistida ni la duplica en reintentos.
@@ -261,6 +283,8 @@ Respuesta operativa recomendada:
 - `jaiba_memory_cold_quota_rejections_total`
 - `jaiba_memory_cold_hits_total`
 - `jaiba_memory_cold_misses_total`
+- `jaiba_memory_cold_read_failures_total`
+- `jaiba_memory_cold_salvaged_segments_total`
 - `jaiba_memory_promotions_total`
 - `jaiba_memory_demotions_total`
 - `jaiba_memory_evictions_total`
@@ -275,3 +299,15 @@ cargo test -p jaiba-runtime engine::metrics::tests --lib
 La suite cubre rotación, compresión, lectura con y sin `mmap`, checksum,
 tombstones, recuperación de cola parcial, cuotas, restauración segura,
 promoción y reapertura del `MemoryManager`.
+
+Inyección de fallas con el CLI (también en CI):
+
+```bash
+cargo build -p jaiba-cli --bin jaiba
+python3 scripts/chaos-jme.py target/debug/jaiba
+```
+
+Cubre cuota agotada, carpeta Cold de solo lectura, registro y cabecera
+cortados, relleno de ceros, `kill -9` durante escrituras, payload alterado y
+cabecera dañada a mitad de segmento. Cada escenario relee los valores en un
+proceso nuevo y falla si alguno llega alterado.

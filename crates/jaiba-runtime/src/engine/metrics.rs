@@ -635,6 +635,12 @@ impl FlowMetrics {
                  # HELP jaiba_memory_cold_misses_total JME Cold read misses.\n\
                  # TYPE jaiba_memory_cold_misses_total counter\n\
                  jaiba_memory_cold_misses_total {}\n\
+                 # HELP jaiba_memory_cold_read_failures_total JME Cold reads rejected as corrupt or unreadable.\n\
+                 # TYPE jaiba_memory_cold_read_failures_total counter\n\
+                 jaiba_memory_cold_read_failures_total {}\n\
+                 # HELP jaiba_memory_cold_salvaged_segments_total JME Cold segments salvaged at startup; originals kept as .corrupt.\n\
+                 # TYPE jaiba_memory_cold_salvaged_segments_total counter\n\
+                 jaiba_memory_cold_salvaged_segments_total {}\n\
                  # HELP jaiba_memory_frozen_objects JME objects in Frozen.\n\
                  # TYPE jaiba_memory_frozen_objects gauge\n\
                  jaiba_memory_frozen_objects {}\n\
@@ -665,6 +671,8 @@ impl FlowMetrics {
                 jme.cold_quota_rejections,
                 jme.cold_hits,
                 jme.cold_misses,
+                jme.cold_read_failures,
+                jme.cold_salvaged_segments,
                 jme.frozen_objects,
                 jme.evictions,
                 jme.persist_queue,

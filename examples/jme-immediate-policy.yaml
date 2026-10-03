@@ -1,6 +1,7 @@
 # Política JME Paso 2 — Hot + immediate/persistent.
 # Requiere ImmediateSink (RecordingSink en tests, JsonlFileSink en demos).
 memory:
+  version: 1
   max_entries: 1000
   defaults:
     priority: normal

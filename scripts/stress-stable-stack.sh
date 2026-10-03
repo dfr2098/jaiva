@@ -74,4 +74,12 @@ if [[ "$STATE" == "FAILED" || "$FAILED" != "0" ]]; then
   exit 1
 fi
 
+JME_OBJECTS="$(jq -r '(.runtime.metrics.domain_memory // .metrics.domain_memory // {}) as $m
+  | (($m.hot_objects // 0) + ($m.cold_objects // 0))' <<<"$BODY")"
+if (( JME_OBJECTS == 0 )); then
+  echo "JME no registró objetos (engine.domain_memory del flujo de carga)" >&2
+  exit 1
+fi
+echo "JME: objetos Hot+Cold=$JME_OBJECTS"
+
 echo "Carga terminada correctamente. Revisa Grafana: http://127.0.0.1:${GRAFANA_PORT:-13000}/d/jaiba-runtime-jme"

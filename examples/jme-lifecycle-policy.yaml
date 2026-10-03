@@ -1,6 +1,7 @@
 # JME Paso 5 — promote/demote + rebuild hooks.
 # cache+warm se demotea bajo presión; rebuild rehidrata tras miss Hot+Warm.
 memory:
+  version: 1
   max_entries: 64
   warm:
     backend: none

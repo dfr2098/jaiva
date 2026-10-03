@@ -15,6 +15,25 @@ engine:
     maximum_percent: 42
   repository:
     enabled: false
+  # JME bajo carga: una entrada por lote (batch.number). max_entries cubre
+  # hasta ~2M filas por ciclo sin desalojos por cantidad; Cold recibe los
+  # lotes inactivos bajo JAIBA_DATA_DIR/jme/cold/<flow_id>.
+  domain_memory:
+    enabled: true
+    policy:
+      version: 1
+      max_entries: 4096
+      max_hot_bytes: 16777216
+      cold:
+        backend: segmented
+        segment_max_bytes: 8388608
+        max_disk_bytes: 268435456
+      classes:
+        batch:
+          policy: cache
+          temperature: cold
+          ttl: 15m
+          demote_after: 20s
 
 processors:
   - id: generate
@@ -41,7 +60,16 @@ processors:
     type: encode_json
     config: {}
 
+  - id: remember
+    type: memory_upsert
+    config:
+      class: batch
+      id_attribute: batch.number
+
 connections:
   - from: generate
     relationship: success
     to: encode
+  - from: generate
+    relationship: success
+    to: remember

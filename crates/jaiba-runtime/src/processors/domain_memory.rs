@@ -100,7 +100,7 @@ fn require_domain_memory(
 ) -> Result<&crate::engine::DomainMemoryHandle, FlowError> {
     context.domain_memory.as_ref().ok_or_else(|| {
         FlowError::Configuration(
-            "processor requires engine.domain_memory.enabled: true and a valid policy_file"
+            "processor requires engine.domain_memory.enabled: true and a policy or policy_file"
                 .to_owned(),
         )
     })

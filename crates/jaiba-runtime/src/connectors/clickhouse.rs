@@ -1,5 +1,9 @@
 //! ClickHouse sink writer (HTTP JSONEachRow inserts).
 //!
+//! Mapa humano: `docs/connectivity/02-conexiones.md`.
+//! Feature: `clickhouse-driver`. YAML `type: clickhouse` →
+//! `engine/connections.rs` → este writer vía `put_database`.
+//!
 //! MVP: insert-only via `put_database`. Upsert is rejected — ClickHouse
 //! deduplication belongs to table engines (e.g. ReplacingMergeTree), not
 //! classical ON CONFLICT.

@@ -39,6 +39,7 @@ cargo run --features kafka-driver,mongodb-driver,sqlserver-driver,oracle-driver 
 | Perfiles / secretos | [connection-manager.md](connection-manager.md) |
 | Operar UI / métricas | [operations.md](operations.md) |
 | Stress / soak / chaos (PASS/FAIL) | [stable-stack-tests.md](stable-stack-tests.md) |
+| Mapa del repo (dónde está cada cosa) | [connectivity/README.md](connectivity/README.md) |
 | Madurez y ciclos | [product-roadmap.md](product-roadmap.md) |
 | Defaults seguros / freeze | [release-core.md](release-core.md) |
 | Empaque / `jaiba-serve` / WS | [packaging.md](packaging.md) |

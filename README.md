@@ -46,6 +46,7 @@ El recorrido de producto Postgres→CSV es [`examples/stable-postgres-to-csv.yam
 | Ver qué nodos existen | [docs/processors.md](docs/processors.md) |
 | Usar el servidor / UI | [docs/operations.md](docs/operations.md) |
 | Stress / soak / chaos (condiciones PASS/FAIL) | [docs/stable-stack-tests.md](docs/stable-stack-tests.md) |
+| Mapa del repo (dónde está cada cosa) | [docs/connectivity/README.md](docs/connectivity/README.md) |
 | Conectar bases de datos | [docs/connection-manager.md](docs/connection-manager.md) |
 | Ver el diseño interno | [docs/architecture.md](docs/architecture.md) |
 

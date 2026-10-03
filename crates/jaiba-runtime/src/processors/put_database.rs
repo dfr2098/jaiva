@@ -1,5 +1,8 @@
 use std::{collections::BTreeMap, time::Instant};
 
+// Mapa humano: docs/connectivity/02-conexiones.md y 03-processors.md —
+// connection: → DatabaseWriter (postgres, clickhouse, …).
+
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value;

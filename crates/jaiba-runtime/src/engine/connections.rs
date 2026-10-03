@@ -1,5 +1,8 @@
 use std::{collections::HashMap, fmt, sync::Arc, time::Duration};
 
+// Mapa humano: docs/connectivity/02-conexiones.md —
+// registra pools/writers según database_connections.*.type
+
 #[cfg(feature = "mongodb-driver")]
 use mongodb::Client as MongoClient;
 #[cfg(feature = "kafka-driver")]

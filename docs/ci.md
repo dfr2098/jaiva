@@ -4,7 +4,7 @@
 
 | Workflow | Archivo | Cuándo | Qué hace |
 |---|---|---|---|
-| **CI · Rust** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | formato, tests, **smoke release-core**, Clippy `-D warnings` |
+| **CI · Rust** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | formato, tests, **smoke release-core**, regresiones API/memoria, **smoke y fallas JME**, Clippy `-D warnings` |
 | **CI · Desktop** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | build del sidecar y `cargo check` del shell Tauri en Linux |
 | **CI · UI** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | Node 22, `npm ci`, typecheck y build Vite |
 | **Stable path** | `.github/workflows/stable-path.yml` | push a `main`/`master`, cron laborable, label `stable-path`, o manual | Compose + smoke CSV + regresión Playwright (recorrido **Estable**) |
@@ -13,6 +13,20 @@
 
 El CI **no** levanta Postgres/Kafka/Mongo/SQL Server. Los tests opt-in que
 requieren servicios se omiten en ese job.
+
+Tampoco compila las features de drivers opcionales (`oracle-driver`,
+`sqlserver-driver`, `mongodb-driver`, `kafka-driver`, `clickhouse-driver`). Si
+cambias código detrás de una de ellas, corre Clippy con esa feature en local.
+
+### Scripts offline del job Rust
+
+Tras compilar `jaiba`, el job corre tres scripts sin Docker:
+
+| Script | Qué comprueba |
+|---|---|
+| `scripts/review-regression.py` | Memoria de paquetes baja sin bloqueo, escrituras Hot rechazadas no persisten, deploy fallido conserva la versión previa, `/metrics` con auth, CORS del escritorio |
+| `scripts/smoke-jme.py` | Política JME embebida, Hot → Cold bajo `JAIBA_DATA_DIR`, Cold sobrevive reinicio, `memory.version` no soportada se rechaza |
+| `scripts/chaos-jme.py` | Cuota de Cold, disco de solo lectura, registros y cabeceras cortados o dañados, ceros al final, `kill -9` durante escrituras |
 
 **Freeze de roadmap:** mientras smoke + release-core no lleven 2 semanas
 seguidas en verde, no se abren fases `priority-11+`. Ver
@@ -48,6 +62,9 @@ cargo test --workspace --all-targets
 ./scripts/smoke-release-core.sh
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build -p jaiba-cli --bin jaiba
+python3 scripts/review-regression.py
+python3 scripts/smoke-jme.py
+python3 scripts/chaos-jme.py
 
 cd apps/jaiba-ui
 npm ci

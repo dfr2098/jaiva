@@ -12,7 +12,7 @@ Cada carpeta tiene **un trabajo**. Si no sabes dónde tocar, empieza aquí.
 | `jaiba-cli` | Binario `jaiba` / `jaiva-flow` | llama runtime + server |
 | `jaiba-connection-manager` | Perfiles y secretos | server + resolver |
 | `jaiba-plugin-sdk` | Contratos de plugins | tipos `ConnectionType` |
-| `jaiba-memory` | JME (memoria de dominio) | opcional / experimental |
+| `jaiba-memory` | JME (memoria de dominio), **Beta** | `engine.domain_memory` + nodos `memory_*` |
 
 ### Dentro de `jaiba-runtime` (lo más tocado)
 
@@ -38,6 +38,20 @@ Cada carpeta tiene **un trabajo**. Si no sabes dónde tocar, empieza aquí.
 | `connection_api/plugins/mod.rs` | Helpers comunes (descriptor, diagnóstico, metadatos) |
 | `connection_api/plugins/postgres.rs` … | Un `ConnectionPlugin` por motor (prueba, exploración, compilación de consultas) |
 | `connection_api/tests.rs` | Pruebas de integración contra motores reales (por variables `JAIBA_TEST_*`) |
+
+### Dentro de `jaiba-memory` (JME)
+
+| Archivo | Apunta a |
+| --- | --- |
+| `policy.rs` | Política YAML (`memory.version: 1`, clases, límites, rutas) |
+| `manager.rs` | Ciclo de vida: Hot → Warm → Cold → Frozen, promoción y degradación |
+| `hot.rs` | RAM local; desaloja por cantidad y por `max_hot_bytes` (nunca `critical`) |
+| `cold.rs` | Segmentos en disco: checksum, cuota, recorte de cola y rescate de segmentos dañados |
+| `warm.rs` / `redis_warm.rs` | Warm opcional (Redis con feature `redis`) |
+| `frozen.rs` | Archivo de largo plazo (Frozen) |
+| `sink.rs` / `deferred.rs` | Persistencia `immediate` (`persist.jsonl`) y cola `deferred` |
+
+El runtime lo abre en `jaiba-runtime/src/engine/domain_memory.rs`.
 
 ## `apps/jaiba-ui/`
 

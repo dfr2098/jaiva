@@ -3,6 +3,10 @@
 > Actualización posterior: los ocho hallazgos descritos abajo tienen cambios
 > correctivos en el árbol de trabajo. Se conserva el diagnóstico original
 > como referencia. La validación de las correcciones figura al final.
+>
+> Las referencias `archivo.rs:línea` apuntan al código de esa fecha. Desde el
+> Ciclo 2, `engine/executor.rs` vive en `engine/executor/` y
+> `connection_api.rs` en `connection_api/`.
 
 Revisión del árbol de trabajo, incluidos los cambios locales de permisos y
 memoria realizados en esta conversación. No se corrigieron hallazgos durante

@@ -99,7 +99,7 @@ debe coincidir con un `id`.
 | 1 | [configuration.md](configuration.md) (estructura mínima) | Escribir un flow |
 | 2 | [processors.md](processors.md) | Catálogo de nodos |
 | 3 | [operations.md](operations.md) | UI, métricas |
-| 4 | [product-roadmap.md](product-roadmap.md) | Qué está Estable / Beta (JME y AI Prep = lab) |
+| 4 | [product-roadmap.md](product-roadmap.md) | Qué está Estable / Beta (JME = Beta en este repo; AI Prep = lab) |
 
 Índice: [README.md](README.md). Las notas `docs/history/priority-*` son historial.
 

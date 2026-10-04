@@ -14,6 +14,17 @@ Un processor = un paso del flow. Lista completa: [../processors.md](../processor
 | `generate_records` | (generate) | Datos de prueba sin DB |
 | `encode_json` / `write_file` | processors varios | Salida archivo / JSON |
 
+## Memoria de dominio (JME, Beta)
+
+| `type:` | Archivo | Apunta a |
+| --- | --- | --- |
+| `memory_upsert` | `processors/domain_memory.rs` | Guarda un objeto en JME según su clase |
+| `memory_get` | `processors/domain_memory.rs` | Busca Hot → Warm → Cold → Frozen y promueve a Hot |
+| `memory_remove` | `processors/domain_memory.rs` | Borra y escribe tombstone |
+
+Requieren `engine.domain_memory` con `policy` embebida (recomendado) o
+`policy_file`. Detalle: [../configuration.md](../configuration.md#memoria-de-dominio-jme).
+
 Registro de tipos: `crates/jaiba-runtime/src/processors/mod.rs`.
 
 ## Cómo se enlazan

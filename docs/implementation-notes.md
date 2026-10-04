@@ -571,6 +571,102 @@ temporal + rename atómico quedan para el Paso 9. El esquema YAML actual tambié
 conserva compatibilidad histórica y aún agrupa parte de residencia y
 durabilidad dentro de `policy`; su separación será una migración versionada.
 
+## JME Beta — integración oficial (2026-10)
+
+**Problema:** JME estaba cableado al runtime pero marcado Experimental. Sus
+rutas dependían del directorio de trabajo, el contrato YAML no tenía versión,
+Hot rechazaba escrituras al llenar `max_hot_bytes` y ningún flujo de CI ni de
+carga lo ejercitaba.
+
+**Archivos:** `jaiba-core/src/config/flow.rs` (política embebida),
+`jaiba-memory/src/{policy,hot,manager,cold}.rs`,
+`jaiba-runtime/src/engine/domain_memory.rs`, `examples/jme-*.yaml`,
+`examples/stable-runtime-stress.yaml`, `scripts/smoke-jme.py`,
+`scripts/chaos-jme.py`, `scripts/stress-stable-stack.sh`,
+`.github/workflows/ci.yml`.
+
+**Decisiones:**
+
+- La política va embebida en `engine.domain_memory.policy` o en
+  `policy_file`, exactamente una de las dos. Ya no se carga un archivo de
+  ejemplo por defecto: un flujo con `enabled: true` sin política falla al
+  arrancar (ruptura deliberada).
+- `memory.version: 1` es opcional; cualquier otro valor se rechaza.
+- Cold y Frozen sin `path` van a `$JAIBA_DATA_DIR/jme/{cold,frozen}/<flow_id>`.
+- Hot desaloja entradas no `critical` también por bytes, igual que por
+  cantidad.
+- Si falla la degradación por inactividad (por ejemplo, cuota de Cold llena),
+  se cuenta en métricas y el flujo sigue; vaciar `deferred` sigue siendo fatal.
+- Daños en Cold: ceros al final del segmento se recortan como escritura
+  cortada; un checksum inválido deja `warn` y suma
+  `jaiba_memory_cold_read_failures_total`; una cabecera dañada a mitad de
+  segmento se rescata (registros válidos conservados, copia
+  `segment-<id>.jmc.corrupt`, `jaiba_memory_cold_salvaged_segments_total`).
+- JME madura en este repo; AI Prep sigue en el lab `DMA_JAIVA/`.
+
+**Prueba:** `cargo test -p jaiba-memory`; `scripts/smoke-jme.py` (3 PASS) y
+`scripts/chaos-jme.py` (11 PASS) en CI; `stress-stable-stack.sh` falla si JME
+termina sin objetos.
+
+**Limitación:** falta la compactación de Cold (Paso 9), requisito para
+Estable. Las copias `.corrupt` no se borran solas, y un rescate puede dejar
+visible una versión anterior de una llave. En el flujo de stress las llaves se
+reescriben cada ciclo y casi nunca pasan a Cold; Cold con fallas lo cubre
+`chaos-jme.py`, no el soak.
+
+## Runtime — arreglos de la revisión (2026-10)
+
+**Problema:** la revisión y `chaos-jme.py` encontraron fallas del runtime que
+no dependen de JME.
+
+**Archivos:** `jaiba-runtime/src/engine/executor.rs` (hoy
+`engine/executor/`), `jaiba-runtime/src/engine/supervisor.rs`.
+
+**Decisiones:**
+
+- Memoria de paquetes agotada: antes tumbaba el flujo. Ahora espera hasta
+  30 s (`MEMORY_STALL_TIMEOUT`) a que se libere, o falla enseguida si ninguna
+  tarea en curso puede liberarla.
+- Un flujo se puede detener mientras arranca.
+- Con más fuentes que `queue_capacity` el flujo se colgaba en silencio. El
+  trabajo inicial de las fuentes ya no cuenta contra la cola, y una fuente solo
+  arranca si queda espacio para lo que va a emitir.
+- El fallo definitivo de un processor deja un `warn` con el motivo.
+
+**Prueba:** tests de regresión en `engine/executor/tests.rs` y
+`scripts/review-regression.py`.
+
+**Limitación:** ninguna conocida.
+
+## Ciclo 2 — partir módulos grandes (2026-10)
+
+**Problema:** `executor.rs` (~1 960 líneas) y `connection_api.rs` (~3 400)
+mezclaban responsabilidades en un solo archivo.
+
+**Archivos:**
+
+- `jaiba-runtime/src/engine/executor/`: `mod.rs` (bucle de `FlowEngine`),
+  `scheduler.rs`, `retry.rs`, `routing.rs`, `metrics_sync.rs`,
+  `partition.rs`, `validation.rs`, `tests.rs`.
+- `jaiba-server/src/connection_api/`: `mod.rs` (endpoints y registro),
+  `plugins/mod.rs` (helpers comunes), un archivo por motor en `plugins/`,
+  `tests.rs` (integración opt-in).
+
+**Decisiones:** movimiento literal con `git mv` para conservar historial; sin
+cambios de comportamiento. Visibilidad mínima (`pub(super)` o
+`pub(in crate::connection_api)`). Los plugins de drivers opcionales quedan
+detrás de su feature a nivel de módulo. De paso se dejó de versionar
+`yolo11n/`, `yolo11n.pt` y `runs/` (siguen en el historial de git).
+
+**Prueba:** `cargo fmt`, Clippy del workspace, 191 tests, smoke/chaos JME y
+regresiones; `connection_api` además con Clippy y tests por cada feature de
+driver.
+
+**Limitación:** faltan `observability.rs` y `FlowBuilder.tsx`. Con
+`mongodb-driver` o `kafka-driver`, Clippy marca avisos previos al corte
+(`derivable_impls` en `consume_kafka.rs` y `put_mongodb.rs`,
+`collapsible_if` en `connection_api/mod.rs`).
+
 ## Trabajo posterior a la fase 9 / 10A–10C
 
 - procesadores ejecutables de consulta para MySQL y SQL Server;

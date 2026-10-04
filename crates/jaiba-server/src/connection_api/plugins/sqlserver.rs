@@ -15,6 +15,8 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 use super::{description, descriptor, success, with_schemas};
 
 #[cfg(feature = "sqlserver-driver")]
+/// SQL Server: prueba, diagnóstico, explorador y compilación de `QuerySpec`
+/// hacia el nodo `query_sqlserver`.
 pub(in crate::connection_api) struct SqlServerConnectionPlugin;
 
 #[cfg(feature = "sqlserver-driver")]
@@ -216,6 +218,8 @@ impl ConnectionPlugin for SqlServerConnectionPlugin {
 }
 
 #[cfg(feature = "sqlserver-driver")]
+/// Conecta con autenticación SQL y `timeout_ms` en el TCP. Sin `ssl` acepta
+/// cualquier certificado.
 pub(in crate::connection_api) async fn sqlserver_connect(
     endpoint: &ConnectionEndpoint,
     secret: &ConnectionSecret,

@@ -1,3 +1,6 @@
+//! Ciclo de vida de un flujo servido por `jaiba serve`: arrancar, pausar,
+//! reanudar, drenar y detener.
+
 use std::{sync::Arc, time::Duration};
 
 use serde::Serialize;
@@ -12,6 +15,7 @@ use super::{
 
 type FlowTask = JoinHandle<Result<FlowSummary, FlowError>>;
 
+/// Estado de un flujo supervisado para la API.
 #[derive(Debug, Clone, Serialize)]
 pub struct SupervisedFlowSnapshot {
     pub flow_id: String,
@@ -127,6 +131,7 @@ impl FlowSupervisor {
         ))
     }
 
+    /// Deja de arrancar tareas nuevas; `false` si ya estaba en pausa o no aplica.
     pub fn pause(&self) -> bool {
         let changed = self.control.pause();
         if changed {
@@ -135,6 +140,7 @@ impl FlowSupervisor {
         changed
     }
 
+    /// Vuelve a programar trabajo tras una pausa.
     pub fn resume(&self) -> bool {
         let changed = self.control.resume();
         if changed {
@@ -143,6 +149,7 @@ impl FlowSupervisor {
         changed
     }
 
+    /// Termina las tareas en curso sin arrancar trabajo pendiente.
     pub fn drain(&self) -> bool {
         let changed = self.control.drain();
         if changed {
@@ -151,6 +158,8 @@ impl FlowSupervisor {
         changed
     }
 
+    /// Drena y espera hasta `engine.shutdown.drain_timeout_seconds`; al vencer,
+    /// aborta si `force_after_timeout` o devuelve error y conserva la tarea.
     pub async fn stop_gracefully(&self) -> Result<(), FlowError> {
         if self.control.drain() {
             self.metrics.set_flow_status(4);
@@ -186,6 +195,7 @@ impl FlowSupervisor {
         Ok(())
     }
 
+    /// Espera a que el flujo quede `Stopped` (resumen) o `Failed` (error).
     pub async fn wait_for_terminal(&self) -> Result<FlowSummary, FlowError> {
         loop {
             match self.control.state() {

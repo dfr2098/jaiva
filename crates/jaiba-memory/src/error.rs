@@ -1,5 +1,9 @@
+//! Errores del motor de memoria.
+
 use thiserror::Error;
 
+/// Errores de JME. `CriticalCapacity` y `HotByteCapacity` significan que Hot
+/// no pudo admitir la escritura; el resto vienen de la política o de un backend.
 #[derive(Debug, Error)]
 pub enum MemoryError {
     #[error("configuración de memoria: {0}")]

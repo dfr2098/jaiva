@@ -1,7 +1,12 @@
+//! Clave de partición para processors con `ordering: partitioned`.
+
 use serde_json::Value;
 
 use crate::{engine::DataPacket, error::FlowError};
 
+/// Lee la clave de `partition_by`: primero como atributo del paquete
+/// (`attribute.x` o `x`), si no como campo de los registros. Todos los
+/// registros deben compartir el mismo valor.
 pub(super) fn packet_partition_key(
     packet: &DataPacket,
     selector: &str,

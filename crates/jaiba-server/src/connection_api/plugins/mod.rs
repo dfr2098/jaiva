@@ -25,6 +25,7 @@ pub(super) mod postgres;
 #[cfg(feature = "sqlserver-driver")]
 pub(super) mod sqlserver;
 
+/// Error de sqlx al explorar metadatos.
 fn exploration_error(error: sqlx::Error) -> PluginError {
     PluginError::Exploration(error.to_string())
 }
@@ -34,6 +35,7 @@ fn exploration_error(error: sqlx::Error) -> PluginError {
     feature = "oracle-driver",
     feature = "sqlserver-driver"
 ))]
+/// Descripción con solo columnas, para motores que no exponen llaves ni índices.
 fn description(object: &DatabaseObject, columns: Vec<ColumnMetadata>) -> ObjectDescription {
     ObjectDescription {
         object: object.clone(),
@@ -57,6 +59,8 @@ fn split_columns(value: Option<String>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Si `include`, antepone una entrada `Schema` por cada esquema distinto, para
+/// que la UI pueda armar el árbol.
 fn with_schemas(mut objects: Vec<DatabaseObject>, include: bool) -> Vec<DatabaseObject> {
     if !include {
         return objects;
@@ -79,6 +83,8 @@ fn with_schemas(mut objects: Vec<DatabaseObject>, include: bool) -> Vec<Database
     result
 }
 
+/// Descriptor de un plugin SQL: siempre `test`, `diagnostics` y
+/// `schema_explorer`; `query_builder` y `query_node` según el motor.
 fn descriptor(
     id: &str,
     name: &str,
@@ -107,6 +113,7 @@ fn descriptor(
     }
 }
 
+/// Resultado de una prueba de conexión exitosa, con latencia desde `started`.
 fn success(
     started: Instant,
     version: String,

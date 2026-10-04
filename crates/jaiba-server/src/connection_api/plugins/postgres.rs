@@ -14,6 +14,7 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 
 use super::{descriptor, exploration_error, split_columns, success, with_schemas};
 
+/// PostgreSQL: prueba, diagnóstico, explorador y compilación de `QuerySpec`.
 pub(in crate::connection_api) struct PostgresConnectionPlugin;
 
 #[async_trait]
@@ -283,6 +284,7 @@ impl ConnectionPlugin for PostgresConnectionPlugin {
     }
 }
 
+/// Pool de una conexión para probar o explorar; sin base usa `postgres`.
 pub(in crate::connection_api) async fn postgres_pool(
     endpoint: &ConnectionEndpoint,
     secret: &ConnectionSecret,

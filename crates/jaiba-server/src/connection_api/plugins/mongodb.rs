@@ -17,6 +17,8 @@ use url::Url;
 use super::{description, success};
 
 #[cfg(feature = "mongodb-driver")]
+/// MongoDB: prueba, diagnóstico y colecciones; los campos se infieren del
+/// primer documento. No compila consultas visuales.
 pub(in crate::connection_api) struct MongoDbConnectionPlugin;
 
 #[cfg(feature = "mongodb-driver")]
@@ -201,6 +203,7 @@ impl ConnectionPlugin for MongoDbConnectionPlugin {
 
 #[cfg(feature = "mongodb-driver")]
 #[derive(Debug, Clone)]
+/// Partes de una URL `mongodb://` o `mongodb+srv://`.
 pub(in crate::connection_api) struct ParsedMongoUrl {
     pub(in crate::connection_api) host: String,
     pub(in crate::connection_api) port: u16,
@@ -212,6 +215,8 @@ pub(in crate::connection_api) struct ParsedMongoUrl {
 }
 
 #[cfg(feature = "mongodb-driver")]
+/// Lee host, puerto (27017 por defecto), base, credenciales, `authSource` y
+/// TLS (`mongodb+srv` lo activa; `tls`/`ssl` en la query lo fija).
 pub(in crate::connection_api) fn parse_mongodb_connection_url(
     raw: &str,
 ) -> Result<ParsedMongoUrl, String> {
@@ -263,6 +268,7 @@ pub(in crate::connection_api) fn parse_mongodb_connection_url(
 }
 
 #[cfg(feature = "mongodb-driver")]
+/// Reemplaza usuario y contraseña de una URL guardada sin tocar el resto.
 pub(in crate::connection_api) fn apply_credentials_to_mongo_url(
     raw: &str,
     username: &str,
@@ -278,6 +284,7 @@ pub(in crate::connection_api) fn apply_credentials_to_mongo_url(
 }
 
 #[cfg(feature = "mongodb-driver")]
+/// Cliente MongoDB a partir del perfil (ver `mongodb_url`).
 pub(in crate::connection_api) async fn mongodb_client(
     endpoint: &ConnectionEndpoint,
     secret: &ConnectionSecret,
@@ -288,6 +295,8 @@ pub(in crate::connection_api) async fn mongodb_client(
 }
 
 #[cfg(feature = "mongodb-driver")]
+/// Usa la URL guardada (`connection_url`) si existe; si no, la arma con
+/// host, puerto, `authSource` (por defecto `admin`), TLS, pool y timeouts.
 fn mongodb_url(
     endpoint: &ConnectionEndpoint,
     secret: &ConnectionSecret,
@@ -328,6 +337,7 @@ fn mongodb_url(
 }
 
 #[cfg(feature = "mongodb-driver")]
+/// Base de datos obligatoria del perfil MongoDB.
 pub(in crate::connection_api) fn mongodb_database(
     endpoint: &ConnectionEndpoint,
 ) -> Result<&str, PluginError> {

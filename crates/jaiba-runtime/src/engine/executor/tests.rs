@@ -1,3 +1,7 @@
+//! Pruebas del motor: enrutamiento, reintentos y DLQ, pausa y drenado,
+//! concurrencia, orden y particiones, memoria de paquetes, muchas fuentes y
+//! validación del YAML.
+
 use super::*;
 use super::{partition::packet_partition_key, retry::execute_with_retry};
 use crate::{

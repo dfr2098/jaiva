@@ -1,3 +1,5 @@
+//! Ejecución de un processor con timeout, reintentos y procedencia.
+
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -15,6 +17,12 @@ use crate::{
     error::FlowError,
 };
 
+/// Ejecuta `processor` hasta que termina bien o agota `retry.maximum_attempts`,
+/// con espera exponencial acotada por `retry.maximum_delay_ms`.
+///
+/// Devuelve `Ok(None)` si terminó bien y `Ok(Some((error, intento)))` si falló
+/// definitivamente; en ese caso el paquete ya salió por `failure` con
+/// `error.processor` y `error.message`. Un `PacketTooLarge` no se reintenta.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn execute_with_retry(
     processor: Arc<dyn Processor>,

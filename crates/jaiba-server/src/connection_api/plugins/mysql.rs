@@ -14,6 +14,8 @@ use sqlx::mysql::{MySqlConnectOptions, MySqlPoolOptions, MySqlSslMode};
 
 use super::{descriptor, exploration_error, split_columns, success, with_schemas};
 
+/// MySQL y MariaDB comparten implementación; `connection_type` decide cuál se
+/// registra.
 pub(in crate::connection_api) struct MySqlConnectionPlugin {
     pub(in crate::connection_api) connection_type: ConnectionType,
 }
@@ -287,6 +289,7 @@ impl ConnectionPlugin for MySqlConnectionPlugin {
     }
 }
 
+/// Pool de una conexión para probar o explorar.
 pub(in crate::connection_api) async fn mysql_pool(
     endpoint: &ConnectionEndpoint,
     secret: &ConnectionSecret,

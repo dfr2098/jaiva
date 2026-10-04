@@ -1,3 +1,10 @@
+//! `MemoryManager`: coordina los niveles Hot, Warm, Cold y Frozen.
+//!
+//! Escrituras: según la `Policy` de la clase (persistir antes, después o
+//! nunca) y admisión en Hot. Lecturas: Hot → Warm → Cold → Frozen → rebuild,
+//! promoviendo a Hot lo encontrado fuera de RAM. Mantenimiento (`poll`):
+//! flush de `deferred` y degradación de entradas inactivas.
+
 use std::time::Instant;
 
 use serde_json::Value;
@@ -49,6 +56,8 @@ pub struct MemoryManager {
     rebuild_failures: u64,
 }
 
+/// Contadores y tamaños de todos los niveles; base de las métricas
+/// `jaiba_memory_*` del runtime.
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct MemorySnapshot {
     pub hot_objects: u64,
@@ -121,6 +130,7 @@ impl MemoryManager {
         Ok(Self::build(policy, None, warm, cold, None, frozen))
     }
 
+    /// Como `open`, con sink para clases que persisten.
     pub fn open_with_sink(
         policy: MemoryPolicy,
         sink: impl ImmediateSink + 'static,
@@ -368,6 +378,7 @@ impl MemoryManager {
         }
     }
 
+    /// Lee la política YAML y abre sus backends.
     pub fn from_yaml(text: &str) -> Result<Self, MemoryError> {
         Self::open(MemoryPolicy::from_yaml(text)?)
     }
@@ -422,6 +433,7 @@ impl MemoryManager {
         self.upsert_at(key, value, class, Instant::now())
     }
 
+    /// `upsert` con reloj explícito (pruebas y mantenimiento).
     pub fn upsert_at(
         &mut self,
         key: impl Into<String>,
@@ -499,6 +511,8 @@ impl MemoryManager {
         Ok(())
     }
 
+    /// Busca Hot → Warm → Cold → Frozen → rebuild y promueve a Hot lo hallado.
+    /// Un valor dañado en Cold se reporta en log y métricas y cuenta como miss.
     pub fn get(&mut self, key: &str) -> Option<Value> {
         self.get_at(key, Instant::now())
     }
@@ -520,6 +534,7 @@ impl MemoryManager {
         self.rebuild_from_hook(key, now)
     }
 
+    /// Borra la clave de todos los niveles (en Cold, con tombstone).
     pub fn remove(&mut self, key: &str) -> bool {
         let hot = self.hot.remove(key);
         let warm = self.warm.remove(key).unwrap_or(false);
@@ -528,10 +543,12 @@ impl MemoryManager {
         hot || warm || cold || frozen
     }
 
+    /// `upsert` con clave `clase:id`.
     pub fn upsert_keyed(&mut self, class: &str, id: &str, value: Value) -> Result<(), MemoryError> {
         self.upsert(format!("{class}:{id}"), value, class)
     }
 
+    /// `get` con clave `clase:id`.
     pub fn get_keyed(&mut self, class: &str, id: &str) -> Option<Value> {
         self.get(&format!("{class}:{id}"))
     }
@@ -556,12 +573,13 @@ impl MemoryManager {
         self.flush_deferred_at(Instant::now(), true)
     }
 
-    /// Flush de registros cuyo intervalo ya venció.
+    /// Mantenimiento periódico: flush de `deferred` vencidos (un error aquí se
+    /// propaga) y degradación de hasta 64 entradas inactivas (best-effort).
     pub fn poll(&mut self) -> Result<usize, MemoryError> {
         let now = Instant::now();
         let written = self.flush_deferred_at(now, false)?;
-        // Idle demotion is best-effort: failed victims are restored to Hot and
-        // counted in demotion_failures / cold_quota_rejections.
+        // Failed idle victims go back to Hot and are counted in
+        // demotion_failures / cold_quota_rejections.
         let _ = self.demote_idle_at(now, 64);
         Ok(written)
     }

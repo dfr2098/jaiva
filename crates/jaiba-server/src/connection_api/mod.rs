@@ -42,6 +42,7 @@ use plugins::oracle::OracleConnectionPlugin;
 use plugins::sqlserver::SqlServerConnectionPlugin;
 use plugins::{mysql::MySqlConnectionPlugin, postgres::PostgresConnectionPlugin};
 
+/// Un tipo de conexión disponible, tal como lo lista la UI.
 #[derive(Debug, Serialize)]
 pub(crate) struct ConnectionTypeView {
     id: ConnectionType,
@@ -53,6 +54,7 @@ pub(crate) struct ConnectionTypeView {
     capabilities: Vec<String>,
 }
 
+/// Cuerpo de alta o edición de un perfil. La contraseña solo viaja de entrada.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ConnectionInput {
     name: String,
@@ -90,6 +92,7 @@ fn timeout_ms() -> u64 {
     10_000
 }
 
+/// Perfil tal como sale por la API: usuario sí, contraseña y `secret_ref` nunca.
 #[derive(Debug, Serialize)]
 pub(crate) struct ConnectionView {
     id: String,
@@ -121,6 +124,7 @@ pub(crate) struct MetadataQuery {
     schema: Option<String>,
 }
 
+/// GET `/api/v1/connections/{id}/metadata[?schema=]`: esquemas, tablas y vistas (permiso Read).
 pub(crate) async fn list_metadata(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -140,6 +144,7 @@ pub(crate) async fn list_metadata(
     }
 }
 
+/// GET `/api/v1/connections/{id}/metadata/{schema}/{name}`: columnas, llaves e índices (permiso Read).
 pub(crate) async fn describe_metadata(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -159,6 +164,7 @@ pub(crate) async fn describe_metadata(
     }
 }
 
+/// POST `/api/v1/connections/{id}/query/compile`: `QuerySpec` → SQL parametrizado del motor (permiso Read).
 pub(crate) async fn compile_query(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -178,6 +184,9 @@ pub(crate) async fn compile_query(
     }
 }
 
+/// Crea el `ConnectionManager` del servidor: restaura perfiles persistidos y
+/// registra un plugin por motor compilado (los de drivers opcionales solo con
+/// su feature).
 pub(crate) async fn connection_manager(
     secrets: Arc<dyn SecretStore>,
     persistence: Option<Arc<dyn ProfileRepository>>,
@@ -227,6 +236,7 @@ pub(crate) async fn connection_manager(
     Ok(manager)
 }
 
+/// GET `/api/v1/connection-types`: plugins registrados en este binario (permiso Read).
 pub(crate) async fn list_connection_types(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -254,6 +264,7 @@ pub(crate) async fn list_connection_types(
     .into_response()
 }
 
+/// GET `/api/v1/connections` (permiso Read).
 pub(crate) async fn list_connections(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -272,6 +283,7 @@ pub(crate) async fn list_connections(
     Json(views).into_response()
 }
 
+/// GET `/api/v1/connections/{id}` (permiso Read).
 pub(crate) async fn get_connection(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -289,6 +301,7 @@ pub(crate) async fn get_connection(
     }
 }
 
+/// POST `/api/v1/connections`: valida, guarda el secreto aparte y audita (permiso Admin).
 pub(crate) async fn create_connection(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -348,6 +361,7 @@ pub(crate) async fn create_connection(
     }
 }
 
+/// PUT `/api/v1/connections/{id}`: sin contraseña conserva la anterior (permiso Admin).
 pub(crate) async fn update_connection(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -405,6 +419,7 @@ pub(crate) async fn update_connection(
     }
 }
 
+/// DELETE `/api/v1/connections/{id}` (permiso Admin).
 pub(crate) async fn delete_connection(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -429,6 +444,7 @@ pub(crate) async fn delete_connection(
     }
 }
 
+/// POST `/api/v1/connections/{id}/duplicate`: copia perfil y secreto con otro nombre (permiso Admin).
 pub(crate) async fn duplicate_connection(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -458,6 +474,7 @@ pub(crate) async fn duplicate_connection(
     }
 }
 
+/// POST `/api/v1/connections/{id}/test`: abre una conexión real y mide latencia (permiso Admin).
 pub(crate) async fn test_connection(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -487,6 +504,7 @@ pub(crate) async fn test_connection(
     }
 }
 
+/// GET `/api/v1/connections/{id}/diagnostics`: chequeos del plugin sin modificar nada (permiso Read).
 pub(crate) async fn diagnose_connection(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -501,6 +519,7 @@ pub(crate) async fn diagnose_connection(
     }
 }
 
+/// Arma la vista pública de un perfil con su usuario y estado actual.
 async fn view(state: &AppState, profile: ConnectionProfile) -> Result<ConnectionView, Response> {
     let secret = state
         .connection_secrets
@@ -664,6 +683,9 @@ fn materialize_connection(
     ))
 }
 
+/// Valida un `ConnectionInput` antes de tocar el manager. Con `url` (solo
+/// MongoDB) usuario y contraseña pueden venir dentro de la URL;
+/// `password_required` es `true` al crear y `false` al editar.
 #[allow(clippy::result_large_err)]
 fn validate_input(input: &ConnectionInput, password_required: bool) -> Result<(), Response> {
     if input.name.trim().is_empty() {
@@ -733,8 +755,9 @@ fn validate_input(input: &ConnectionInput, password_required: bool) -> Result<()
     Ok(())
 }
 
+/// Traduce un error del manager a HTTP. El detalle va al log; el cliente
+/// recibe `client_message()`, sin datos sensibles.
 fn manager_error(error: ConnectionManagerError) -> Response {
-    // Detalle completo solo en logs; el cliente recibe mensaje redactado.
     tracing::warn!(
         target: "jaiba.connections",
         error = %error,

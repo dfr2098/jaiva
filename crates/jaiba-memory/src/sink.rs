@@ -1,3 +1,5 @@
+//! Persistencia síncrona para clases `immediate`, `persistent` y `deferred`.
+
 use serde_json::Value;
 
 use crate::{
@@ -50,6 +52,7 @@ pub struct JsonlFileSink {
 }
 
 impl JsonlFileSink {
+    /// Agrega al final de `path`; crea el directorio padre en la primera escritura.
     pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
         Self { path: path.into() }
     }

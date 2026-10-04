@@ -1,3 +1,9 @@
+//! Processors `memory_upsert`, `memory_get` y `memory_remove` sobre JME.
+//!
+//! El id del objeto sale de un atributo del paquete o del primer registro
+//! (`id_attribute`); la clave en JME es `clase:id`. Requieren
+//! `engine.domain_memory` habilitado.
+
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value;
@@ -7,12 +13,14 @@ use crate::{
     error::FlowError,
 };
 
+/// Guarda el valor (`value_attribute` o el primer registro) y deja pasar el paquete.
 pub struct MemoryUpsert {
     class: String,
     id_attribute: String,
     value_attribute: Option<String>,
 }
 
+/// Lee el objeto y lo escribe como JSON en el atributo `attribute`.
 pub struct MemoryGet {
     class: String,
     id_attribute: String,
@@ -21,6 +29,7 @@ pub struct MemoryGet {
     miss_as_null: bool,
 }
 
+/// Borra el objeto de todos los niveles.
 pub struct MemoryRemove {
     class: String,
     id_attribute: String,

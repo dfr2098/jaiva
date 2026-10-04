@@ -1,3 +1,5 @@
+//! Decide qué trabajo pendiente arranca en cada vuelta del bucle.
+
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
@@ -20,6 +22,15 @@ use super::{
     partition::packet_partition_key, retry::execute_with_retry,
 };
 
+/// Lanza tareas mientras haya cupo, respetando, en este orden:
+///
+/// - semillas de fuente solo si su salida cabe en `engine.queue_capacity`;
+/// - `max_concurrency` menos los huecos reservados para las etapas siguientes;
+/// - `concurrent_tasks` por processor (`ordering: preserve` = 1);
+/// - una tarea a la vez por clave de partición.
+///
+/// Lo que no cabe vuelve al final de `pending`. Con repositorio, cada paquete
+/// se reclama antes de ejecutarse.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn schedule_available(
     pending: &mut VecDeque<WorkItem>,

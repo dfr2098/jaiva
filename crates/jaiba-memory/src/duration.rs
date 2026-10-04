@@ -1,3 +1,5 @@
+//! Duraciones legibles del YAML de políticas (`ttl`, `flush`, `demote_after`).
+
 use std::time::Duration;
 
 use crate::error::MemoryError;

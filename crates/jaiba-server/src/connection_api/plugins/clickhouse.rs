@@ -13,6 +13,8 @@ use url::Url;
 use super::success;
 
 #[cfg(feature = "clickhouse-driver")]
+/// ClickHouse por HTTP: prueba, diagnóstico y explorador. No compila consultas
+/// visuales.
 pub(in crate::connection_api) struct ClickHouseConnectionPlugin;
 
 #[cfg(feature = "clickhouse-driver")]
@@ -108,6 +110,8 @@ impl ConnectionPlugin for ClickHouseConnectionPlugin {
 }
 
 #[cfg(feature = "clickhouse-driver")]
+/// Cliente HTTP(S) de ClickHouse con credenciales en la URL; sin base usa
+/// `default`.
 fn clickhouse_writer(
     endpoint: &ConnectionEndpoint,
     secret: &ConnectionSecret,

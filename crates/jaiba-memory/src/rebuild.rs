@@ -1,3 +1,5 @@
+//! Reconstrucción de valores `cache` que no están en ningún nivel.
+
 use serde_json::Value;
 
 use crate::error::MemoryError;

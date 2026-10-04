@@ -1,3 +1,5 @@
+//! Preparación y validación del YAML antes de construir el motor.
+
 use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
@@ -7,6 +9,8 @@ use crate::{
     error::FlowError,
 };
 
+/// Número de saltos del camino más largo desde cada processor hasta un final
+/// del grafo; el scheduler reserva ese número de huecos de concurrencia.
 pub(super) fn processor_downstream_depths(config: &FlowConfig) -> HashMap<String, usize> {
     fn visit(
         processor: &str,
@@ -45,6 +49,8 @@ pub(super) fn processor_downstream_depths(config: &FlowConfig) -> HashMap<String
     depths
 }
 
+/// Sustituye `${nombre}` (de `parameters`) y `${env:VAR}` en la configuración
+/// de cada processor; falla si queda alguno sin resolver.
 pub(super) fn resolve_processor_parameters(config: &mut FlowConfig) -> Result<(), FlowError> {
     for processor in &mut config.processors {
         interpolate_value(&mut processor.config, &config.parameters)?;
@@ -101,6 +107,10 @@ fn resolve_environment_placeholders(text: &mut String) -> Result<(), FlowError> 
     Ok(())
 }
 
+/// Rechaza lo que el motor no puede ejecutar o lo bloquearía: capacidades en
+/// cero, fan-out mayor que `queue_capacity`, ids duplicados, conexiones a
+/// processors inexistentes, particiones sin `partition_by`, modos de
+/// simulación y `max_concurrency` menor que el camino más largo.
 pub(super) fn validate(config: &FlowConfig) -> Result<(), FlowError> {
     if config.processors.is_empty() {
         return Err(FlowError::Configuration(

@@ -1,3 +1,10 @@
+//! Nivel Hot: RAM del proceso.
+//!
+//! Admite por cantidad (`max_entries`) y por bytes (`max_hot_bytes`). Al
+//! llenarse elige víctimas por prioridad y luego por último acceso; las
+//! entradas `critical` nunca se desalojan. Las víctimas se devuelven al
+//! manager para degradarlas a Warm/Cold/Frozen o descartarlas.
+
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
@@ -10,6 +17,7 @@ use crate::{
     policy::{ClassPolicy, Priority},
 };
 
+/// Objeto residente en Hot con sus datos de expiración, acceso y tamaño.
 #[derive(Debug, Clone)]
 pub struct HotEntry {
     pub class: String,
@@ -22,6 +30,7 @@ pub struct HotEntry {
     pub size_bytes: usize,
 }
 
+/// Contadores de Hot para el snapshot de métricas.
 #[derive(Debug, Default, Clone)]
 pub struct HotMetrics {
     pub objects: u64,
@@ -49,6 +58,7 @@ pub(crate) struct PreparedUpsert {
 }
 
 impl HotStore {
+    /// Hot con `max_entries` (mínimo 1) y 64 MiB de tope por defecto.
     pub fn new(max_entries: usize) -> Self {
         Self {
             entries: HashMap::new(),
@@ -194,6 +204,7 @@ impl HotStore {
         prepared.victims
     }
 
+    /// Lee y marca el acceso; una entrada vencida se elimina y cuenta como miss.
     pub fn get(&mut self, key: &str, now: Instant) -> Option<Value> {
         self.purge_expired(now);
         let entry = self.entries.get_mut(key)?;

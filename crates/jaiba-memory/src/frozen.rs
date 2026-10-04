@@ -1,3 +1,5 @@
+//! Nivel Frozen: archivo de largo plazo, un JSON por clave.
+
 use std::{
     collections::HashMap,
     fs,
@@ -70,6 +72,7 @@ struct FrozenFile {
 }
 
 impl FileFrozenStore {
+    /// Abre o crea el directorio y cuenta los objetos existentes.
     pub fn new(path: impl Into<PathBuf>) -> Result<Self, MemoryError> {
         let root = path.into();
         fs::create_dir_all(&root).map_err(|error| {

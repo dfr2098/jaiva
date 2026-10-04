@@ -1,3 +1,5 @@
+//! Cola de persistencia diferida: agrupa escrituras por clave hasta su `flush`.
+
 use std::{collections::BTreeMap, time::Instant};
 
 use crate::sink::PersistRecord;
@@ -19,6 +21,7 @@ pub struct DeferredQueue {
 }
 
 impl DeferredQueue {
+    /// `max_pending` (mínimo 1) es el tope que fuerza un flush anticipado.
     pub fn new(max_pending: usize) -> Self {
         Self {
             items: BTreeMap::new(),

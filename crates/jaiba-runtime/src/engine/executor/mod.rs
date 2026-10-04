@@ -1,3 +1,20 @@
+//! Ejecución de un flujo validado (`FlowEngine`).
+//!
+//! Un solo bucle por flujo alterna tres pasos: arrancar el trabajo pendiente
+//! que cabe (`scheduler`), enrutar las emisiones de los processors a las colas
+//! de cada conexión (`routing`) y registrar las tareas terminadas. El flujo
+//! acaba cuando no queda trabajo pendiente, ni tareas en curso, ni emisiones
+//! sin enrutar.
+//!
+//! - `scheduler`: qué `WorkItem` arranca (concurrencia, orden, particiones y
+//!   admisión de fuentes).
+//! - `retry`: ejecuta un processor con timeout y reintentos con backoff.
+//! - `routing`: reserva memoria y encola cada emisión en sus conexiones.
+//! - `partition`: clave de partición de un paquete (`ordering: partitioned`).
+//! - `validation`: parámetros `${...}` y reglas del YAML antes de ejecutar.
+//! - `metrics_sync`: vuelca colas, carga por processor y repositorio en
+//!   `FlowMetrics`.
+
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
@@ -37,6 +54,8 @@ use routing::route_emission;
 use scheduler::schedule_available;
 use validation::{processor_downstream_depths, resolve_processor_parameters, validate};
 
+/// Un paquete esperando a un processor. Las semillas de fuente no traen
+/// conexión ni `queue_id` (ver `is_source_seed`).
 struct WorkItem {
     processor_id: String,
     packet: DataPacket,
@@ -46,6 +65,8 @@ struct WorkItem {
     queue_id: Option<String>,
 }
 
+/// Resultado de una tarea: `failure` es un fallo definitivo ya enrutado a
+/// `failure`; `fatal` detiene el flujo.
 struct TaskCompletion {
     processor_id: String,
     partition_key: Option<String>,
@@ -57,17 +78,23 @@ struct TaskCompletion {
 /// Maximum time a deferred emission may wait for packet memory while no task completes.
 const MEMORY_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Si una emisión entró en las colas o debe esperar (cola llena o sin
+/// memoria de paquetes).
 enum RouteOutcome {
     Routed,
     QueueFull,
     MemoryFull(FlowError),
 }
 
+/// Emisión retenida por falta de memoria; si ninguna tarea termina antes de
+/// `deadline`, el flujo falla con `error`.
 struct MemoryStall {
     error: FlowError,
     deadline: tokio::time::Instant,
 }
 
+/// Guarda una emisión no enrutada para reintentarla en la siguiente vuelta y
+/// arma o limpia el plazo de `MEMORY_STALL_TIMEOUT`.
 fn hold_unrouted(
     outcome: RouteOutcome,
     emission: ProcessorEmission,
@@ -136,6 +163,7 @@ impl FlowEngine {
         self
     }
 
+    /// Usa un control compartido para pausar, drenar o detener el flujo desde fuera.
     pub fn with_control(mut self, control: FlowControl) -> Self {
         self.control = control;
         self
@@ -454,6 +482,7 @@ impl FlowEngine {
     }
 }
 
+/// Trabajo inicial de un processor fuente: no ocupa capacidad de cola.
 fn is_source_seed(item: &WorkItem) -> bool {
     item.connection.is_none() && item.queue_id.is_none()
 }

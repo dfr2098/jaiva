@@ -1,3 +1,12 @@
+//! Nivel Cold: segmentos append-only en disco local.
+//!
+//! Cada registro lleva cabecera con magic `JMC1`, payload LZ4 y SHA-256. El
+//! índice en memoria se reconstruye al abrir leyendo los segmentos. Daños:
+//! una cola cortada o con ceros se recorta; una cabecera dañada a mitad de
+//! segmento se rescata dejando copia `.corrupt`; un checksum inválido al leer
+//! cuenta como fallo de lectura, nunca como dato. Sin compactación todavía
+//! (Paso 9): las versiones viejas ocupan espacio hasta la cuota.
+
 use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
@@ -20,17 +29,20 @@ const HEADER_LEN: usize = 4 + 1 + (4 * 4) + 32;
 const MAX_FIELD_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PAYLOAD_BYTES: usize = 1024 * 1024 * 1024;
 
+/// Objeto guardado en Cold.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColdEntry {
     pub class: String,
     pub value: Value,
 }
 
+/// Backend Cold. `put` debe rechazar (sin escribir) lo que exceda la cuota.
 pub trait ColdStore: Send {
     fn get(&self, key: &str) -> Result<Option<ColdEntry>, MemoryError>;
     fn put(&mut self, key: &str, entry: ColdEntry) -> Result<(), MemoryError>;
     fn remove(&mut self, key: &str) -> Result<bool, MemoryError>;
     fn len(&self) -> usize;
+    /// Bytes ocupados, incluidas versiones antiguas aún no compactadas.
     fn bytes_on_disk(&self) -> u64;
     fn max_disk_bytes(&self) -> Option<u64> {
         None
@@ -38,6 +50,7 @@ pub trait ColdStore: Send {
     fn quota_rejections(&self) -> u64 {
         0
     }
+    /// Segmentos rescatados al abrir por cabeceras dañadas.
     fn salvaged_segments(&self) -> u64 {
         0
     }
@@ -47,6 +60,7 @@ pub trait ColdStore: Send {
     fn name(&self) -> &'static str;
 }
 
+/// Sin Cold (`cold.backend` ausente o `none`): no guarda nada.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoopColdStore;
 
@@ -76,6 +90,7 @@ impl ColdStore for NoopColdStore {
     }
 }
 
+/// Cold en memoria para pruebas.
 #[derive(Debug, Default)]
 pub struct RecordingColdStore {
     pub entries: HashMap<String, ColdEntry>,
@@ -142,6 +157,7 @@ pub struct SegmentedColdStore {
 }
 
 impl SegmentedColdStore {
+    /// Abre sin cuota de disco.
     pub fn open(
         path: impl Into<PathBuf>,
         segment_max_bytes: u64,
@@ -150,6 +166,8 @@ impl SegmentedColdStore {
         Self::open_with_limit(path, segment_max_bytes, mmap_reads, None)
     }
 
+    /// Abre `path`, reconstruye el índice (recortando o rescatando segmentos
+    /// dañados) y aplica `max_disk_bytes` como cuota. Segmentos de al menos 4 KiB.
     pub fn open_with_limit(
         path: impl Into<PathBuf>,
         segment_max_bytes: u64,

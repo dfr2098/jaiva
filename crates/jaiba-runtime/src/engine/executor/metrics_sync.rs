@@ -1,3 +1,5 @@
+//! Vuelca el estado del bucle (colas, carga, repositorio) en `FlowMetrics`.
+
 use std::collections::{HashMap, VecDeque};
 
 use crate::{

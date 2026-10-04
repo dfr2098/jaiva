@@ -1,3 +1,9 @@
+//! Integración de JME con el runtime: un `MemoryManager` por flujo.
+//!
+//! Resuelve la política (`policy` embebida o `policy_file`, excluyentes), fija
+//! las rutas por flujo bajo `JAIBA_DATA_DIR` (o `data/`) y publica el snapshot
+//! en `FlowMetrics`. El executor llama a `maintain` cada 250 ms.
+
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -22,6 +28,7 @@ impl std::fmt::Debug for DomainMemoryHandle {
 }
 
 impl DomainMemoryHandle {
+    /// Envuelve el manager y publica su primer snapshot.
     pub fn new(manager: MemoryManager, metrics: FlowMetrics) -> Self {
         metrics.set_domain_memory(manager.snapshot());
         Self {
@@ -30,6 +37,7 @@ impl DomainMemoryHandle {
         }
     }
 
+    /// Acceso exclusivo al manager; los processors `memory_*` lo toman por paquete.
     pub fn lock(&self) -> Result<std::sync::MutexGuard<'_, MemoryManager>, FlowError> {
         self.inner
             .lock()
@@ -51,7 +59,8 @@ impl DomainMemoryHandle {
         Ok(())
     }
 
-    /// Ejecuta el reloj de deferred y publica el snapshot de observabilidad.
+    /// Flush de `deferred`, degradación por inactividad y snapshot de métricas.
+    /// Solo falla si falla el flush; la degradación es best-effort.
     pub fn maintain(&self) -> Result<(), FlowError> {
         let mut manager = self.lock()?;
         manager

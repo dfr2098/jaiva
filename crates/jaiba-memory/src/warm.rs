@@ -1,3 +1,5 @@
+//! Nivel Warm opcional, compartible entre instancias (hoy: Redis con feature `redis`).
+
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};

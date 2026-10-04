@@ -12,6 +12,7 @@ use jaiba_plugin_sdk::{
 use super::{description, descriptor, success, with_schemas};
 
 #[cfg(feature = "oracle-driver")]
+/// Oracle: prueba, diagnóstico y explorador. No compila consultas visuales.
 pub(in crate::connection_api) struct OracleConnectionPlugin;
 
 #[cfg(feature = "oracle-driver")]
@@ -195,6 +196,7 @@ impl ConnectionPlugin for OracleConnectionPlugin {
 }
 
 #[cfg(feature = "oracle-driver")]
+/// Conecta por `host:puerto/servicio` (el servicio va en `database`).
 pub(in crate::connection_api) fn oracle_connect(
     endpoint: &ConnectionEndpoint,
     secret: &ConnectionSecret,
@@ -209,6 +211,7 @@ pub(in crate::connection_api) fn oracle_connect(
 }
 
 #[cfg(feature = "oracle-driver")]
+/// Error de conexión; si falta Instant Client (`DPI-1047`) dice cómo instalarlo.
 fn oracle_connection(error: oracle::Error) -> PluginError {
     let message = error.to_string();
     if message.contains("DPI-1047") {

@@ -1,7 +1,12 @@
 //! Jaiba Memory Engine (JME) — lifecycle Hot/Warm/Cold/Frozen.
 //!
-//! Ciclo de vida de **estado de dominio** (no paquetes del DAG).
-//! Ver `docs/history/priority-jme-memory-manager.md`.
+//! Ciclo de vida de **estado de dominio** (no paquetes del DAG). Estado:
+//! **Beta**; contrato de política `memory.version: 1` (`POLICY_VERSION`).
+//!
+//! Punto de entrada: `MemoryManager`, construido desde una `MemoryPolicy`.
+//! Guía de uso: `docs/configuration.md` (sección JME) y
+//! `docs/jme-cold-memory.md`; historia de diseño en
+//! `docs/history/priority-jme-memory-manager.md`.
 //!
 //! Cold local: segmentos LZ4 con lectura bajo demanda (`mmap` opcional).
 //! Redis opcional: compilar con `--features redis` y `warm.backend: redis`.

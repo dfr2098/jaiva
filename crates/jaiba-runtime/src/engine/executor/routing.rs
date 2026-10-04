@@ -1,3 +1,5 @@
+//! Enrutamiento de emisiones hacia las colas de cada conexión del grafo.
+
 use std::collections::{HashMap, VecDeque};
 
 use tracing::warn;
@@ -13,6 +15,11 @@ use crate::{
 
 use super::{RouteOutcome, WorkItem, is_source_seed, metrics_sync::sync_repository_metrics};
 
+/// Encola una emisión en todas las conexiones de su `relationship`.
+///
+/// Es todo o nada: comprueba la capacidad global, la de cada conexión y
+/// `maximum_in_flight`, y reserva memoria para cada rama antes de publicar
+/// ninguna. Si algo no cabe devuelve `QueueFull` o `MemoryFull` sin encolar.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn route_emission(
     emission: &ProcessorEmission,
@@ -124,6 +131,7 @@ pub(super) async fn route_emission(
     Ok(RouteOutcome::Routed)
 }
 
+/// Identificador estable de una arista: `from.relationship.to`.
 pub(super) fn connection_id(connection: &ConnectionConfig) -> String {
     format!(
         "{}.{}.{}",

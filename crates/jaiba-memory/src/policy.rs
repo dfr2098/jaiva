@@ -1,10 +1,21 @@
+//! Política YAML de JME (`memory:`): límites, backends y clases.
+//!
+//! Cada clase combina una `Policy` (durabilidad), una `Temperature` (adónde se
+//! degrada al salir de Hot) y una `Priority` (orden de desalojo).
+
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use serde::Deserialize;
 
 use crate::{duration::parse_duration, error::MemoryError};
 
-/// Política de lifecycle.
+/// Durabilidad de una clase.
+///
+/// - `volatile`: solo memoria, no se persiste.
+/// - `cache`: reconstruible con `rebuild`; puede degradarse.
+/// - `deferred`: entra a Hot y se persiste después, por `flush` o por tope.
+/// - `immediate` / `persistent`: se persiste antes de entrar a Hot; si falla,
+///   la escritura se rechaza.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Policy {
@@ -44,7 +55,7 @@ impl Policy {
     }
 }
 
-/// Temperatura objetivo.
+/// Nivel al que se degrada un objeto cuando sale de Hot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Temperature {
@@ -100,6 +111,7 @@ impl Priority {
     }
 }
 
+/// Reglas efectivas de una clase, con los defaults ya aplicados.
 #[derive(Debug, Clone)]
 pub struct ClassPolicy {
     pub name: String,
@@ -114,6 +126,8 @@ pub struct ClassPolicy {
     pub rebuild: Option<String>,
 }
 
+/// Política completa ya validada. El runtime resuelve `cold_path` /
+/// `frozen_path` por flujo bajo `JAIBA_DATA_DIR` antes de abrir el manager.
 #[derive(Debug, Clone)]
 pub struct MemoryPolicy {
     pub max_entries: usize,
@@ -243,6 +257,7 @@ struct FileClass {
 }
 
 impl MemoryPolicy {
+    /// Lee un YAML con raíz `memory:` y lo valida (incluida `memory.version`).
     pub fn from_yaml(text: &str) -> Result<Self, MemoryError> {
         let root: FileRoot = serde_yaml::from_str(text)
             .map_err(|error| MemoryError::Configuration(error.to_string()))?;
@@ -513,6 +528,7 @@ impl MemoryPolicy {
         })
     }
 
+    /// Clase declarada; `UnknownClass` si no existe.
     pub fn class(&self, name: &str) -> Result<&ClassPolicy, MemoryError> {
         self.classes
             .get(name)

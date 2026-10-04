@@ -1,3 +1,9 @@
+//! Pruebas de integración de `connection_api` contra motores reales.
+//!
+//! Cada prueba se omite si falta `JAIBA_TEST_<MOTOR>_PASSWORD`; host, puerto,
+//! base y usuario tienen valores por defecto del lab. Las de Mongo, Oracle y
+//! SQL Server además requieren su feature de driver.
+
 use std::{collections::BTreeMap, env, fs};
 
 use jaiba_connection_manager::InMemorySecretStore;

@@ -19,7 +19,11 @@ Cada carpeta tiene **un trabajo**. Si no sabes dónde tocar, empieza aquí.
 | Carpeta / archivo | Apunta a |
 | --- | --- |
 | `engine/connections.rs` | Arma pools/writers según `type:` del YAML |
-| `engine/executor.rs` | Corre processors y reintentos |
+| `engine/executor/mod.rs` | `FlowEngine`: bucle principal del flujo |
+| `engine/executor/scheduler.rs` | Qué trabajo arranca: concurrencia, orden, particiones, admisión de fuentes |
+| `engine/executor/retry.rs` | Ejecuta un processor con timeout y reintentos |
+| `engine/executor/routing.rs` | Enruta emisiones a las colas de cada conexión |
+| `engine/executor/validation.rs` | Parámetros `${...}` y validación del YAML |
 | `connectors/database.rs` | Contrato `DatabaseWriter` |
 | `connectors/postgres.rs` … | Un writer por motor |
 | `connectors/clickhouse.rs` | Sink ClickHouse (`clickhouse-driver`) |

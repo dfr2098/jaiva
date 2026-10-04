@@ -20,7 +20,7 @@ Registro de tipos: `crates/jaiba-runtime/src/processors/mod.rs`.
 
 En el YAML, `connections:` une `from` → `to` por `relationship`
 (`success` / `failure`). Eso es el grafo; el runtime lo ejecuta en
-`engine/executor.rs`.
+`engine/executor/` (bucle en `mod.rs`, enrutamiento en `routing.rs`).
 
 ## Siguiente
 

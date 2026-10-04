@@ -75,7 +75,7 @@ persistencia de secretos. Import YAML → deploy UI end-to-end sigue en follow-u
 
 | Ítem | Notas |
 | --- | --- |
-| Split módulos grandes | `observability.rs` / `executor.rs` / `FlowBuilder.tsx` → Ciclo 2 |
+| Split módulos grandes | `executor.rs` ya partido en `engine/executor/`; faltan `observability.rs` / `connection_api.rs` / `FlowBuilder.tsx` → Ciclo 2 |
 | `release-core` feature vacío | Hoy es perfil nominal; falta composición Cargo real (deps/features) |
 | Logo UI ~3 MB | Optimizar asset en `apps/jaiba-ui/src/img/` |
 | Plugin externo real | Referencia REST JSON Lines (Ciclo 4) |
@@ -107,7 +107,7 @@ Trabajo de producto **sin** abrir `priority-11+`:
 | Ciclo | Foco | Estado |
 | --- | --- | --- |
 | **1. Estabilidad** | Recorrido oficial, Docker, E2E base | Hecho |
-| **2. Mantenibilidad** | Split observability / connection_api / executor / FlowBuilder | Pendiente |
+| **2. Mantenibilidad** | Split observability / connection_api / executor / FlowBuilder | En curso (executor hecho) |
 | **3. Producción** | Seguridad, recuperación, benchmarks, soak | Pendiente |
 | **4. Extensibilidad** | Plugin externo real, SDK y docs de terceros | Pendiente |
 

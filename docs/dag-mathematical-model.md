@@ -246,4 +246,5 @@ emisiones, no como una sola composición de funciones.
 
 Las fuentes principales son `crates/jaiba-core/src/graph.rs`,
 `crates/jaiba-core/src/config/flow.rs` y
-`crates/jaiba-runtime/src/engine/executor.rs`.
+`crates/jaiba-runtime/src/engine/executor/` (planificación en `scheduler.rs`,
+enrutamiento en `routing.rs`).

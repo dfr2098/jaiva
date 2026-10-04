@@ -30,6 +30,15 @@ Cada carpeta tiene **un trabajo**. Si no sabes dónde tocar, empieza aquí.
 | `processors/put_database.rs` | Nodo YAML que escribe vía writer |
 | `processors/query_*.rs` | Nodos de lectura por motor |
 
+### Dentro de `jaiba-server`
+
+| Carpeta / archivo | Apunta a |
+| --- | --- |
+| `connection_api/mod.rs` | Endpoints `/api/v1/connections`, registro de plugins, validación de entrada |
+| `connection_api/plugins/mod.rs` | Helpers comunes (descriptor, diagnóstico, metadatos) |
+| `connection_api/plugins/postgres.rs` … | Un `ConnectionPlugin` por motor (prueba, exploración, compilación de consultas) |
+| `connection_api/tests.rs` | Pruebas de integración contra motores reales (por variables `JAIBA_TEST_*`) |
+
 ## `apps/jaiba-ui/`
 
 UI Angular/React del diseñador y Connection Manager.  

@@ -54,7 +54,8 @@ variante al núcleo.
 3. La UI construye un `QuerySpec`; no concatena texto SQL.
 4. `POST /api/v1/connections/{id}/query/compile` entrega el `QuerySpec` al
    servidor.
-5. `connection_api.rs` selecciona el plugin correspondiente.
+5. `connection_api/` selecciona el plugin correspondiente
+   (`connection_api/plugins/<motor>.rs`).
 6. `sql_builder.rs` valida y cita identificadores, genera placeholders y
    mantiene los valores separados en `parameters`.
 7. El adaptador puede devolver `processor_type` y `execution_statement`:
@@ -119,7 +120,8 @@ puede bajar el nivel de seguridad del servidor. Ver fase 9A.
 | Archivo | Motivo |
 |---|---|
 | `crates/jaiba-plugin-sdk/src/lib.rs` | Define `QuerySpec`, metadatos y contratos de plugins |
-| `crates/jaiba-server/src/connection_api.rs` | API de conexiones, metadatos y compilación |
+| `crates/jaiba-server/src/connection_api/mod.rs` | API de conexiones, metadatos y compilación |
+| `crates/jaiba-server/src/connection_api/plugins/` | Un plugin de conexión por motor |
 | `crates/jaiba-server/src/sql_builder.rs` | Compilador SQL seguro por dialecto |
 | `crates/jaiba-server/src/flow_registry.rs` | Versiones, despliegue y rollback |
 | `crates/jaiba-runtime/src/processors/query_postgres.rs` | Lectura PostgreSQL parametrizada |

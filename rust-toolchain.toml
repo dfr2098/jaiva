@@ -1,0 +1,5 @@
+# Versión fija para local y CI: un Rust estable nuevo puede traer lints de
+# Clippy que rompen `-D warnings` sin cambios en el código. Subirla a mano.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]

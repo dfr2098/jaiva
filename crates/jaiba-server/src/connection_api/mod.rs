@@ -520,6 +520,7 @@ pub(crate) async fn diagnose_connection(
 }
 
 /// Arma la vista pública de un perfil con su usuario y estado actual.
+#[allow(clippy::result_large_err)]
 async fn view(state: &AppState, profile: ConnectionProfile) -> Result<ConnectionView, Response> {
     let secret = state
         .connection_secrets

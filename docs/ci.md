@@ -11,6 +11,12 @@
 | **Release** | `.github/workflows/release.yml` | tag `v*` | binario Linux + imagen GHCR `jaiba-serve` |
 | **Phase 8** | `.github/workflows/phase8-integration.yml` | manual (`workflow_dispatch`) o PR con label `phase8` | `scripts/phase8-integration.sh` contra entorno real |
 
+La versión de Rust está fijada en `rust-toolchain.toml` (local y CI usan la
+misma; los workflows la instalan con `rustup toolchain install`). Para subirla:
+cambiar `channel`, correr `cargo clippy --workspace --all-targets -- -D warnings`
+y corregir los lints nuevos en el mismo commit. Las imágenes Docker de
+`deploy/` usan su propia versión.
+
 El CI **no** levanta Postgres/Kafka/Mongo/SQL Server. Los tests opt-in que
 requieren servicios se omiten en ese job.
 

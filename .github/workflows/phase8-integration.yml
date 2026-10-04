@@ -41,8 +41,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

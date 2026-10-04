@@ -40,3 +40,8 @@
 # OS files
 .DS_Store
 Thumbs.db
+
+# Ultralytics / YOLO artifacts (not part of Jaiba)
+/yolo11n/
+/yolo*.pt
+/runs/

@@ -53,6 +53,8 @@ pub(crate) struct AppState {
     admin: Arc<RwLock<AdminAccess>>,
     pub(crate) connection_manager: Arc<ConnectionManager>,
     pub(crate) connection_secrets: Arc<dyn SecretStore>,
+    /// `false` = perfiles en memoria (sin `JAIBA_MASTER_KEY`): se pierden al reiniciar.
+    connections_persistent: bool,
 }
 
 #[derive(Clone)]
@@ -79,6 +81,14 @@ struct Health {
 #[derive(Serialize)]
 struct ApiMessage {
     message: String,
+}
+
+/// Lo que este binario puede hacer; la UI lo usa para no ofrecer nodos que
+/// el motor no puede ejecutar.
+#[derive(Serialize)]
+struct Capabilities {
+    processor_types: Vec<String>,
+    connections_persistent: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -262,6 +272,7 @@ impl ObservabilityServer {
 
     pub async fn serve(self, address: SocketAddr) -> Result<(), FlowError> {
         let (connection_secrets, persistence, audit) = build_connection_stores(address)?;
+        let connections_persistent = persistence.is_some();
         let connection_manager = crate::connection_api::connection_manager(
             connection_secrets.clone(),
             persistence,
@@ -313,6 +324,7 @@ impl ObservabilityServer {
             admin: Arc::new(RwLock::new(admin)),
             connection_manager,
             connection_secrets,
+            connections_persistent,
         };
         let app = Router::new()
             .route("/health", get(health))
@@ -322,6 +334,7 @@ impl ObservabilityServer {
             .route("/ws", get(websocket))
             .route("/ws/v1", get(websocket_v1))
             .route("/api/v1/whoami", get(whoami))
+            .route("/api/v1/capabilities", get(capabilities))
             .route("/api/v1/flows", get(list_flows).post(create_flow))
             .route("/api/v1/flows/validate", post(validate_flow))
             .route("/api/v1/flows/{id}", get(get_flow))
@@ -462,10 +475,12 @@ async fn serve_http_or_https(
                 .handle(handle)
                 .serve(app.into_make_service())
                 .await
-                .map_err(|error| FlowError::Server(error.to_string()))
+                .map_err(|error| listen_error(address, error))
         }
         (None, None) => {
-            let listener = TcpListener::bind(address).await?;
+            let listener = TcpListener::bind(address)
+                .await
+                .map_err(|error| listen_error(address, error))?;
             tracing::info!(%address, "observability and administration server listening");
             axum::serve(listener, app)
                 .with_graceful_shutdown(shutdown_signal(registry))
@@ -475,6 +490,17 @@ async fn serve_http_or_https(
         _ => Err(FlowError::Configuration(
             "TLS incompleto: defina JAIBA_TLS_CERT_FILE y JAIBA_TLS_KEY_FILE juntos".to_owned(),
         )),
+    }
+}
+
+fn listen_error(address: SocketAddr, error: std::io::Error) -> FlowError {
+    if error.kind() == std::io::ErrorKind::AddrInUse {
+        FlowError::Configuration(format!(
+            "la dirección {address} ya está en uso por otro programa. Deténlo o usa otra: \
+             JAIBA_SERVER_ADDR=127.0.0.1:19090 jaiba serve <flujo.yaml>"
+        ))
+    } else {
+        FlowError::Server(error.to_string())
     }
 }
 
@@ -1355,6 +1381,17 @@ fn authorize_observability(
     Ok(ctx)
 }
 
+async fn capabilities(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_perm(&state, &headers, Permission::Read) {
+        return response;
+    }
+    Json(Capabilities {
+        processor_types: jaiba_runtime::processors::default_registry().processor_types(),
+        connections_persistent: state.connections_persistent,
+    })
+    .into_response()
+}
+
 async fn whoami(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let admin = state.admin.read().expect("admin lock poisoned");
     let auth_label = match admin.authentication {
@@ -1740,6 +1777,19 @@ mod tests {
                 .contains_key("access-control-allow-origin")
         );
         assert!(cors_for_origins("*").is_err());
+    }
+
+    #[tokio::test]
+    async fn busy_port_error_names_address_and_override() {
+        let taken = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = taken.local_addr().unwrap();
+        let error = TcpListener::bind(address)
+            .await
+            .map_err(|error| listen_error(address, error))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&address.to_string()), "{error}");
+        assert!(error.contains("JAIBA_SERVER_ADDR"), "{error}");
     }
 
     #[test]

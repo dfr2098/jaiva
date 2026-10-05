@@ -1,5 +1,5 @@
 import { parse, stringify } from "yaml";
-import { CATALOG_BY_TYPE } from "./catalog";
+import { CATALOG_BY_TYPE, unavailableHint } from "./catalog";
 import {
   ENGINE_DEFAULTS,
   RETRY_DEFAULTS,
@@ -313,6 +313,8 @@ export interface ValidateFlowOptions {
   /** Alias conocidos del Connection Manager (se resuelven en runtime). */
   knownDatabaseAliases?: string[];
   knownKafkaAliases?: string[];
+  /** Tipos que el motor conectado puede ejecutar; sin valor no se comprueba. */
+  availableProcessorTypes?: string[];
 }
 
 export function validateFlow(
@@ -399,6 +401,13 @@ export function validateFlow(
       issues.push({ level: "error", message: `Identificador de procesador duplicado: '${id}'.` });
     }
     seen.add(id);
+
+    if (options.availableProcessorTypes && !options.availableProcessorTypes.includes(node.data.type)) {
+      issues.push({
+        level: "error",
+        message: `'${id}' (${node.data.type}): ${unavailableHint(node.data.type)}`,
+      });
+    }
 
     const def = CATALOG_BY_TYPE[node.data.type];
     if (!def) continue;

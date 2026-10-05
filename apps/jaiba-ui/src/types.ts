@@ -119,6 +119,13 @@ export interface DeadLetterEntry {
   failed_at: number;
 }
 
+/** `GET /api/v1/capabilities`: lo que el binario del motor puede ejecutar. */
+export interface EngineCapabilities {
+  processor_types: string[];
+  /** `false` = perfiles de conexión en memoria (se pierden al reiniciar). */
+  connections_persistent: boolean;
+}
+
 export interface FlowValidationResult {
   valid: boolean;
   flow_id: string;

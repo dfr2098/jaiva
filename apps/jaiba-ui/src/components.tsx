@@ -8,6 +8,7 @@ import {
   type EngineMode,
   type EngineStatus,
 } from "./desktopEngine";
+import { useEngineState } from "./engineState";
 import jaibaLogo from "./img/jaiba-logo.png";
 import type {
   DeadLetterEntry,
@@ -48,6 +49,27 @@ export function Status({
       <span data-testid="engine-status-label">{label}</span>
     </div>
   );
+}
+
+/** Aviso bajo el encabezado: motor inalcanzable o conexiones que no persisten. */
+export function EngineNotice({ showConnectionStorage }: { showConnectionStorage: boolean }) {
+  const { online, problem, capabilities } = useEngineState();
+  if (!online && problem) {
+    return (
+      <div className="engine-notice error" role="alert" data-testid="engine-notice">
+        {problem}
+      </div>
+    );
+  }
+  if (showConnectionStorage && capabilities && !capabilities.connections_persistent) {
+    return (
+      <div className="engine-notice" role="status" data-testid="connections-volatile-notice">
+        Las conexiones se guardan solo en memoria y se perderán al reiniciar el motor. Para
+        conservarlas, arranca el motor con <code>JAIBA_MASTER_KEY</code> definida.
+      </div>
+    );
+  }
+  return null;
 }
 
 export function AdminAccess() {

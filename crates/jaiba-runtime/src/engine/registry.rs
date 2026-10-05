@@ -26,6 +26,13 @@ impl ProcessorRegistry {
             .insert(processor_type.to_owned(), Arc::new(factory));
     }
 
+    /// Tipos registrados, en orden alfabético (lo que este binario puede ejecutar).
+    pub fn processor_types(&self) -> Vec<String> {
+        let mut types: Vec<String> = self.factories.keys().cloned().collect();
+        types.sort();
+        types
+    }
+
     /// Builds a processor or reports an unknown type.
     pub fn build(
         &self,
@@ -65,6 +72,19 @@ fn unknown_processor_hint(processor_type: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::unknown_processor_hint;
+    use crate::processors::default_registry;
+
+    #[test]
+    fn processor_types_lists_registered_types_sorted() {
+        let types = default_registry().processor_types();
+        assert!(types.contains(&"generate_records".to_owned()));
+        assert!(types.contains(&"query_postgres".to_owned()));
+        assert_eq!(
+            types.contains(&"query_oracle".to_owned()),
+            cfg!(feature = "oracle-driver")
+        );
+        assert!(types.windows(2).all(|pair| pair[0] < pair[1]));
+    }
 
     #[test]
     fn unknown_oracle_processor_hints_feature_flag() {

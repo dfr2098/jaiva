@@ -33,7 +33,9 @@ cargo run --features kafka-driver,mongodb-driver,sqlserver-driver,oracle-driver 
 ```
 
 Sin el feature correspondiente, el tipo no aparece en
-`/api/v1/connection-types` ni en el selector de la UI.
+`/api/v1/connection-types` ni en el selector de la UI, y el diseñador muestra
+sus nodos deshabilitados con el feature que falta (según
+`/api/v1/capabilities`).
 
 ## Servidor de observabilidad
 
@@ -53,6 +55,10 @@ Para contenedores:
 export JAIBA_SERVER_ADDR=0.0.0.0:9090
 ```
 
+Si otro programa ya usa el puerto, el arranque falla con
+`la dirección 127.0.0.1:9090 ya está en uso por otro programa`; usa otra
+dirección con `JAIBA_SERVER_ADDR` y apunta la UI ahí con `JAIBA_API_UPSTREAM`.
+
 ## Endpoints
 
 - `GET /health`: disponibilidad.
@@ -62,6 +68,10 @@ export JAIBA_SERVER_ADDR=0.0.0.0:9090
 - `GET /ws` / `GET /ws/v1`: eventos de runtime; sondeo cada
   `JAIBA_WS_POLL_MS` (default 250 ms) y **solo envía si el JSON cambió**
   (throttle + dirty-check). Ver [packaging.md](packaging.md).
+- `GET /api/v1/capabilities`: procesadores que este binario puede ejecutar
+  (`processor_types`) y si los perfiles de conexión persisten en disco
+  (`connections_persistent`; `false` sin `JAIBA_MASTER_KEY`). La UI lo usa para
+  el catálogo del diseñador y el aviso de Conexiones.
 - `/api/v1/*`: control autenticado, provenance y dead-letter.
 
 Grafana debe consultar Prometheus, no el WebSocket directamente.

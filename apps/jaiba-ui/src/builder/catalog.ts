@@ -829,6 +829,28 @@ export const CATEGORY_TAG: Record<ProcessorCategory, string> = {
   sink: "Destino",
 };
 
+/**
+ * Feature de Cargo que registra el procesador en el motor (misma regla que
+ * `unknown_processor_hint` en `jaiba-runtime`). `null` = incluido siempre.
+ */
+export function requiredFeature(processorType: string): string | null {
+  if (processorType.includes("oracle")) return "oracle-driver";
+  if (processorType.includes("sqlserver") || processorType.includes("sql_server")) {
+    return "sqlserver-driver";
+  }
+  if (processorType.includes("mongo")) return "mongodb-driver";
+  if (processorType.includes("kafka")) return "kafka-driver";
+  return null;
+}
+
+/** Texto para un nodo que el motor conectado no puede ejecutar. */
+export function unavailableHint(processorType: string): string {
+  const feature = requiredFeature(processorType);
+  return feature
+    ? `El motor conectado no incluye este nodo. Arráncalo con --features ${feature}.`
+    : "El motor conectado no incluye este nodo.";
+}
+
 export interface UpcomingComponent {
   label: string;
   note: string;

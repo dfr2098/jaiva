@@ -667,6 +667,37 @@ driver.
 (`derivable_impls` en `consume_kafka.rs` y `put_mongodb.rs`,
 `collapsible_if` en `connection_api/mod.rs`).
 
+## Consola: catálogo según el motor y avisos claros (2026-10)
+
+1. **Problema:** el diseñador ofrecía nodos que el binario no podía ejecutar
+   (Oracle, SQL Server, MongoDB, Kafka sin su feature) y fallaban al final; si
+   el motor no arrancaba (p. ej. puerto ocupado) la UI se quedaba en
+   "Conectando" sin explicación; las conexiones en memoria se perdían al
+   reiniciar sin aviso en pantalla; la CLI imprimía errores como
+   `Error: Io(Os { … })`.
+2. **Archivos:** `jaiba-runtime/src/engine/registry.rs`
+   (`processor_types()`), `jaiba-server/src/observability.rs`
+   (`GET /api/v1/capabilities`, `listen_error`), `jaiba-cli`
+   (`run_and_report`, `load_config` con la ruta del archivo); UI:
+   `engineState.ts` (nuevo), `api.ts` (`engineHealth`, `capabilities`),
+   `components.tsx` (`EngineNotice`), `builder/catalog.ts`
+   (`requiredFeature`, `unavailableHint`), `builder/yaml.ts`
+   (`availableProcessorTypes`), `builder/FlowBuilder.tsx`, `vite.config.ts`
+   (`JAIBA_API_UPSTREAM`).
+3. **Decisión:** el motor es la fuente de verdad de lo que puede ejecutar
+   (`default_registry()`, el mismo que usa `/api/v1/flows/validate`); si el
+   endpoint no responde (motor anterior), la UI muestra el catálogo completo
+   como antes. `requiredFeature` replica la regla de `unknown_processor_hint`.
+4. **Prueba:** `processor_types_lists_registered_types_sorted` y
+   `busy_port_error_names_address_and_override`; en navegador: motor sin
+   features → 6 nodos deshabilitados con su feature; UI apuntando a otro
+   servicio en 9090 → aviso "responde otro programa"; Conexiones sin
+   `JAIBA_MASTER_KEY` → aviso de memoria.
+5. **Limitación:** procesadores añadidos en código con `with_registry` no
+   aparecen en `processor_types` (el servidor usa `default_registry()`); el
+   catálogo de la UI sigue siendo estático (solo se deshabilitan entradas, no
+   se descubren nuevas).
+
 ## Trabajo posterior a la fase 9 / 10A–10C
 
 - procesadores ejecutables de consulta para MySQL y SQL Server;

@@ -17,6 +17,7 @@ import type {
   DatabaseObject,
   ObjectDescription,
   DiagnosticCheck,
+  EngineCapabilities,
 } from "./types";
 
 declare global {
@@ -173,6 +174,42 @@ async function requestText(path: string, init?: RequestInit): Promise<string> {
   return text;
 }
 
+function engineAddressHint(): string {
+  return API_ROOT.startsWith("http") ? API_ROOT : "127.0.0.1:9090";
+}
+
+/**
+ * `/health` con mensajes accionables: distingue "no hay nada escuchando"
+ * (proxy 5xx / red) de "responde otro programa" (p. ej. otro servicio en 9090).
+ */
+async function engineHealth(): Promise<{ status: string; service: string }> {
+  let response: Response;
+  try {
+    response = await fetch(apiUrl("/health"), { headers: adminHeaders() });
+  } catch {
+    throw new Error(
+      `No encuentro el motor Jaiba en ${engineAddressHint()}. Arráncalo con: jaiba serve <flujo.yaml>`,
+    );
+  }
+  const body = (await response.json().catch(() => null)) as {
+    status?: string;
+    service?: string;
+  } | null;
+  if (response.ok && (body?.service === "jaiva" || body?.service === "jaiba")) {
+    return body as { status: string; service: string };
+  }
+  if (response.status >= 500) {
+    throw new Error(
+      `No encuentro el motor Jaiba en ${engineAddressHint()}. Arráncalo con: jaiba serve <flujo.yaml>`,
+    );
+  }
+  throw new Error(
+    `En ${engineAddressHint()} responde otro programa, no el motor Jaiba. ` +
+      "Arranca el motor en otra dirección (JAIBA_SERVER_ADDR=127.0.0.1:19090) " +
+      "y apunta la consola ahí (JAIBA_API_UPSTREAM=http://127.0.0.1:19090).",
+  );
+}
+
 export interface WhoAmI {
   actor: string;
   role: string;
@@ -181,8 +218,9 @@ export interface WhoAmI {
 }
 
 export const jaivaApi = {
-  health: () => request<{ status: string; service: string }>("/health"),
+  health: engineHealth,
   whoami: () => request<WhoAmI>("/api/v1/whoami"),
+  capabilities: () => request<EngineCapabilities>("/api/v1/capabilities"),
   runtime: async (): Promise<FlowSnapshot | null> => {
     const response = await fetch(apiUrl("/runtime"), {
       headers: { Accept: "application/json" },

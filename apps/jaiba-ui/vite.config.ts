@@ -2,6 +2,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const host = process.env.TAURI_DEV_HOST;
+// Misma variable que docker-compose.yml (nginx).
+const apiUpstream = process.env.JAIBA_API_UPSTREAM || "http://127.0.0.1:9090";
 
 export default defineConfig({
   plugins: [react()],
@@ -24,13 +26,13 @@ export default defineConfig({
     },
     proxy: {
       "/jaiva-api": {
-        target: "http://127.0.0.1:9090",
+        target: apiUpstream,
         changeOrigin: true,
         ws: true,
         rewrite: (path) => path.replace(/^\/jaiva-api/, ""),
       },
       "/jaiba-api": {
-        target: "http://127.0.0.1:9090",
+        target: apiUpstream,
         changeOrigin: true,
         ws: true,
         rewrite: (path) => path.replace(/^\/jaiba-api/, ""),

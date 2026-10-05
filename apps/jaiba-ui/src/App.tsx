@@ -4,6 +4,7 @@ import {
   CrabMark,
   AdminAccess,
   EngineControl,
+  EngineNotice,
   FlowCanvas,
   FlowControls,
   LifecycleBadge,
@@ -242,6 +243,7 @@ export default function App() {
         <EngineControl onChanged={() => void refresh()} />
         <AdminAccess />
       </header>
+      <EngineNotice showConnectionStorage={view === "connections"} />
 
       {view === "builder" ? (
         <main className="builder-main">

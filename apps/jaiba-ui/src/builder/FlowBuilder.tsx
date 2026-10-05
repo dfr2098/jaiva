@@ -22,6 +22,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { jaivaApi } from "../api";
+import { useEngineState } from "../engineState";
 import type {
   DatabaseConnection as ManagedConnection,
   FlowAction,
@@ -35,6 +36,8 @@ import {
   CATEGORY_TAG,
   PROCESSOR_CATALOG,
   UPCOMING_COMPONENTS,
+  requiredFeature,
+  unavailableHint,
   type FieldDef,
 } from "./catalog";
 import {
@@ -302,12 +305,19 @@ function FlowBuilderInner() {
     [edges, selectedEdgeId],
   );
 
+  const availableProcessorTypes = useEngineState().capabilities?.processor_types;
+  const isAvailable = useCallback(
+    (type: string) => !availableProcessorTypes || availableProcessorTypes.includes(type),
+    [availableProcessorTypes],
+  );
+
   const issues = useMemo(
     () =>
       validateFlow(meta, nodes, edges, {
         knownDatabaseAliases: managedDatabaseAliases(managedConnections),
+        availableProcessorTypes,
       }),
-    [meta, nodes, edges, managedConnections],
+    [meta, nodes, edges, managedConnections, availableProcessorTypes],
   );
   const errorCount = issues.filter((issue) => issue.level === "error").length;
 
@@ -961,25 +971,37 @@ function FlowBuilderInner() {
           {(["source", "transform", "ai_prep", "sink"] as const).map((category) => (
             <div className="palette-group" key={category}>
               <span className="palette-group-title">{CATEGORY_LABEL[category]}</span>
-              {PROCESSOR_CATALOG.filter((def) => def.category === category).map((def) => (
-                <button
-                  key={def.type}
-                  type="button"
-                  className={`palette-item ${category}`}
-                  draggable
-                  onDragStart={(event) => {
-                    event.dataTransfer.setData(DRAG_TYPE, def.type);
-                    event.dataTransfer.effectAllowed = "move";
-                  }}
-                  onClick={() =>
-                    addNode(def.type, { x: 80 + Math.random() * 120, y: 60 + Math.random() * 220 })
-                  }
-                  title={def.description}
-                >
-                  <strong>{def.label}</strong>
-                  <small>{def.type}</small>
-                </button>
-              ))}
+              {PROCESSOR_CATALOG.filter((def) => def.category === category).map((def) =>
+                isAvailable(def.type) ? (
+                  <button
+                    key={def.type}
+                    type="button"
+                    className={`palette-item ${category}`}
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer.setData(DRAG_TYPE, def.type);
+                      event.dataTransfer.effectAllowed = "move";
+                    }}
+                    onClick={() =>
+                      addNode(def.type, { x: 80 + Math.random() * 120, y: 60 + Math.random() * 220 })
+                    }
+                    title={def.description}
+                  >
+                    <strong>{def.label}</strong>
+                    <small>{def.type}</small>
+                  </button>
+                ) : (
+                  <div
+                    key={def.type}
+                    className="palette-item unavailable"
+                    title={unavailableHint(def.type)}
+                    data-testid={`palette-unavailable-${def.type}`}
+                  >
+                    <strong>{def.label}</strong>
+                    <small>requiere {requiredFeature(def.type) ?? "otro motor"}</small>
+                  </div>
+                ),
+              )}
             </div>
           ))}
           <div className="palette-group">

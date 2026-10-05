@@ -73,7 +73,14 @@ npm run dev
 ```
 
 Vite queda en `http://127.0.0.1:5173` y redirige `/jaiba-api` hacia el motor en
-`127.0.0.1:9090`.
+`127.0.0.1:9090`. Si el motor escucha en otra dirección:
+
+```bash
+JAIBA_API_UPSTREAM=http://127.0.0.1:19090 npm run dev
+```
+
+Si el motor no responde (o en esa dirección contesta otro programa), la UI lo
+indica en un aviso bajo el encabezado con el comando para arreglarlo.
 
 Validación y build:
 

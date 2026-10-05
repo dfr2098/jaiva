@@ -1,4 +1,4 @@
-use std::{env, fs, net::SocketAddr, sync::Arc};
+use std::{env, fs, net::SocketAddr, process::ExitCode, sync::Arc};
 
 use jaiba_core::config::FlowConfig;
 use jaiba_runtime::{
@@ -18,6 +18,17 @@ async fn connection_resolver() -> Result<Option<Arc<dyn ConnectionResolver>>, Fl
     Ok(ProfileConnectionResolver::from_env()
         .await?
         .map(|resolver| Arc::new(resolver) as Arc<dyn ConnectionResolver>))
+}
+
+/// Entrada de los binarios: ejecuta [`run`] e imprime el error legible (no `Debug`).
+pub async fn run_and_report() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Executes the Jaiba command line using the process arguments.
@@ -225,8 +236,11 @@ async fn serve(flow_path: Option<&str>, config: Option<FlowConfig>) -> Result<()
 }
 
 fn load_config(path: &str) -> Result<FlowConfig, FlowError> {
-    let yaml = fs::read_to_string(path)?;
-    Ok(serde_yaml::from_str(&yaml)?)
+    let yaml = fs::read_to_string(path).map_err(|error| {
+        FlowError::Configuration(format!("no se pudo leer el flujo '{path}': {error}"))
+    })?;
+    serde_yaml::from_str(&yaml)
+        .map_err(|error| FlowError::Configuration(format!("flujo '{path}' inválido: {error}")))
 }
 
 fn log_summary(summary: jaiba_runtime::engine::FlowSummary) {

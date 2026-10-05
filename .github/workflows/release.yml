@@ -23,7 +23,9 @@ env:
 jobs:
   binary:
     name: Linux binary (release-core)
-    runs-on: ubuntu-latest
+    # El binario enlaza la glibc del runner: 22.04 (2.35) permite ejecutarlo en
+    # Debian 12, Ubuntu 22.04+ y RHEL 9+; con ubuntu-latest exigiría 2.39.
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,6 +42,9 @@ jobs:
           strip target/release/jaiba
           tar -C target/release -czf "jaiba-linux-x86_64.tar.gz" jaiba
           shasum -a 256 jaiba-linux-x86_64.tar.gz > jaiba-linux-x86_64.sha256
+
+      - name: Smoke del binario publicado
+        run: ./target/release/jaiba examples/smoke.yaml
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -112,6 +117,19 @@ jobs:
             jaiba-linux-x86_64.tar.gz
             jaiba-linux-x86_64.sha256
           body: |
+            ## Instalar (Linux x86_64, glibc 2.35+)
+
+            ```bash
+            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/jaiba-linux-x86_64.tar.gz
+            tar xzf jaiba-linux-x86_64.tar.gz
+            ./jaiba serve flujo.yaml        # API en http://127.0.0.1:9090
+            ```
+
+            Incluye PostgreSQL, MySQL/MariaDB, SQLite y archivos. Oracle, SQL Server,
+            MongoDB, Kafka y ClickHouse requieren compilar con su `--features`.
+            La consola visual se levanta aparte desde el repo: `apps/jaiba-ui`
+            (`docker compose up -d --build`).
+
             ## Artefactos
             - Binario Linux x86_64 (`release-core`): `jaiba-linux-x86_64.tar.gz`
             - Imagen: `ghcr.io/${{ github.repository_owner }}/jaiba-serve:${{ github.ref_name }}`

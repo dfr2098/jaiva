@@ -21,12 +21,18 @@ La imagen publicada en GHCR se llama **`jaiba-serve`**.
 Workflow [`.github/workflows/release.yml`](../.github/workflows/release.yml):
 
 - Trigger: tag `v*` (o `workflow_dispatch`).
-- Artefacto: `jaiba-linux-x86_64.tar.gz` + checksum.
+- Artefacto: `jaiba-linux-x86_64.tar.gz` + checksum. Se compila en
+  `ubuntu-22.04` para que corra con glibc 2.35+ (Debian 12, Ubuntu 22.04+,
+  RHEL 9+) y se prueba con `examples/smoke.yaml` antes de subirlo.
 - Imagen: `ghcr.io/<owner>/jaiba-serve:<version>`.
 
+El tag debe coincidir con `version` de `[workspace.package]` en `Cargo.toml`
+(y con `apps/jaiba-ui/package.json` / `tauri.conf.json`). Crear el tag sobre
+`main` con el CI en verde:
+
 ```bash
-git tag v0.2.1
-git push origin v0.2.1
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 ## WebSocket (observabilidad)

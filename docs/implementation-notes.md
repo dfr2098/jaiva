@@ -698,6 +698,28 @@ driver.
    catálogo de la UI sigue siendo estático (solo se deshabilitan entradas, no
    se descubren nuevas).
 
+## CLI: ayuda, versión y `jaiba validate` (v0.2.1, 2026-10)
+
+1. **Problema:** con el binario publicado en v0.2.0, `jaiba --help` y
+   `--version` fallaban (se tomaban como ruta de archivo) y sin argumentos se
+   ejecutaba `examples/basic-flow.yaml` en silencio; no había forma de revisar
+   un flujo sin ejecutarlo.
+2. **Archivos:** `jaiba-cli/src/lib.rs` (`help_text`, `validate_command`,
+   `missing_env_vars`, `read_flow`), `jaiba-server` (`parse_and_validate`
+   pasa a ser público), versión 0.2.1 en `Cargo.toml`, `package.json`,
+   `tauri.conf.json` y locks.
+3. **Decisión:** sin dependencia nueva (se mantiene el parseo manual);
+   `validate` reutiliza `parse_and_validate` del servidor para que CLI y
+   `POST /api/v1/flows/validate` no diverjan. Las variables de entorno sin
+   definir son aviso, no error (pueden definirse en el entorno de ejecución).
+   Un YAML sin `processors` se reporta como "no es un flujo" (políticas JME,
+   `prometheus.yaml`).
+4. **Prueba:** `every_example_flow_validates_or_names_its_missing_feature`
+   recorre `examples/` (falla si un ejemplo se rompe), más tests de ayuda,
+   errores y variables.
+5. **Limitación:** la ayuda es texto fijo; un subcomando nuevo hay que
+   añadirlo a mano en `help_text` (el test comprueba los actuales).
+
 ## Trabajo posterior a la fase 9 / 10A–10C
 
 - procesadores ejecutables de consulta para MySQL y SQL Server;

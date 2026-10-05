@@ -1417,7 +1417,9 @@ async fn whoami(State(state): State<AppState>, headers: HeaderMap) -> Response {
     }
 }
 
-pub(crate) fn parse_and_validate(body: &str) -> Result<FlowConfig, FlowError> {
+/// Valida un flujo YAML sin ejecutarlo: las mismas reglas que
+/// `POST /api/v1/flows/validate` (y que usa `jaiba validate`).
+pub fn parse_and_validate(body: &str) -> Result<FlowConfig, FlowError> {
     let config: FlowConfig = serde_yaml::from_str(body)?;
     if config.id.trim().is_empty() {
         return Err(FlowError::Configuration(

@@ -19,6 +19,14 @@ reintentos si falla.
 Ese es el **único camino de arranque** el primer día. La primera compilación
 tarda; las siguientes son más rápidas.
 
+¿Sin Rust? Descarga el binario de
+[Releases](https://github.com/dfr2098/jaiva/releases) y usa `./jaiba` donde
+aquí dice `cargo run --`.
+
+Antes de ejecutar un flujo propio, revísalo sin ejecutarlo:
+`cargo run -- validate mi-flujo.yaml` (dice qué falla y qué variables de
+entorno faltan). `cargo run -- --help` lista todos los comandos.
+
 ## Quiero X → feature Y
 
 Sin el feature correcto, el conector **no existe** al compilar. Copia el
@@ -33,8 +41,8 @@ comando completo:
 | SQL Server | `cargo run --features sqlserver-driver -- serve examples/basic-flow.yaml` |
 | Varios a la vez | `cargo run --features oracle-driver,mongodb-driver,kafka-driver -- serve …` |
 
-Si el error dice *unknown processor* y menciona un feature: **activa ese
-`--features …`**, no busques un typo primero.
+Si el error dice *procesador '…' no disponible: activa --features …*:
+**activa ese `--features …`**, no busques un typo primero.
 
 ## Ideas mínimas
 

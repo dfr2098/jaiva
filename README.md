@@ -133,9 +133,13 @@ consumir memoria sin control.
 
 ```bash
 cargo run -- examples/smoke.yaml
+cargo run -- validate examples/smoke.yaml   # revisa sin ejecutar
+cargo run -- --help                         # todos los comandos
 ```
 
 (`examples/basic-flow.yaml` sigue disponible como alias histórico del mismo patrón.)
+Sin argumentos, `jaiba` muestra la ayuda. Binario Linux listo para usar:
+[Releases](https://github.com/dfr2098/jaiva/releases).
 
 Para leer PostgreSQL:
 

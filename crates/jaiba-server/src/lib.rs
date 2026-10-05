@@ -8,4 +8,4 @@ mod schedule_store;
 mod scheduler;
 mod sql_builder;
 
-pub use observability::{ObservabilityServer, rotate_connection_master_key};
+pub use observability::{ObservabilityServer, parse_and_validate, rotate_connection_master_key};

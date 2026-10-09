@@ -11,6 +11,15 @@ default = []
 # Perfil de release mínima: sin drivers opcionales (Postgres/SQLite van en el runtime base).
 # Uso: `cargo test -p jaiba-cli --features release-core` / `scripts/smoke-release-core.sh`
 release-core = []
+# Todos los conectores opcionales (p. ej. sidecar del desktop: `npm run desktop:build:full`).
+# Oracle necesita Instant Client al ejecutar; Kafka necesita CMake al compilar.
+all-drivers = [
+    "oracle-driver",
+    "sqlserver-driver",
+    "kafka-driver",
+    "mongodb-driver",
+    "clickhouse-driver",
+]
 oracle-driver = ["jaiba-runtime/oracle-driver", "jaiba-server/oracle-driver"]
 sqlserver-driver = ["jaiba-runtime/sqlserver-driver", "jaiba-server/sqlserver-driver"]
 kafka-driver = ["jaiba-runtime/kafka-driver", "jaiba-server/kafka-driver"]

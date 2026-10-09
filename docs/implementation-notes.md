@@ -756,6 +756,25 @@ driver.
 - firmado/auto-update del instalador desktop;
 - SSO / gestión de usuarios en UI.
 
+## Desktop con todos los conectores (2026-10)
+
+1. **Problema:** el `.exe` del desktop solo trae los conectores con que se
+   compiló el sidecar, y había que recordar cinco `--features`.
+2. **Archivos:** feature `all-drivers` en `crates/jaiba-cli/Cargo.toml`,
+   script `desktop:build:full` en `apps/jaiba-ui/package.json`,
+   `scripts/prepare-desktop-sidecar.mjs` (respeta `CARGO_TARGET_DIR`), guía
+   `docs/windows-native-and-wsl.md`.
+3. **Decisión:** `all-drivers` solo agrupa features existentes; el release
+   Linux y la imagen siguen en `release-core` (sin Oracle/Kafka). Oracle
+   Instant Client no se empaqueta: lo instala quien use Oracle.
+4. **Prueba:** nuevo job de CI `clippy (all-drivers)` (workspace con
+   `--features jaiba-cli/all-drivers`). Al activarlo salieron cuatro avisos
+   que el CI no veía (dos `Default` derivables, un `MutexGuard` cruzando un
+   `await` en un test de Kafka y un `if` anidado en `connection_api`); ya
+   corregidos.
+5. **Limitación:** no hay build de Windows en CI; Kafka en Windows requiere
+   CMake y no está validado allí.
+
 ## Regla para futuras implementaciones
 
 Al terminar una característica, añadir aquí:

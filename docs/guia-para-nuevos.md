@@ -40,6 +40,7 @@ comando completo:
 | Kafka | `cargo run --features kafka-driver -- serve examples/basic-flow.yaml` |
 | SQL Server | `cargo run --features sqlserver-driver -- serve examples/basic-flow.yaml` |
 | Varios a la vez | `cargo run --features oracle-driver,mongodb-driver,kafka-driver -- serve …` |
+| Todos | `cargo run --features all-drivers -- serve …` (Kafka pide CMake) |
 
 Si el error dice *procesador '…' no disponible: activa --features …*:
 **activa ese `--features …`**, no busques un typo primero.

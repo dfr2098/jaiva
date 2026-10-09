@@ -16,6 +16,15 @@ sqlserver-driver = ["jaiba-runtime/sqlserver-driver", "jaiba-server/sqlserver-dr
 kafka-driver = ["jaiba-runtime/kafka-driver", "jaiba-server/kafka-driver"]
 mongodb-driver = ["jaiba-runtime/mongodb-driver", "jaiba-server/mongodb-driver"]
 clickhouse-driver = ["jaiba-runtime/clickhouse-driver", "jaiba-server/clickhouse-driver"]
+# Todos los conectores opcionales (p. ej. sidecar del desktop: `npm run desktop:build:full`).
+# Oracle necesita Instant Client al ejecutar; Kafka necesita CMake al compilar.
+all-drivers = [
+    "oracle-driver",
+    "sqlserver-driver",
+    "kafka-driver",
+    "mongodb-driver",
+    "clickhouse-driver",
+]
 
 [dependencies]
 jaiba-core = { path = "../jaiba-core" }

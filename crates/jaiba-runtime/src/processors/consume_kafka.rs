@@ -37,17 +37,12 @@ pub struct ConsumeKafka {
     decode: DecodeMode,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum DecodeMode {
+    #[default]
     Json,
     Bytes,
-}
-
-impl Default for DecodeMode {
-    fn default() -> Self {
-        Self::Json
-    }
 }
 
 #[derive(Deserialize)]
@@ -515,18 +510,19 @@ connections:
             .expect("consume flow");
         assert_eq!(consume_summary.failed, 0);
 
-        let packets = captured.lock().expect("capture poisoned");
-        assert_eq!(packets.len(), 2, "expected two Kafka messages as packets");
-        for packet in packets.iter() {
-            assert!(packet.attributes.contains_key("kafka.offset"));
-            assert_eq!(
-                packet.attributes.get("kafka.topic").map(String::as_str),
-                Some(topic.as_str())
-            );
-            let records = packet.records().expect("records payload");
-            assert_eq!(records.len(), 1);
+        {
+            let packets = captured.lock().expect("capture poisoned");
+            assert_eq!(packets.len(), 2, "expected two Kafka messages as packets");
+            for packet in packets.iter() {
+                assert!(packet.attributes.contains_key("kafka.offset"));
+                assert_eq!(
+                    packet.attributes.get("kafka.topic").map(String::as_str),
+                    Some(topic.as_str())
+                );
+                let records = packet.records().expect("records payload");
+                assert_eq!(records.len(), 1);
+            }
         }
-        drop(packets);
         delete_topic(&brokers, &topic).await;
     }
 

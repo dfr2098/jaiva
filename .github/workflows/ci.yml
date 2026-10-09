@@ -48,6 +48,22 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  drivers:
+    name: clippy (all-drivers)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: clippy con Oracle, SQL Server, Kafka, MongoDB y ClickHouse
+        run: cargo clippy --workspace --all-targets --features jaiba-cli/all-drivers -- -D warnings
+
   desktop:
     name: Tauri check
     runs-on: ubuntu-latest

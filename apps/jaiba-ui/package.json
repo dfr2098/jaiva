@@ -14,6 +14,7 @@
     "desktop:sidecar": "node ../../scripts/prepare-desktop-sidecar.mjs",
     "desktop:dev": "npm run desktop:sidecar && node ../../scripts/run-desktop.mjs dev",
     "desktop:build": "npm run desktop:sidecar -- release && node ../../scripts/run-desktop.mjs build",
+    "desktop:build:full": "cargo build --manifest-path ../../Cargo.toml --release -p jaiba-cli --bin jaiba --features all-drivers && npm run desktop:build",
     "desktop:run": "node ../../scripts/run-desktop.mjs run"
   },
   "dependencies": {

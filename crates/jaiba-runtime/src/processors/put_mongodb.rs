@@ -23,9 +23,10 @@ pub struct PutMongoDb {
     ordered: bool,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum MongoWriteMode {
+    #[default]
     Insert,
     Upsert,
 }
@@ -42,12 +43,6 @@ struct PutMongoDbConfig {
     batch_size: usize,
     #[serde(default = "default_ordered")]
     ordered: bool,
-}
-
-impl Default for MongoWriteMode {
-    fn default() -> Self {
-        Self::Insert
-    }
 }
 
 fn default_key_fields() -> Vec<String> {

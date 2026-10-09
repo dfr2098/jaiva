@@ -140,6 +140,17 @@ cd apps/jaiba-ui
 npm run desktop:build
 ```
 
+Los conectores del desktop son los del sidecar: `desktop:build` empaqueta el
+`jaiba` que haya en `target/release`. Para incluir Oracle, SQL Server,
+MongoDB, ClickHouse y Kafka en un solo paso:
+
+```bash
+npm run desktop:build:full   # cargo build --features all-drivers + desktop:build
+```
+
+Requisitos y detalles en
+[windows-native-and-wsl.md](../../docs/windows-native-and-wsl.md#desktop-con-todas-las-bases).
+
 Si Tauri indica que falta `binaries/jaiba-<target-triple>`, ejecuta primero
 `npm run desktop:sidecar` desde este directorio.
 

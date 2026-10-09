@@ -36,15 +36,31 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Node.js (consola incrustada)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/jaiba-ui/package-lock.json
+
+      - name: Build consola
+        working-directory: apps/jaiba-ui
+        run: npm ci && npm run build
+
       - name: Build
         run: |
-          cargo build --release -p jaiba-cli --features release-core --bin jaiba
+          cargo build --release -p jaiba-cli --features release-core,embedded-ui --bin jaiba
           strip target/release/jaiba
           tar -C target/release -czf "jaiba-linux-x86_64.tar.gz" jaiba
           shasum -a 256 jaiba-linux-x86_64.tar.gz > jaiba-linux-x86_64.sha256
 
       - name: Smoke del binario publicado
-        run: ./target/release/jaiba examples/smoke.yaml
+        run: |
+          ./target/release/jaiba examples/smoke.yaml
+          JAIBA_ADMIN_AUTH=none JAIBA_SERVER_ADDR=127.0.0.1:19090 ./target/release/jaiba serve &
+          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:19090/health && break; sleep 1; done
+          curl -fsS http://127.0.0.1:19090/ | grep -q __JAIBA_API_BASE__
+          kill %1
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -122,13 +138,15 @@ jobs:
             ```bash
             curl -LO https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/jaiba-linux-x86_64.tar.gz
             tar xzf jaiba-linux-x86_64.tar.gz
-            ./jaiba serve flujo.yaml        # API en http://127.0.0.1:9090
+            JAIBA_ADMIN_AUTH=none ./jaiba serve   # prueba local: consola en http://127.0.0.1:9090/
+            ./jaiba validate flujo.yaml           # revisar un flujo sin ejecutarlo
             ```
 
+            La consola web va incluida: abre http://127.0.0.1:9090/ en el navegador.
+            `JAIBA_ADMIN_AUTH=none` solo se acepta en loopback; con
+            `JAIBA_ADMIN_TOKEN` pega el token en **Acceso** de la consola.
             Incluye PostgreSQL, MySQL/MariaDB, SQLite y archivos. Oracle, SQL Server,
             MongoDB, Kafka y ClickHouse requieren compilar con su `--features`.
-            La consola visual se levanta aparte desde el repo: `apps/jaiba-ui`
-            (`docker compose up -d --build`).
 
             ## Artefactos
             - Binario Linux x86_64 (`release-core`): `jaiba-linux-x86_64.tar.gz`
@@ -140,4 +158,5 @@ jobs:
               -e JAIBA_MASTER_KEY=change-me \
               -e JAIBA_ADMIN_TOKEN=change-me \
               ghcr.io/${{ github.repository_owner }}/jaiba-serve:${{ github.ref_name }}
+            # consola en http://127.0.0.1:9090/ (token en "Acceso")
             ```

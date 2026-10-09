@@ -21,7 +21,9 @@ tarda; las siguientes son más rápidas.
 
 ¿Sin Rust? Descarga el binario de
 [Releases](https://github.com/dfr2098/jaiva/releases) y usa `./jaiba` donde
-aquí dice `cargo run --`.
+aquí dice `cargo run --`. Ese binario trae la consola web: con
+`./jaiba serve` ábrela en http://127.0.0.1:9090/ (con `cargo run` hay que
+compilarla aparte, ver [operations.md](operations.md#interfaz-opcional)).
 
 Antes de ejecutar un flujo propio, revísalo sin ejecutarlo:
 `cargo run -- validate mi-flujo.yaml` (dice qué falla y qué variables de

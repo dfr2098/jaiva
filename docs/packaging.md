@@ -2,7 +2,9 @@
 
 ## Imagen `jaiba-serve`
 
-Slim, perfil `release-core` (Postgres/SQLite; sin Oracle/Kafka/Mongo/SQL Server).
+Slim, perfil `release-core` (Postgres/SQLite; sin Oracle/Kafka/Mongo/SQL Server)
+con la consola web incrustada (`embedded-ui`): una etapa Node compila
+`apps/jaiba-ui` y el binario la sirve en `http://127.0.0.1:9090/`.
 
 ```bash
 docker build -f deploy/Dockerfile.jaiba-serve -t jaiba-serve:local .
@@ -23,7 +25,9 @@ Workflow [`.github/workflows/release.yml`](../.github/workflows/release.yml):
 - Trigger: tag `v*` (o `workflow_dispatch`).
 - Artefacto: `jaiba-linux-x86_64.tar.gz` + checksum. Se compila en
   `ubuntu-22.04` para que corra con glibc 2.35+ (Debian 12, Ubuntu 22.04+,
-  RHEL 9+) y se prueba con `examples/smoke.yaml` antes de subirlo.
+  RHEL 9+) con `release-core,embedded-ui` (compila antes la consola con Node) y
+  se prueba con `examples/smoke.yaml` y con `jaiba serve` sirviendo `/` antes
+  de subirlo.
 - Imagen: `ghcr.io/<owner>/jaiba-serve:<version>`.
 
 El tag debe coincidir con `version` de `[workspace.package]` en `Cargo.toml`

@@ -720,6 +720,33 @@ driver.
 5. **Limitación:** la ayuda es texto fijo; un subcomando nuevo hay que
    añadirlo a mano en `help_text` (el test comprueba los actuales).
 
+## Consola incrustada en `jaiba serve` (2026-10)
+
+1. **Problema:** para usar la consola había que levantar un segundo servicio
+   (Nginx en Docker o Vite) y configurar el proxy hacia la API.
+2. **Archivos:** `crates/jaiba-server/src/ui.rs` (nuevo; fallback del router),
+   `observability.rs` (`.fallback(crate::ui::console)` y log `consola web: …`),
+   features `embedded-ui` en `jaiba-server` y `jaiba-cli` (`rust-embed`),
+   `release.yml`, `ci.yml`, `deploy/Dockerfile.jaiba-serve` (etapa Node).
+3. **Decisiones:**
+   - La incrustación es una feature de compilación: `cargo build` sin Node
+     sigue funcionando; release y la imagen `jaiba-serve` la activan.
+   - Se sirve en el fallback, así que ninguna ruta de API cambia; `api/…`
+     desconocido sigue siendo 404 y no cae en `index.html`.
+   - `index.html` recibe `window.__JAIBA_API_BASE__=window.location.origin`:
+     mismo origen, sin CORS ni proxy. Los estáticos no exigen token (no
+     contienen datos); la API sigue con su autenticación.
+   - `assets/` (nombres con hash) con caché `immutable`; el resto `no-cache`.
+     Rutas sin extensión devuelven `index.html` (navegación del SPA).
+   - Sin la feature, `/` responde 404 con una página que explica cómo
+     obtener la consola.
+4. **Prueba:** tests de `ui::` con y sin la feature (CI corre
+   `npm run build` + clippy/test con `embedded-ui`); el release arranca
+   `jaiba serve` y verifica que `/` sirve la consola.
+5. **Limitación:** `cargo run` normal no incluye la consola; hay que compilar
+   `apps/jaiba-ui` y activar `embedded-ui`. El binario crece ~4 MB
+   (lo que pesa `dist/`).
+
 ## Trabajo posterior a la fase 9 / 10A–10C
 
 - procesadores ejecutables de consulta para MySQL y SQL Server;

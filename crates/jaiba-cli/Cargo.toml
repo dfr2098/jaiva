@@ -16,6 +16,8 @@ sqlserver-driver = ["jaiba-runtime/sqlserver-driver", "jaiba-server/sqlserver-dr
 kafka-driver = ["jaiba-runtime/kafka-driver", "jaiba-server/kafka-driver"]
 mongodb-driver = ["jaiba-runtime/mongodb-driver", "jaiba-server/mongodb-driver"]
 clickhouse-driver = ["jaiba-runtime/clickhouse-driver", "jaiba-server/clickhouse-driver"]
+# Consola web dentro del binario (requiere `npm run build` en apps/jaiba-ui).
+embedded-ui = ["jaiba-server/embedded-ui"]
 
 [dependencies]
 jaiba-core = { path = "../jaiba-core" }

@@ -3,7 +3,7 @@
 
 [package]
 name = "jaiba-desktop"
-version = "0.2.1"
+version = "0.3.0"
 description = "Cliente de escritorio Jaiba (UI embebida, remoto o sidecar local)"
 authors = ["Jaiba"]
 edition = "2021"

@@ -14,9 +14,13 @@ if (!triple) {
   throw new Error("No se pudo determinar el target triple mediante `rustc -vV`");
 }
 
+const targetDirectory = process.env.CARGO_TARGET_DIR
+  ? path.resolve(process.env.CARGO_TARGET_DIR)
+  : path.join(root, "target");
+
 let source;
 if (argument === "debug" || argument === "release") {
-  source = path.join(root, "target", argument, `jaiba${executableSuffix}`);
+  source = path.join(targetDirectory, argument, `jaiba${executableSuffix}`);
 } else {
   source = path.resolve(argument);
 }

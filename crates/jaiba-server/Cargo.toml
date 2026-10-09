@@ -12,6 +12,9 @@ sqlserver-driver = ["jaiba-runtime/sqlserver-driver", "dep:tiberius", "dep:tokio
 kafka-driver = ["jaiba-runtime/kafka-driver"]
 mongodb-driver = ["jaiba-runtime/mongodb-driver", "dep:mongodb", "dep:url"]
 clickhouse-driver = ["jaiba-runtime/clickhouse-driver", "dep:url"]
+# Incrusta la consola (`apps/jaiba-ui/dist`, hay que correr `npm run build`
+# antes) y la sirve en `/` desde `jaiba serve`.
+embedded-ui = ["dep:rust-embed"]
 
 [dependencies]
 jaiba-connection-manager = { path = "../jaiba-connection-manager" }
@@ -38,6 +41,7 @@ tiberius = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 mongodb = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
+rust-embed = { version = "8", features = ["mime-guess", "debug-embed"], optional = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

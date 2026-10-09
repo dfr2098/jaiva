@@ -655,12 +655,12 @@ fn materialize_connection(
         .unwrap_or_default();
     // Si el perfil ya tenía URI (Atlas/SRV), actualizar credenciales en ella.
     #[cfg(feature = "mongodb-driver")]
-    if input.connection_type == ConnectionType::MongoDb {
-        if let Some(stored) = options.get("connection_url").cloned() {
-            let updated = apply_credentials_to_mongo_url(&stored, &username, &password)
-                .map_err(bad_request)?;
-            options.insert("connection_url".to_owned(), updated);
-        }
+    if input.connection_type == ConnectionType::MongoDb
+        && let Some(stored) = options.get("connection_url").cloned()
+    {
+        let updated =
+            apply_credentials_to_mongo_url(&stored, &username, &password).map_err(bad_request)?;
+        options.insert("connection_url".to_owned(), updated);
     }
     let database = input
         .database

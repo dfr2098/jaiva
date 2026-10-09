@@ -698,6 +698,55 @@ driver.
    catálogo de la UI sigue siendo estático (solo se deshabilitan entradas, no
    se descubren nuevas).
 
+## CLI: ayuda, versión y `jaiba validate` (v0.2.1, 2026-10)
+
+1. **Problema:** con el binario publicado en v0.2.0, `jaiba --help` y
+   `--version` fallaban (se tomaban como ruta de archivo) y sin argumentos se
+   ejecutaba `examples/basic-flow.yaml` en silencio; no había forma de revisar
+   un flujo sin ejecutarlo.
+2. **Archivos:** `jaiba-cli/src/lib.rs` (`help_text`, `validate_command`,
+   `missing_env_vars`, `read_flow`), `jaiba-server` (`parse_and_validate`
+   pasa a ser público), versión 0.2.1 en `Cargo.toml`, `package.json`,
+   `tauri.conf.json` y locks.
+3. **Decisión:** sin dependencia nueva (se mantiene el parseo manual);
+   `validate` reutiliza `parse_and_validate` del servidor para que CLI y
+   `POST /api/v1/flows/validate` no diverjan. Las variables de entorno sin
+   definir son aviso, no error (pueden definirse en el entorno de ejecución).
+   Un YAML sin `processors` se reporta como "no es un flujo" (políticas JME,
+   `prometheus.yaml`).
+4. **Prueba:** `every_example_flow_validates_or_names_its_missing_feature`
+   recorre `examples/` (falla si un ejemplo se rompe), más tests de ayuda,
+   errores y variables.
+5. **Limitación:** la ayuda es texto fijo; un subcomando nuevo hay que
+   añadirlo a mano en `help_text` (el test comprueba los actuales).
+
+## Consola incrustada en `jaiba serve` (2026-10)
+
+1. **Problema:** para usar la consola había que levantar un segundo servicio
+   (Nginx en Docker o Vite) y configurar el proxy hacia la API.
+2. **Archivos:** `crates/jaiba-server/src/ui.rs` (nuevo; fallback del router),
+   `observability.rs` (`.fallback(crate::ui::console)` y log `consola web: …`),
+   features `embedded-ui` en `jaiba-server` y `jaiba-cli` (`rust-embed`),
+   `release.yml`, `ci.yml`, `deploy/Dockerfile.jaiba-serve` (etapa Node).
+3. **Decisiones:**
+   - La incrustación es una feature de compilación: `cargo build` sin Node
+     sigue funcionando; release y la imagen `jaiba-serve` la activan.
+   - Se sirve en el fallback, así que ninguna ruta de API cambia; `api/…`
+     desconocido sigue siendo 404 y no cae en `index.html`.
+   - `index.html` recibe `window.__JAIBA_API_BASE__=window.location.origin`:
+     mismo origen, sin CORS ni proxy. Los estáticos no exigen token (no
+     contienen datos); la API sigue con su autenticación.
+   - `assets/` (nombres con hash) con caché `immutable`; el resto `no-cache`.
+     Rutas sin extensión devuelven `index.html` (navegación del SPA).
+   - Sin la feature, `/` responde 404 con una página que explica cómo
+     obtener la consola.
+4. **Prueba:** tests de `ui::` con y sin la feature (CI corre
+   `npm run build` + clippy/test con `embedded-ui`); el release arranca
+   `jaiba serve` y verifica que `/` sirve la consola.
+5. **Limitación:** `cargo run` normal no incluye la consola; hay que compilar
+   `apps/jaiba-ui` y activar `embedded-ui`. El binario crece ~4 MB
+   (lo que pesa `dist/`).
+
 ## Trabajo posterior a la fase 9 / 10A–10C
 
 - procesadores ejecutables de consulta para MySQL y SQL Server;
@@ -706,6 +755,25 @@ driver.
 - Phase 8 en CI con servicios efímeros (hoy: self-hosted / manual);
 - firmado/auto-update del instalador desktop;
 - SSO / gestión de usuarios en UI.
+
+## Desktop con todos los conectores (2026-10)
+
+1. **Problema:** el `.exe` del desktop solo trae los conectores con que se
+   compiló el sidecar, y había que recordar cinco `--features`.
+2. **Archivos:** feature `all-drivers` en `crates/jaiba-cli/Cargo.toml`,
+   script `desktop:build:full` en `apps/jaiba-ui/package.json`,
+   `scripts/prepare-desktop-sidecar.mjs` (respeta `CARGO_TARGET_DIR`), guía
+   `docs/windows-native-and-wsl.md`.
+3. **Decisión:** `all-drivers` solo agrupa features existentes; el release
+   Linux y la imagen siguen en `release-core` (sin Oracle/Kafka). Oracle
+   Instant Client no se empaqueta: lo instala quien use Oracle.
+4. **Prueba:** nuevo job de CI `clippy (all-drivers)` (workspace con
+   `--features jaiba-cli/all-drivers`). Al activarlo salieron cuatro avisos
+   que el CI no veía (dos `Default` derivables, un `MutexGuard` cruzando un
+   `await` en un test de Kafka y un `if` anidado en `connection_api`); ya
+   corregidos.
+5. **Limitación:** no hay build de Windows en CI; Kafka en Windows requiere
+   CMake y no está validado allí.
 
 ## Regla para futuras implementaciones
 

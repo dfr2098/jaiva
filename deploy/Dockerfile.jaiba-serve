@@ -1,6 +1,15 @@
 # syntax=docker/dockerfile:1
-# Imagen slim de producto: `jaiba serve` (release-core, sin drivers opcionales).
+# Imagen slim de producto: `jaiba serve` (release-core, sin drivers opcionales)
+# con la consola web incrustada en `/`.
 # Tags sugeridos: jaiba-serve:latest / ghcr.io/<org>/jaiba-serve:<version>
+FROM node:22-bookworm-slim AS ui
+WORKDIR /ui
+COPY apps/jaiba-ui/package.json apps/jaiba-ui/package-lock.json ./
+RUN npm ci
+COPY apps/jaiba-ui/index.html apps/jaiba-ui/tsconfig.json apps/jaiba-ui/vite.config.ts ./
+COPY apps/jaiba-ui/src ./src
+RUN npm run build
+
 FROM rust:1.88-bookworm AS build
 WORKDIR /src
 RUN apt-get update \
@@ -9,7 +18,8 @@ RUN apt-get update \
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY simulator ./simulator
-RUN cargo build --release -p jaiba-cli --features release-core --bin jaiba \
+COPY --from=ui /ui/dist ./apps/jaiba-ui/dist
+RUN cargo build --release -p jaiba-cli --features release-core,embedded-ui --bin jaiba \
     && strip /src/target/release/jaiba
 
 FROM debian:bookworm-slim

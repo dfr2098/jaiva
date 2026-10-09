@@ -113,6 +113,43 @@ cd apps\jaiba-ui
 npm run desktop:build
 ```
 
+### Desktop con todas las bases
+
+La app no trae conectores propios: usa los del sidecar `jaiba.exe`, y
+`desktop:build` empaqueta el que haya en `target\release` (o en
+`%CARGO_TARGET_DIR%\release`). Para incluir Oracle, SQL Server, MongoDB,
+ClickHouse y Kafka:
+
+```powershell
+cd apps\jaiba-ui
+npm ci
+npm run desktop:build:full
+```
+
+Equivale a `cargo build --release -p jaiba-cli --bin jaiba --features all-drivers`
+seguido de `npm run desktop:build`. Para elegir solo algunos, compila el sidecar
+con sus features y luego `npm run desktop:build`:
+
+```powershell
+cargo build --release -p jaiba-cli --bin jaiba --features oracle-driver,sqlserver-driver,mongodb-driver
+cd apps\jaiba-ui
+npm run desktop:build
+```
+
+| Conector | Para compilar | En la PC donde se instala |
+|---|---|---|
+| SQL Server, MongoDB, ClickHouse | Nada extra (Rust puro) | Nada |
+| Oracle | Build Tools de C++ (ya requeridas) | Oracle Instant Client 64-bit con `oci.dll` en el `PATH` |
+| Kafka | CMake en el `PATH` (compila librdkafka y curl) | Nada |
+
+El instalador no incluye Oracle Instant Client: sin él, los nodos Oracle
+aparecen en el diseñador pero fallan al conectar. Si Kafka no compila en tu
+máquina, usa la lista de features sin `kafka-driver`.
+
+Para comprobar qué quedó dentro: en la app, **Motor → Local → Arrancar** y en
+el diseñador los nodos de esas bases deben aparecer habilitados (no en gris
+con "activa --features …").
+
 Después de haber generado el binario desktop de depuración:
 
 ```powershell

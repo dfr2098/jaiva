@@ -6,6 +6,13 @@
 cargo run -- examples/basic-flow.yaml
 ```
 
+Revisar un flujo sin ejecutarlo (mismas reglas que
+`POST /api/v1/flows/validate`, más aviso de variables de entorno sin definir):
+
+```bash
+cargo run -- validate examples/postgres-read.yaml
+```
+
 Ejemplos de escritura:
 
 ```bash

@@ -163,16 +163,18 @@ export MYSQL_DATABASE_URL='mysql://usuario:contraseña@localhost:3306/base'
 cargo run -- examples/mysql-write.yaml
 ```
 
-Para ejecutar la consola visual opcional de la fase 8:
+La consola visual de la fase 8 viene dentro del binario publicado y de la imagen
+`jaiba-serve`: `jaiba serve` la sirve en `http://127.0.0.1:9090/`, en el mismo
+puerto que la API. Para incrustarla al compilar desde el repo:
 
 ```bash
-cargo run -- serve examples/visualisa-flow.yaml
-cd visualisa_jaiva
-docker compose up -d --build
+(cd apps/jaiba-ui && npm ci && npm run build)
+cargo run --features release-core,embedded-ui -- serve examples/visualisa-flow.yaml
 ```
 
-La interfaz se abre en `http://127.0.0.1:9080`. Detener su contenedor no detiene
-Jaiva ni sus flujos. El alcance del monitor, diseñador, publicación y
+También puede correr aparte en su contenedor (`cd visualisa_jaiva && docker
+compose up -d --build`, en `http://127.0.0.1:9080`). Detener la consola no
+detiene Jaiva ni sus flujos. El alcance del monitor, diseñador, publicación y
 trazabilidad está documentado en
 [`docs/history/priority-8-visual-console.md`](docs/history/priority-8-visual-console.md).
 

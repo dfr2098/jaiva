@@ -48,6 +48,19 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Node.js (consola incrustada)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/jaiba-ui/package-lock.json
+
+      - name: Consola incrustada (embedded-ui, como en release)
+        run: |
+          (cd apps/jaiba-ui && npm ci && npm run build)
+          cargo clippy -p jaiba-server --features embedded-ui --all-targets -- -D warnings
+          cargo test -p jaiba-server --features embedded-ui ui::
+
   desktop:
     name: Tauri check
     runs-on: ubuntu-latest

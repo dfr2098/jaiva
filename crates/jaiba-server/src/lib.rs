@@ -7,5 +7,6 @@ mod observability;
 mod schedule_store;
 mod scheduler;
 mod sql_builder;
+mod ui;
 
 pub use observability::{ObservabilityServer, parse_and_validate, rotate_connection_master_key};

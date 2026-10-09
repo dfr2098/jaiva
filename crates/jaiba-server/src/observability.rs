@@ -395,6 +395,7 @@ impl ObservabilityServer {
                 "/api/v1/dead-letter/{queue_id}/replay",
                 post(replay_dead_letter),
             )
+            .fallback(crate::ui::console)
             .layer(DefaultBodyLimit::max(body_limit))
             .layer(server_cors()?)
             .with_state(state.clone());
@@ -464,6 +465,7 @@ async fn serve_http_or_https(
                     ))
                 })?;
             tracing::info!(%address, cert = %cert, "HTTPS administration server listening");
+            crate::ui::log_location("https", address);
             let handle = axum_server::Handle::new();
             let shutdown_handle = handle.clone();
             let registry = registry.clone();
@@ -482,6 +484,7 @@ async fn serve_http_or_https(
                 .await
                 .map_err(|error| listen_error(address, error))?;
             tracing::info!(%address, "observability and administration server listening");
+            crate::ui::log_location("http", address);
             axum::serve(listener, app)
                 .with_graceful_shutdown(shutdown_signal(registry))
                 .await

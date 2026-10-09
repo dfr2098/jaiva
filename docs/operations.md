@@ -184,9 +184,22 @@ Perfiles Mongo con URI (`mongodb://` / `mongodb+srv://`) y SQL Server en la UI:
 
 ## Interfaz opcional
 
-`apps/jaiba-ui` se ejecuta en un contenedor Nginx separado. El motor no
-depende de este contenedor y puede continuar por CLI o API cuando la interfaz
-está detenida.
+El binario del release y la imagen `jaiba-serve` traen la consola incrustada
+(feature `embedded-ui`): `jaiba serve` la sirve en `/` del mismo puerto que la
+API (`http://127.0.0.1:9090/`) y al arrancar registra `consola web: …`. Los
+archivos estáticos no requieren token; la API sigue pidiendo el mismo login
+(el token se pega en **Acceso**, en el encabezado de la consola).
+Un binario compilado sin la feature responde en `/` con una página que explica
+cómo obtenerla. Para compilarla localmente:
+
+```bash
+(cd apps/jaiba-ui && npm ci && npm run build)
+cargo build --release -p jaiba-cli --features release-core,embedded-ui --bin jaiba
+```
+
+`apps/jaiba-ui` también puede ejecutarse en un contenedor Nginx separado. El
+motor no depende de la interfaz y puede continuar por CLI o API cuando está
+detenida.
 
 Para desarrollo local sin login:
 

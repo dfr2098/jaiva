@@ -48,6 +48,17 @@ rechazado si se intenta escuchar en una dirección que no sea loopback.
 
 ## Iniciar la interfaz
 
+La forma más simple: el binario del release y la imagen `jaiba-serve` ya la
+incluyen y `jaiba serve` la sirve en `http://127.0.0.1:9090/`. Desde el repo:
+
+```bash
+npm ci && npm run build
+cargo run --features release-core,embedded-ui -- serve examples/visualisa-flow.yaml
+```
+
+La consola incrustada usa el mismo origen que la API, sin proxy ni CORS.
+Como contenedor separado:
+
 ```bash
 cd apps/jaiba-ui
 docker compose up -d --build

@@ -747,6 +747,26 @@ driver.
    `apps/jaiba-ui` y activar `embedded-ui`. El binario crece ~4 MB
    (lo que pesa `dist/`).
 
+## Windows en el release (2026-10)
+
+1. **Problema:** para tener el `.exe` había que instalar Rust, Node, Build
+   Tools y CMake y compilar; además ningún build de Windows se probaba.
+2. **Archivos:** `.github/workflows/windows.yml` (nuevo; PRs con cambios de
+   Rust/desktop, manual y `workflow_call`), `release.yml` (lo llama y sube sus
+   artefactos), `apps/jaiba-ui/src-tauri/src/sidecar.rs` (`CREATE_NO_WINDOW`).
+3. **Decisiones:**
+   - `jaiba.exe` con `all-drivers,embedded-ui`: en Windows no hay imagen
+     Docker, así que el binario trae todo.
+   - Solo instalador NSIS (un `-setup.exe`); MSI no aporta para este uso.
+   - El sidecar se arranca con `CREATE_NO_WINDOW`: la app no tiene consola y
+     Windows abriría una ventana negra para `jaiba.exe`.
+   - Sin firma de código por ahora (SmartScreen lo advierte; documentado).
+4. **Prueba:** el job ejecuta `examples/smoke.yaml`, arranca `jaiba.exe serve`,
+   comprueba la consola en `/` y que `/api/v1/capabilities` incluya
+   `query_oracle`, `query_sqlserver`, `query_mongodb` y `consume_kafka`.
+5. **Limitación:** no se prueba el instalador ni la app ya instalada (solo que
+   se genera); Oracle Instant Client lo instala el usuario.
+
 ## Trabajo posterior a la fase 9 / 10A–10C
 
 - procesadores ejecutables de consulta para MySQL y SQL Server;

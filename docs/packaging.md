@@ -28,6 +28,14 @@ Workflow [`.github/workflows/release.yml`](../.github/workflows/release.yml):
   RHEL 9+) con `release-core,embedded-ui` (compila antes la consola con Node) y
   se prueba con `examples/smoke.yaml` y con `jaiba serve` sirviendo `/` antes
   de subirlo.
+- Windows (job reutilizable [`windows.yml`](../.github/workflows/windows.yml),
+  también en PRs que tocan Rust o el desktop): `jaiba-windows-x86_64.zip`
+  (`jaiba.exe` con `all-drivers,embedded-ui`) y
+  `jaiba-desktop-windows-x86_64-setup.exe` (instalador NSIS de Tauri con ese
+  `jaiba.exe` como sidecar), más `jaiba-windows-x86_64.sha256`. Antes de
+  subirlos verifica `examples/smoke.yaml`, la consola en `/` y que
+  `/api/v1/capabilities` liste Oracle, SQL Server, MongoDB y Kafka. El
+  instalador no se firma.
 - Imagen: `ghcr.io/<owner>/jaiba-serve:<version>`.
 
 El tag debe coincidir con `version` de `[workspace.package]` en `Cargo.toml`

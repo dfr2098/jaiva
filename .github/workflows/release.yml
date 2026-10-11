@@ -1,4 +1,5 @@
-# Publica binario Linux + imagen Docker `jaiba-serve` en tags v*.
+# Publica binario Linux, jaiba.exe + instalador desktop de Windows e imagen
+# Docker `jaiba-serve` en tags v*.
 name: Release
 
 on:
@@ -111,9 +112,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  windows:
+    name: Windows
+    uses: ./.github/workflows/windows.yml
+
   github-release:
     name: GitHub Release
-    needs: [binary, image]
+    needs: [binary, image, windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -125,6 +130,11 @@ jobs:
         with:
           name: jaiba-linux-x86_64
 
+      - name: Download Windows
+        uses: actions/download-artifact@v4
+        with:
+          name: jaiba-windows-x86_64
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -132,7 +142,24 @@ jobs:
           files: |
             jaiba-linux-x86_64.tar.gz
             jaiba-linux-x86_64.sha256
+            jaiba-windows-x86_64.zip
+            jaiba-desktop-windows-x86_64-setup.exe
+            jaiba-windows-x86_64.sha256
           body: |
+            ## Windows 10/11 (x64)
+
+            - **App de escritorio:** `jaiba-desktop-windows-x86_64-setup.exe`. Instala
+              Jaiba con su motor incluido (**Motor → Local → Arrancar**).
+            - **Solo el motor:** `jaiba-windows-x86_64.zip` con `jaiba.exe`; en PowerShell
+              `$env:JAIBA_ADMIN_AUTH="none"; .\jaiba.exe serve` y abre http://127.0.0.1:9090/.
+
+            Ambos traen todos los conectores: PostgreSQL, MySQL/MariaDB, SQLite, archivos,
+            Oracle, SQL Server, MongoDB, Kafka y ClickHouse. Para Oracle instala además
+            [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/winx64-64-downloads.html)
+            64-bit y agrega su carpeta al `PATH`. El instalador no está firmado: si
+            Windows muestra "Windows protegió su PC", elige **Más información →
+            Ejecutar de todas formas**.
+
             ## Instalar (Linux x86_64, glibc 2.35+)
 
             ```bash
@@ -145,8 +172,9 @@ jobs:
             La consola web va incluida: abre http://127.0.0.1:9090/ en el navegador.
             `JAIBA_ADMIN_AUTH=none` solo se acepta en loopback; con
             `JAIBA_ADMIN_TOKEN` pega el token en **Acceso** de la consola.
-            Incluye PostgreSQL, MySQL/MariaDB, SQLite y archivos. Oracle, SQL Server,
-            MongoDB, Kafka y ClickHouse requieren compilar con su `--features`.
+            Incluye PostgreSQL, MySQL/MariaDB, SQLite y archivos. En Linux, Oracle,
+            SQL Server, MongoDB, Kafka y ClickHouse requieren compilar con
+            `--features all-drivers` (los builds de Windows ya los traen).
 
             ## Artefactos
             - Binario Linux x86_64 (`release-core`): `jaiba-linux-x86_64.tar.gz`

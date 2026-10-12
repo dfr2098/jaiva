@@ -162,6 +162,13 @@ impl EngineManager {
             .env("JAIBA_SERVER_ADDR", listen.to_string())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // Sin esto, Windows abre una consola aparte para jaiba.exe (la app no tiene consola).
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
 
         let mut child = command.spawn().map_err(|error| {
             format!(

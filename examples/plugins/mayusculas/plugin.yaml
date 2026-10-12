@@ -1,0 +1,9 @@
+# Manifiesto de un plugin externo. Jaiba lo busca en $JAIBA_PLUGIN_DIR/<id>/plugin.yaml
+# y el flujo solo lo nombra: `type: external_plugin` con `plugin: mayusculas`.
+id: mayusculas
+version: 0.1.0
+description: Pasa a mayúsculas los campos de texto indicados en `fields`.
+# Un programa del PATH o una ruta relativa a esta carpeta (./mi-plugin).
+# En Windows suele ser `python` o `py` en lugar de `python3`.
+command: python3
+args: [mayusculas.py]

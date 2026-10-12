@@ -3,6 +3,21 @@
 Guía para compilar, probar y ejecutar Jaiba desde PowerShell/CMD o desde WSL2
 compartiendo el mismo repositorio.
 
+## Solo quiero usarlo (sin compilar)
+
+Cada [release](https://github.com/dfr2098/jaiva/releases) trae, compilados en
+GitHub con todos los conectores:
+
+- `jaiba-desktop-windows-x86_64-setup.exe`: instalador de la app de escritorio
+  con el motor incluido (**Motor → Local → Arrancar**).
+- `jaiba-windows-x86_64.zip`: solo `jaiba.exe`, con la consola web en
+  `http://127.0.0.1:9090/` al correr `jaiba.exe serve`.
+
+Para Oracle hace falta Oracle Instant Client 64-bit en el `PATH`. El
+instalador no está firmado; Windows SmartScreen pide **Más información →
+Ejecutar de todas formas**. El workflow
+[`windows.yml`](../.github/workflows/windows.yml) los construye y prueba.
+
 ## Qué ejecutar en cada entorno
 
 | Tarea | Windows nativo | WSL2 |

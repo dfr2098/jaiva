@@ -1,0 +1,115 @@
+# jaiba.exe (todos los conectores + consola) e instalador del desktop para Windows.
+# Corre en PRs que tocan Rust o el desktop, a mano, y desde release.yml en cada tag.
+name: Windows
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "crates/**"
+      - "apps/jaiba-ui/package.json"
+      - "apps/jaiba-ui/package-lock.json"
+      - "apps/jaiba-ui/src-tauri/**"
+      - "scripts/prepare-desktop-sidecar.mjs"
+      - ".github/workflows/windows.yml"
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Windows (jaiba.exe + desktop)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            apps/jaiba-ui/src-tauri -> target
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/jaiba-ui/package-lock.json
+
+      - name: Build consola
+        working-directory: apps/jaiba-ui
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          npm ci
+          npm run build
+
+      # Kafka compila librdkafka y curl con CMake (preinstalado en el runner).
+      - name: Build jaiba.exe (todos los conectores + consola)
+        run: cargo build --release -p jaiba-cli --bin jaiba --features all-drivers,embedded-ui
+
+      - name: Smoke de jaiba.exe
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          target\release\jaiba.exe --version
+          target\release\jaiba.exe examples\smoke.yaml
+          $env:JAIBA_ADMIN_AUTH = "none"
+          $env:JAIBA_SERVER_ADDR = "127.0.0.1:19090"
+          $server = Start-Process target\release\jaiba.exe -ArgumentList serve -PassThru -NoNewWindow
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 30 -and -not $ready; $i++) {
+              try {
+                Invoke-WebRequest http://127.0.0.1:19090/health -UseBasicParsing | Out-Null
+                $ready = $true
+              } catch {
+                Start-Sleep -Seconds 1
+              }
+            }
+            $root = Invoke-WebRequest http://127.0.0.1:19090/ -UseBasicParsing
+            if ($root.Content -notmatch "__JAIBA_API_BASE__") { throw "jaiba serve no entrega la consola en /" }
+            $capabilities = Invoke-RestMethod http://127.0.0.1:19090/api/v1/capabilities
+            foreach ($type in "query_oracle", "query_sqlserver", "query_mongodb", "consume_kafka") {
+              if ($capabilities.processor_types -notcontains $type) { throw "falta el conector $type" }
+            }
+          } finally {
+            Stop-Process -Id $server.Id -Force
+          }
+
+      - name: Instalador desktop (NSIS)
+        working-directory: apps/jaiba-ui
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          node ../../scripts/prepare-desktop-sidecar.mjs release
+          npm run tauri -- build --bundles nsis
+
+      - name: Empaquetar
+        run: |
+          New-Item -ItemType Directory -Force dist-windows | Out-Null
+          Compress-Archive -Path target\release\jaiba.exe -DestinationPath dist-windows\jaiba-windows-x86_64.zip
+          $setup = Get-ChildItem apps\jaiba-ui\src-tauri\target\release\bundle\nsis\*-setup.exe | Select-Object -First 1
+          if (-not $setup) { throw "no se generó el instalador NSIS" }
+          Copy-Item $setup.FullName dist-windows\jaiba-desktop-windows-x86_64-setup.exe
+          $files = Get-ChildItem dist-windows -File
+          $lines = foreach ($file in $files) {
+            "{0}  {1}" -f (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower(), $file.Name
+          }
+          $lines | Out-File -Encoding ascii dist-windows\jaiba-windows-x86_64.sha256
+          Get-ChildItem dist-windows | Format-Table Name, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jaiba-windows-x86_64
+          path: dist-windows/

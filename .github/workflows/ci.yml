@@ -36,6 +36,11 @@ jobs:
       - name: Build CLI for offline regressions
         run: cargo build -p jaiba-cli --bin jaiba
 
+      - name: Plugin externo de ejemplo (Python)
+        run: |
+          JAIBA_PLUGIN_DIR=examples/plugins ./target/debug/jaiba examples/plugins/mayusculas-flow.yaml 2>&1 | tee plugin.log
+          grep -q '"name":"ADA"' plugin.log
+
       - name: Memory and administrative API regressions
         run: python3 scripts/review-regression.py
 

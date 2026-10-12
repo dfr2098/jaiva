@@ -20,8 +20,9 @@ Ese es el **único camino de arranque** el primer día. La primera compilación
 tarda; las siguientes son más rápidas.
 
 ¿Sin Rust? Descarga el binario de
-[Releases](https://github.com/dfr2098/jaiva/releases) y usa `./jaiba` donde
-aquí dice `cargo run --`. Ese binario trae la consola web: con
+[Releases](https://github.com/dfr2098/jaiva/releases) (Linux, o en Windows
+`jaiba.exe` / el instalador de la app) y usa `./jaiba` donde aquí dice
+`cargo run --`. Ese binario trae la consola web: con
 `./jaiba serve` ábrela en http://127.0.0.1:9090/ (con `cargo run` hay que
 compilarla aparte, ver [operations.md](operations.md#interfaz-opcional)).
 

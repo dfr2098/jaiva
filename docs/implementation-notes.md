@@ -747,6 +747,59 @@ driver.
    `apps/jaiba-ui` y activar `embedded-ui`. El binario crece ~4 MB
    (lo que pesa `dist/`).
 
+## Windows en el release (2026-10)
+
+1. **Problema:** para tener el `.exe` había que instalar Rust, Node, Build
+   Tools y CMake y compilar; además ningún build de Windows se probaba.
+2. **Archivos:** `.github/workflows/windows.yml` (nuevo; PRs con cambios de
+   Rust/desktop, manual y `workflow_call`), `release.yml` (lo llama y sube sus
+   artefactos), `apps/jaiba-ui/src-tauri/src/sidecar.rs` (`CREATE_NO_WINDOW`).
+3. **Decisiones:**
+   - `jaiba.exe` con `all-drivers,embedded-ui`: en Windows no hay imagen
+     Docker, así que el binario trae todo.
+   - Solo instalador NSIS (un `-setup.exe`); MSI no aporta para este uso.
+   - El sidecar se arranca con `CREATE_NO_WINDOW`: la app no tiene consola y
+     Windows abriría una ventana negra para `jaiba.exe`.
+   - Sin firma de código por ahora (SmartScreen lo advierte; documentado).
+4. **Prueba:** el job ejecuta `examples/smoke.yaml`, arranca `jaiba.exe serve`,
+   comprueba la consola en `/` y que `/api/v1/capabilities` incluya
+   `query_oracle`, `query_sqlserver`, `query_mongodb` y `consume_kafka`.
+5. **Limitación:** no se prueba el instalador ni la app ya instalada (solo que
+   se genera); Oracle Instant Client lo instala el usuario.
+
+## Plugins externos: nodo `external_plugin` (2026-10)
+
+1. **Problema:** el protocolo de plugins aislados (`jaiba_plugin_sdk::isolated`,
+   JSON Lines v1) existía pero ningún nodo lo usaba: un tercero no podía meter
+   su plugin en un flujo sin recompilar Jaiba.
+2. **Archivos:** `crates/jaiba-runtime/src/processors/external_plugin.rs`
+   (nuevo), registro en `processors/mod.rs`, guardas en `write_file.rs` y
+   `ai_prep/export_manifest.rs`, `tokio` con `process`/`io-util`, ejemplo
+   `examples/plugins/` (Python), catálogo de la UI, ayuda del CLI,
+   `docs/plugins.md`.
+3. **Decisiones:**
+   - El flujo nombra el plugin (`plugin: <id>`), nunca el comando: los
+     plugins vienen de `JAIBA_PLUGIN_DIR/<id>/plugin.yaml`, que define el
+     operador. Sin esa variable están desactivados. Publicar un flujo por la
+     API no equivale a ejecutar programas en el servidor.
+   - `write_file` y `ai_export_manifest` rechazan rutas dentro de esa carpeta;
+     la defensa real es montarla de solo lectura (Jaiba avisa si es
+     escribible).
+   - Un proceso por nodo, reutilizado, una petición a la vez; `describe` al
+     arrancar valida protocolo e id. Timeout propio por petición: si vence,
+     o la respuesta no cumple el protocolo, se mata el proceso y el siguiente
+     paquete arranca uno nuevo. Si el motor cancela una petición a medias
+     (su `timeout_ms` de nodo), `in_flight` fuerza el reinicio.
+   - E/S async con `tokio::process` (el `IsolatedPluginProcess` del SDK es
+     síncrono); se reutilizan los tipos y validaciones del SDK.
+   - `config` por defecto `{}` para que el plugin no reciba `null`.
+4. **Prueba:** tests del módulo con un plugin Python (ok, error del plugin,
+   cuelgue con timeout y reinicio), ids inválidos y rutas dentro de la
+   carpeta; paso de CI que corre `examples/plugins/mayusculas-flow.yaml`.
+5. **Limitación:** sin pool (una petición a la vez por nodo); `retryable`
+   del error no cambia los reintentos; sin contenedores, catálogo ni Wasm
+   todavía.
+
 ## Trabajo posterior a la fase 9 / 10A–10C
 
 - procesadores ejecutables de consulta para MySQL y SQL Server;

@@ -453,6 +453,35 @@ export const PROCESSOR_CATALOG: ProcessorDef[] = [
     defaultConfig: { fields: {} },
   },
   {
+    type: "external_plugin",
+    label: "Plugin externo",
+    category: "transform",
+    description: "Ejecuta un plugin instalado en JAIBA_PLUGIN_DIR (Python, Node, Go…).",
+    fields: [
+      {
+        key: "plugin",
+        label: "Plugin",
+        kind: "text",
+        required: true,
+        placeholder: "mayusculas",
+        help: "Id de la carpeta del plugin dentro de JAIBA_PLUGIN_DIR.",
+      },
+      {
+        key: "config",
+        label: "Configuración del plugin",
+        kind: "jsonObject",
+        help: "Objeto JSON que recibe el plugin en cada paquete.",
+      },
+      {
+        key: "timeout_ms",
+        label: "Timeout (ms)",
+        kind: "number",
+        help: "Si el plugin no responde a tiempo se reinicia y el paquete sale por failure.",
+      },
+    ],
+    defaultConfig: { plugin: "", config: {}, timeout_ms: 30000 },
+  },
+  {
     type: "ai_select_fields",
     label: "AI: seleccionar campos",
     category: "ai_prep",

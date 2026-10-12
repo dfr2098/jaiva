@@ -50,6 +50,7 @@ Variables de entorno:
   JAIBA_SERVER_ADDR   dirección de `serve` (p. ej. 127.0.0.1:19090)
   JAIBA_MASTER_KEY    guarda las conexiones cifradas en disco (sin ella, en memoria)
   JAIBA_DATA_DIR      carpeta de datos (por defecto ./data)
+  JAIBA_PLUGIN_DIR    carpeta de plugins externos (`external_plugin`); sin ella están desactivados
 
 Guía: https://github.com/dfr2098/jaiva/blob/main/docs/guia-para-nuevos.md
 ",

@@ -105,6 +105,20 @@ config:
     customer_name: name
 ```
 
+## `external_plugin`
+
+Ejecuta un plugin instalado en `JAIBA_PLUGIN_DIR/<id>/` (un programa aparte en
+cualquier lenguaje). Guía, protocolo y seguridad: [plugins.md](plugins.md).
+
+```yaml
+type: external_plugin
+config:
+  plugin: mayusculas
+  timeout_ms: 30000
+  config:
+    fields: [name]
+```
+
 ## AI Data Prep
 
 Toolkit tabular 100% Rust (limpieza, features, split, hand-off). Ver

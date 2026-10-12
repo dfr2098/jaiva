@@ -1,0 +1,43 @@
+# Flujo con un plugin externo (Python, sin recompilar Jaiba).
+# Uso, desde la raíz del repo:
+#   JAIBA_PLUGIN_DIR=examples/plugins cargo run -- examples/plugins/mayusculas-flow.yaml
+# Guía: docs/plugins.md
+
+id: plugin-mayusculas
+
+processors:
+  - id: source
+    type: generate_records
+    config:
+      records:
+        - id: 1
+          name: Ada
+          city: Veracruz
+        - id: 2
+          name: Linus
+          city: Xalapa
+
+  - id: upper
+    type: external_plugin
+    config:
+      plugin: mayusculas
+      timeout_ms: 10000
+      config:
+        fields: [name, city]
+
+  - id: destination
+    type: log_records
+
+  - id: rejected
+    type: log_records
+
+connections:
+  - from: source
+    relationship: success
+    to: upper
+  - from: upper
+    relationship: success
+    to: destination
+  - from: upper
+    relationship: failure
+    to: rejected

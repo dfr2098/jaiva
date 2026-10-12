@@ -22,6 +22,7 @@ impl WriteFile {
     pub fn from_config(value: &Value) -> Result<Self, FlowError> {
         let config: WriteFileConfig = serde_json::from_value(value.clone())
             .map_err(|error| FlowError::Configuration(error.to_string()))?;
+        super::external_plugin::reject_plugin_dir(&config.path, "write_file")?;
         Ok(Self { path: config.path })
     }
 }

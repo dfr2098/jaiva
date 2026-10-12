@@ -4,6 +4,7 @@ mod checkpoint;
 mod consume_kafka;
 mod domain_memory;
 mod encode;
+mod external_plugin;
 mod generate_records;
 mod log_records;
 #[cfg(feature = "mongodb-driver")]
@@ -38,6 +39,7 @@ use checkpoint::{LoadCheckpoint, SaveCheckpoint};
 use consume_kafka::ConsumeKafka;
 use domain_memory::{MemoryGet, MemoryRemove, MemoryUpsert};
 use encode::Encode;
+use external_plugin::ExternalPlugin;
 use generate_records::GenerateRecords;
 use log_records::LogRecords;
 #[cfg(feature = "kafka-driver")]
@@ -63,6 +65,9 @@ pub fn default_registry() -> ProcessorRegistry {
     });
     registry.register("rename_fields", |config| {
         Ok(Arc::new(RenameFields::from_config(config)?))
+    });
+    registry.register("external_plugin", |config| {
+        Ok(Arc::new(ExternalPlugin::from_config(config)?))
     });
     // AI Data Prep (siempre disponible; ver `ai_prep` y docs/ai-data-prep.md).
     registry.register("ai_select_fields", |config| {

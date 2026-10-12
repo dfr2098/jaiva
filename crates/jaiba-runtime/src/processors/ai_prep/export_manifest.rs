@@ -71,6 +71,18 @@ impl AiExportManifest {
                 "collect_splits requires train_path, validation_path and test_path".to_owned(),
             ));
         }
+        let reject = crate::processors::external_plugin::reject_plugin_dir;
+        reject(&config.path, "ai_export_manifest")?;
+        for path in [
+            &config.train_path,
+            &config.validation_path,
+            &config.test_path,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            reject(std::path::Path::new(path), "ai_export_manifest")?;
+        }
         Ok(Self {
             path: config.path,
             dataset_name: config.dataset_name,

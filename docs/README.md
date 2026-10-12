@@ -54,6 +54,7 @@ cargo run --features kafka-driver,mongodb-driver,sqlserver-driver,oracle-driver 
 | AI Prep | [ai-data-prep.md](ai-data-prep.md) |
 | Windows / WSL | [windows-native-and-wsl.md](windows-native-and-wsl.md) |
 | Bitácora de decisiones | [implementation-notes.md](implementation-notes.md) |
+| Escribir un plugin externo (Python, Node…) | [plugins.md](plugins.md) |
 | Plugins / Connection Manager | [modular-roadmap.md](modular-roadmap.md) |
 
 ### Historial (`priority-*`)

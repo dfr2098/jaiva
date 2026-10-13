@@ -800,6 +800,37 @@ driver.
    del error no cambia los reintentos; sin contenedores, catálogo ni Wasm
    todavía.
 
+## Plugins externos en contenedor (2026-10)
+
+1. **Problema:** un plugin de proceso corre con los permisos de Jaiba y exige
+   instalar su lenguaje en el servidor.
+2. **Archivos:** `external_plugin.rs` (manifiesto con `container`,
+   `container_run_args`, `ContainerGuard`), `examples/plugins/mayusculas/Dockerfile`,
+   `examples/plugins-container/`, ayuda del CLI (`JAIBA_CONTAINER_RUNTIME`),
+   paso de CI, `docs/plugins.md`.
+3. **Decisiones:**
+   - `plugin.yaml` lleva `command` o `container` (exactamente uno); el flujo
+     no cambia. El runtime lo elige el operador (`JAIBA_CONTAINER_RUNTIME`,
+     por defecto `docker`); Podman acepta los mismos argumentos.
+   - Encerrado por defecto: `--network=none`, `--read-only` con `/tmp` en
+     tmpfs, `--cap-drop=ALL`, `no-new-privileges`, memoria sin swap, CPU y
+     pids limitados. `network: bridge` es la única apertura.
+   - `--pull=never`: ejecutar un flujo nunca descarga código; instalar el
+     plugin es `docker pull`/`build`. El error de arranque sugiere revisar la
+     imagen.
+   - Matar `docker run` no detiene un contenedor colgado: `ContainerGuard`
+     hace `rm -f <nombre>` al soltar el proceso (en un hilo, sin bloquear el
+     runtime). Etiqueta `jaiba.plugin` para encontrar restos.
+4. **Prueba:** tests de validación del manifiesto y de los argumentos; test
+   Unix con un runtime falso que arranca el plugin Python y registra el
+   `rm -f` tras un cuelgue; paso de CI con Docker real que construye la
+   imagen del ejemplo, corre el flujo y comprueba que no quedan contenedores.
+   A mano: Docker 29 y Podman 5 (flujo, imagen inexistente y cuelgue).
+5. **Limitación:** sin montajes ni variables de entorno hacia el contenedor;
+   no se verifica la firma/digest de la imagen; Windows con Docker Desktop
+   no probado en CI; si Jaiba muere con SIGKILL, un contenedor colgado que
+   no lea stdin queda hasta limpiarlo por etiqueta.
+
 ## Trabajo posterior a la fase 9 / 10A–10C
 
 - procesadores ejecutables de consulta para MySQL y SQL Server;

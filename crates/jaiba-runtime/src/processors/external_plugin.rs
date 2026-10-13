@@ -4,6 +4,9 @@
 //! Los plugins solo se cargan desde `JAIBA_PLUGIN_DIR/<id>/plugin.yaml`: el flujo
 //! nombra el plugin, nunca el comando, para que publicar un flujo no equivalga
 //! a ejecutar programas arbitrarios en el servidor.
+//!
+//! El manifiesto elige cómo arrancarlo: `command` (proceso local) o `container`
+//! (`docker run -i` / `podman run -i` sin red ni escritura por defecto).
 
 use std::{
     collections::BTreeMap,
@@ -35,6 +38,8 @@ use crate::{
 };
 
 pub const PLUGIN_DIR_ENV: &str = "JAIBA_PLUGIN_DIR";
+pub const CONTAINER_RUNTIME_ENV: &str = "JAIBA_CONTAINER_RUNTIME";
+const DEFAULT_CONTAINER_RUNTIME: &str = "docker";
 const MANIFEST_FILE: &str = "plugin.yaml";
 const DEFAULT_MEDIA_TYPE: &str = "application/octet-stream";
 
@@ -65,16 +70,167 @@ pub struct PluginManifest {
     #[serde(default)]
     pub description: String,
     /// Programa a ejecutar: un nombre del `PATH` (`python3`) o una ruta relativa
-    /// a la carpeta del plugin (`./mi-plugin`).
-    pub command: String,
+    /// a la carpeta del plugin (`./mi-plugin`). Excluyente con `container`.
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub container: Option<ContainerSpec>,
+    /// Argumentos del programa o, en contenedor, del entrypoint de la imagen.
     #[serde(default)]
     pub args: Vec<String>,
+}
+
+/// Plugin empaquetado como imagen OCI.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContainerSpec {
+    /// Imagen ya presente en el host: Jaiba nunca la descarga (`--pull=never`).
+    pub image: String,
+    #[serde(default)]
+    pub network: ContainerNetwork,
+    #[serde(default = "default_container_memory")]
+    pub memory: String,
+    #[serde(default = "default_container_cpus")]
+    pub cpus: f64,
+    #[serde(default = "default_container_pids")]
+    pub pids: u32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ContainerNetwork {
+    #[default]
+    None,
+    Bridge,
+}
+
+impl ContainerNetwork {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Bridge => "bridge",
+        }
+    }
+}
+
+fn default_container_memory() -> String {
+    "256m".to_owned()
+}
+
+fn default_container_cpus() -> f64 {
+    1.0
+}
+
+fn default_container_pids() -> u32 {
+    64
+}
+
+impl ContainerSpec {
+    fn validate(&self) -> Result<(), String> {
+        let image = &self.image;
+        if image.is_empty()
+            || image.len() > 255
+            || image.starts_with('-')
+            || image.chars().any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err(format!("container.image inválida '{image}'"));
+        }
+        let digits = self
+            .memory
+            .strip_suffix(['b', 'k', 'm', 'g', 'B', 'K', 'M', 'G'])
+            .unwrap_or(&self.memory);
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(format!(
+                "container.memory inválida '{}' (ejemplos: 256m, 1g)",
+                self.memory
+            ));
+        }
+        if !(self.cpus.is_finite() && self.cpus > 0.0 && self.cpus <= 256.0) {
+            return Err(format!("container.cpus inválido {}", self.cpus));
+        }
+        if self.pids == 0 {
+            return Err("container.pids debe ser mayor que 0".to_owned());
+        }
+        Ok(())
+    }
+}
+
+/// Argumentos de `<runtime> run` (Docker y Podman aceptan los mismos).
+fn container_run_args(
+    spec: &ContainerSpec,
+    plugin_id: &str,
+    name: &str,
+    args: &[String],
+) -> Vec<String> {
+    let mut run = vec![
+        "run".to_owned(),
+        "-i".to_owned(),
+        "--rm".to_owned(),
+        "--pull=never".to_owned(),
+        format!("--name={name}"),
+        format!("--label=jaiba.plugin={plugin_id}"),
+        format!("--network={}", spec.network.as_str()),
+        "--read-only".to_owned(),
+        "--tmpfs=/tmp:rw,noexec,nosuid,size=64m".to_owned(),
+        "--cap-drop=ALL".to_owned(),
+        "--security-opt=no-new-privileges".to_owned(),
+        format!("--memory={}", spec.memory),
+        format!("--memory-swap={}", spec.memory),
+        format!("--cpus={}", spec.cpus),
+        format!("--pids-limit={}", spec.pids),
+        spec.image.clone(),
+    ];
+    run.extend(args.iter().cloned());
+    run
+}
+
+enum Launch {
+    Process(PathBuf),
+    Container {
+        runtime: String,
+        spec: ContainerSpec,
+    },
 }
 
 struct PluginProcess {
     _child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    _container: Option<ContainerGuard>,
+}
+
+/// Matar el cliente `docker run` no detiene un contenedor colgado: al soltar el
+/// proceso se fuerza `rm -f` del contenedor.
+struct ContainerGuard {
+    runtime: String,
+    name: String,
+}
+
+impl Drop for ContainerGuard {
+    fn drop(&mut self) {
+        let mut command = std::process::Command::new(&self.runtime);
+        command
+            .args(["rm", "-f", &self.name])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        match command.spawn() {
+            Ok(mut child) => {
+                std::thread::spawn(move || child.wait());
+            }
+            Err(error) => tracing::warn!(
+                container = %self.name,
+                %error,
+                "no se pudo eliminar el contenedor del plugin"
+            ),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -87,6 +243,7 @@ struct ProcessSlot {
 
 pub struct ExternalPlugin {
     manifest: PluginManifest,
+    launch: Launch,
     directory: PathBuf,
     configuration: Value,
     timeout: Duration,
@@ -128,19 +285,38 @@ impl ExternalPlugin {
                 manifest_path.display()
             ))
         })?;
-        let manifest: PluginManifest = serde_yaml::from_str(&manifest_text).map_err(|error| {
-            FlowError::Configuration(format!("{}: {error}", manifest_path.display()))
-        })?;
+        let invalid = |message: String| {
+            FlowError::Configuration(format!("{}: {message}", manifest_path.display()))
+        };
+        let mut manifest: PluginManifest =
+            serde_yaml::from_str(&manifest_text).map_err(|error| invalid(error.to_string()))?;
         if manifest.id != config.plugin {
-            return Err(FlowError::Configuration(format!(
-                "{}: id '{}' no coincide con la carpeta '{}'",
-                manifest_path.display(),
-                manifest.id,
-                config.plugin
+            return Err(invalid(format!(
+                "id '{}' no coincide con la carpeta '{}'",
+                manifest.id, config.plugin
             )));
         }
+        let launch = match (manifest.command.as_deref(), manifest.container.take()) {
+            (Some(command), None) => Launch::Process(program_path(&directory, command)),
+            (None, Some(spec)) => {
+                spec.validate().map_err(invalid)?;
+                Launch::Container {
+                    runtime: std::env::var(CONTAINER_RUNTIME_ENV)
+                        .ok()
+                        .filter(|runtime| !runtime.trim().is_empty())
+                        .unwrap_or_else(|| DEFAULT_CONTAINER_RUNTIME.to_owned()),
+                    spec,
+                }
+            }
+            _ => {
+                return Err(invalid(
+                    "define exactamente uno de `command` o `container`".to_owned(),
+                ));
+            }
+        };
         Ok(Self {
             manifest,
+            launch,
             directory,
             configuration: config.config,
             timeout: Duration::from_millis(config.timeout_ms),
@@ -157,20 +333,22 @@ impl ExternalPlugin {
         )
     }
 
-    fn program(&self) -> PathBuf {
-        let command = Path::new(&self.manifest.command);
-        if command.components().count() > 1 {
-            self.directory.join(command)
-        } else {
-            command.to_path_buf()
-        }
-    }
-
     async fn spawn(&self) -> Result<PluginProcess, String> {
-        let program = self.program();
+        let (program, args, container) = match &self.launch {
+            Launch::Process(program) => (program.clone(), self.manifest.args.clone(), None),
+            Launch::Container { runtime, spec } => {
+                let name = format!(
+                    "jaiba-plugin-{}-{}",
+                    self.manifest.id,
+                    &uuid::Uuid::new_v4().simple().to_string()[..12]
+                );
+                let args = container_run_args(spec, &self.manifest.id, &name, &self.manifest.args);
+                (PathBuf::from(runtime), args, Some((runtime, spec, name)))
+            }
+        };
         let mut command = Command::new(&program);
         command
-            .args(&self.manifest.args)
+            .args(&args)
             .current_dir(&self.directory)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -188,7 +366,11 @@ impl ExternalPlugin {
                 program.display()
             )
         })?;
-        if writable(&self.directory) {
+        let guard = container.as_ref().map(|(runtime, _, name)| ContainerGuard {
+            runtime: (*runtime).clone(),
+            name: name.clone(),
+        });
+        if container.is_none() && writable(&self.directory) {
             tracing::warn!(
                 plugin = %self.manifest.id,
                 directory = %self.directory.display(),
@@ -201,7 +383,28 @@ impl ExternalPlugin {
             _child: child,
             stdin,
             stdout: BufReader::new(stdout),
+            _container: guard,
         };
+        self.handshake(&mut process).await.map_err(|error| {
+            match &container {
+                Some((runtime, spec, _)) => format!(
+                    "{error} (contenedor '{}': revisa que exista localmente con `{runtime} image inspect {}` y la salida de error de {runtime} en el log)",
+                    spec.image, spec.image
+                ),
+                None => error,
+            }
+        })?;
+        tracing::info!(
+            plugin = %self.manifest.id,
+            version = %self.manifest.version,
+            description = %self.manifest.description,
+            container = container.as_ref().map(|(_, spec, _)| spec.image.as_str()),
+            "plugin externo arrancado"
+        );
+        Ok(process)
+    }
+
+    async fn handshake(&self, process: &mut PluginProcess) -> Result<(), String> {
         let describe = PluginRequest {
             protocol_version: PROTOCOL_VERSION,
             request_id: self.request_id(),
@@ -210,22 +413,14 @@ impl ExternalPlugin {
             packet: None,
             context: None,
         };
-        let response = tokio::time::timeout(self.timeout, transact(&mut process, &describe))
+        let response = tokio::time::timeout(self.timeout, transact(process, &describe))
             .await
             .map_err(|_| self.timeout_message("describe"))??;
         match response {
             PluginResponse {
                 result: Some(PluginResult::Descriptor { descriptor }),
                 ..
-            } if descriptor.id == self.manifest.id => {
-                tracing::info!(
-                    plugin = %self.manifest.id,
-                    version = %self.manifest.version,
-                    description = %self.manifest.description,
-                    "plugin externo arrancado"
-                );
-                Ok(process)
-            }
+            } if descriptor.id == self.manifest.id => Ok(()),
             PluginResponse {
                 result: Some(PluginResult::Descriptor { descriptor }),
                 ..
@@ -323,6 +518,15 @@ async fn transact(
         ));
     }
     Ok(response)
+}
+
+fn program_path(directory: &Path, command: &str) -> PathBuf {
+    let command = Path::new(command);
+    if command.components().count() > 1 {
+        directory.join(command)
+    } else {
+        command.to_path_buf()
+    }
 }
 
 fn writable(directory: &Path) -> bool {
@@ -640,6 +844,143 @@ for line in sys.stdin:
         let error = run(&hanging, vec![]).await.unwrap_err().to_string();
         assert!(error.contains("no respondió"), "{error}");
         assert!(hanging.slot.lock().await.process.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn write_manifest(root: &Path, id: &str, manifest: &str) {
+        let directory = root.join(id);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join(MANIFEST_FILE), manifest).unwrap();
+    }
+
+    fn manifest_error(root: &Path, id: &str, manifest: &str) -> String {
+        write_manifest(root, id, manifest);
+        ExternalPlugin::from_config_in(&serde_json::json!({"plugin": id}), Some(root))
+            .err()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn validates_container_manifests_and_builds_locked_down_run_args() {
+        let root = temp_root("container");
+        let cases = [
+            (
+                "id: x\nversion: '1'\ncommand: python3\ncontainer: {image: img}\n",
+                "exactamente uno",
+            ),
+            ("id: x\nversion: '1'\n", "exactamente uno"),
+            (
+                "id: x\nversion: '1'\ncontainer: {image: '--privileged'}\n",
+                "image inválida",
+            ),
+            (
+                "id: x\nversion: '1'\ncontainer: {image: img, memory: mucha}\n",
+                "memory inválida",
+            ),
+            (
+                "id: x\nversion: '1'\ncontainer: {image: img, cpus: 0}\n",
+                "cpus inválido",
+            ),
+            (
+                "id: x\nversion: '1'\ncontainer: {image: img, network: host}\n",
+                "unknown variant",
+            ),
+        ];
+        for (manifest, expected) in cases {
+            let error = manifest_error(&root, "x", manifest);
+            assert!(error.contains(expected), "{manifest}: {error}");
+        }
+
+        write_manifest(
+            &root,
+            "x",
+            "id: x\nversion: '1'\ncontainer: {image: 'ghcr.io/a/b:1', memory: 1g}\nargs: [--modo, rapido]\n",
+        );
+        let plugin = plugin(&root, serde_json::json!({"plugin": "x"}));
+        let Launch::Container { spec, .. } = &plugin.launch else {
+            panic!("se esperaba un plugin en contenedor");
+        };
+        let args = container_run_args(spec, "x", "jaiba-plugin-x-1", &plugin.manifest.args);
+        for flag in [
+            "-i",
+            "--rm",
+            "--pull=never",
+            "--network=none",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--memory=1g",
+            "--memory-swap=1g",
+            "--cpus=1",
+            "--pids-limit=64",
+            "--label=jaiba.plugin=x",
+        ] {
+            assert!(args.iter().any(|arg| arg == flag), "falta {flag}: {args:?}");
+        }
+        assert_eq!(
+            &args[args.len() - 3..],
+            ["ghcr.io/a/b:1", "--modo", "rapido"]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn container_plugins_run_through_the_runtime_and_are_removed_on_hang() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if !python_available() {
+            eprintln!("skipping: python3 not available");
+            return;
+        }
+        let root = temp_root("fake-runtime");
+        write_plugin(&root, "upper", UPPERCASE_PLUGIN);
+        write_manifest(
+            &root,
+            "upper",
+            "id: upper\nversion: 0.1.0\ncontainer: {image: jaiba-upper:0.1.0}\n",
+        );
+        let removed = root.join("removed.log");
+        let runtime = root.join("fake-runtime");
+        fs::write(
+            &runtime,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = run ]; then exec python3 plugin.py; fi\necho \"$@\" >> '{}'\n",
+                removed.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o755)).unwrap();
+        let with_runtime = |config: Value| {
+            let mut plugin = plugin(&root, config);
+            let Launch::Container { runtime: slot, .. } = &mut plugin.launch else {
+                panic!("se esperaba un plugin en contenedor");
+            };
+            *slot = runtime.display().to_string();
+            plugin
+        };
+
+        let ok = with_runtime(serde_json::json!({"plugin": "upper"}));
+        let packets = run(&ok, vec![serde_json::json!({"name": "ada"})])
+            .await
+            .unwrap();
+        assert_eq!(packets[0].records().unwrap()[0]["name"], "ADA");
+
+        let hanging = with_runtime(
+            serde_json::json!({"plugin": "upper", "config": {"hang": true}, "timeout_ms": 300}),
+        );
+        let error = run(&hanging, vec![]).await.unwrap_err().to_string();
+        assert!(error.contains("no respondió"), "{error}");
+        let mut log = String::new();
+        for _ in 0..50 {
+            log = fs::read_to_string(&removed).unwrap_or_default();
+            if !log.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(log.starts_with("rm -f jaiba-plugin-upper-"), "{log:?}");
         fs::remove_dir_all(root).unwrap();
     }
 

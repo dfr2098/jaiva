@@ -47,6 +47,61 @@ args: [mayusculas.py]     # el proceso arranca con la carpeta del plugin como cw
 
 `jaiba validate flujo.yaml` comprueba que el plugin esté instalado.
 
+## Plugins en contenedor (Docker o Podman)
+
+En vez de `command`, el manifiesto puede indicar una imagen. Así el plugin no
+necesita Python/Node en el servidor y corre aislado: sin red, sin poder
+escribir en su sistema de archivos y con memoria, CPU y procesos limitados.
+El protocolo y el flujo son los mismos.
+
+Pruébalo con el mismo ejemplo (requiere Docker):
+
+```bash
+docker build -t jaiba-plugin-mayusculas:0.1.0 examples/plugins/mayusculas
+JAIBA_PLUGIN_DIR=examples/plugins-container cargo run -- examples/plugins/mayusculas-flow.yaml
+```
+
+[`examples/plugins-container/mayusculas/plugin.yaml`](../examples/plugins-container/mayusculas/plugin.yaml):
+
+```yaml
+id: mayusculas
+version: 0.1.0
+container:
+  image: jaiba-plugin-mayusculas:0.1.0   # debe existir en el host
+  network: none    # por defecto; `bridge` si el plugin necesita red
+  memory: 256m     # por defecto
+  cpus: 1          # por defecto
+  pids: 64         # por defecto
+args: []           # opcional: argumentos para el ENTRYPOINT de la imagen
+```
+
+Exactamente uno de `command` o `container`. Para cada proceso del plugin Jaiba
+ejecuta:
+
+```text
+docker run -i --rm --pull=never --name=jaiba-plugin-<id>-<aleatorio>
+  --label=jaiba.plugin=<id> --network=none --read-only
+  --tmpfs=/tmp:rw,noexec,nosuid,size=64m --cap-drop=ALL
+  --security-opt=no-new-privileges --memory=256m --memory-swap=256m
+  --cpus=1 --pids-limit=64 <image> <args...>
+```
+
+- **Jaiba nunca descarga imágenes** (`--pull=never`): instalar el plugin
+  incluye `docker pull` (o `docker build`). Si falta la imagen, el error lo
+  dice y el mensaje de Docker aparece en el log.
+- **Podman:** `JAIBA_CONTAINER_RUNTIME=podman` (acepta los mismos argumentos).
+  También sirve para indicar la ruta completa del ejecutable.
+- **Imagen:** la entrada es stdin y la salida stdout, igual que un proceso.
+  Usa `python3 -u` (o `flush`) y un usuario sin privilegios (`USER 65534`);
+  mira el [`Dockerfile`](../examples/plugins/mayusculas/Dockerfile) del
+  ejemplo. Fija la versión de la imagen (`:0.1.0` o `@sha256:…`), no `latest`.
+- **Limpieza:** si el plugin se cuelga o termina el flujo, Jaiba ejecuta
+  `docker rm -f` del contenedor. Si Jaiba muere de golpe, el contenedor se
+  cierra al perder stdin; para revisar restos:
+  `docker ps -a --filter label=jaiba.plugin`.
+- El primer paquete paga el arranque del contenedor (≈0,5–1 s); después se
+  reutiliza.
+
 ## Protocolo v1
 
 Una petición JSON por línea en stdin y exactamente una respuesta JSON por línea
@@ -100,9 +155,15 @@ Los paquetes emitidos conservan los atributos del de entrada y agregan
 
 ## Seguridad
 
-Un plugin es código con los mismos permisos que el usuario que corre Jaiba.
+Un plugin con `command` es código con los mismos permisos que el usuario que
+corre Jaiba. Un plugin con `container` queda aislado (sin red, solo lectura,
+sin capabilities y con límites), pero quien puede usar Docker es en la práctica
+root del host: el aislamiento protege de un plugin defectuoso o malicioso, no
+de quien edita `plugin.yaml`.
 
 - Instala solo plugins en los que confíes y revisa su código.
+- Prefiere `container` para plugins de terceros y `network: none` salvo que
+  el plugin necesite red.
 - El flujo solo nombra plugins ya instalados; publicar un flujo por la API no
   permite elegir comandos.
 - `write_file` y `ai_export_manifest` rechazan rutas dentro de
@@ -115,11 +176,15 @@ Un plugin es código con los mismos permisos que el usuario que corre Jaiba.
 
 - **Windows:** usa `command: python` (o `py`) en vez de `python3`, o un `.exe`
   con ruta relativa. La consola del plugin no se muestra.
-- **Docker (`jaiba-serve`):** la imagen no trae Python ni Node; para plugins en
-  esos lenguajes crea una imagen derivada que los instale.
+  Los plugins en contenedor usan Docker Desktop (imágenes Linux; no probado en
+  CI de Windows).
+- **Jaiba dentro de Docker (`jaiba-serve`):** la imagen no trae Python, Node ni
+  el cliente de Docker. Para plugins de proceso crea una imagen derivada que
+  instale el lenguaje. No montes `/var/run/docker.sock` para usar plugins en
+  contenedor: equivale a dar root del host a Jaiba.
 
 ## Siguientes pasos
 
-Plugins como contenedores (`docker run -i`, sin red por defecto), catálogo
-comunitario con versiones y checksums, y WebAssembly como transporte opcional
-para transformaciones puras. Ver [product-roadmap.md](product-roadmap.md).
+Catálogo comunitario con versiones y checksums (`jaiba plugins search/install`)
+y WebAssembly como transporte opcional para transformaciones puras. Ver
+[product-roadmap.md](product-roadmap.md).

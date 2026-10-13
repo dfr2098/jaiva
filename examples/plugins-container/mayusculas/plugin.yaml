@@ -1,0 +1,14 @@
+# El mismo plugin `mayusculas`, empaquetado como imagen. Construye la imagen con:
+#   docker build -t jaiba-plugin-mayusculas:0.1.0 examples/plugins/mayusculas
+# y usa esta carpeta como JAIBA_PLUGIN_DIR; el flujo no cambia:
+#   JAIBA_PLUGIN_DIR=examples/plugins-container cargo run -- examples/plugins/mayusculas-flow.yaml
+id: mayusculas
+version: 0.1.0
+description: Pasa a mayúsculas los campos de texto indicados en `fields` (en contenedor).
+container:
+  image: jaiba-plugin-mayusculas:0.1.0   # debe existir en el host: Jaiba no descarga imágenes
+  # Valores por defecto (descomenta para cambiarlos):
+  # network: none   # none | bridge
+  # memory: 256m
+  # cpus: 1
+  # pids: 64

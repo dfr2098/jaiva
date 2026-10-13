@@ -51,6 +51,7 @@ Variables de entorno:
   JAIBA_MASTER_KEY    guarda las conexiones cifradas en disco (sin ella, en memoria)
   JAIBA_DATA_DIR      carpeta de datos (por defecto ./data)
   JAIBA_PLUGIN_DIR    carpeta de plugins externos (`external_plugin`); sin ella están desactivados
+  JAIBA_CONTAINER_RUNTIME  `docker` (por defecto) o `podman` para plugins en contenedor
 
 Guía: https://github.com/dfr2098/jaiva/blob/main/docs/guia-para-nuevos.md
 ",

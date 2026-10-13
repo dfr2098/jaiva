@@ -108,7 +108,8 @@ config:
 ## `external_plugin`
 
 Ejecuta un plugin instalado en `JAIBA_PLUGIN_DIR/<id>/` (un programa aparte en
-cualquier lenguaje). Guía, protocolo y seguridad: [plugins.md](plugins.md).
+cualquier lenguaje, como proceso local o como contenedor Docker/Podman). Guía,
+protocolo y seguridad: [plugins.md](plugins.md).
 
 ```yaml
 type: external_plugin

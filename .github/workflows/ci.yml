@@ -41,6 +41,14 @@ jobs:
           JAIBA_PLUGIN_DIR=examples/plugins ./target/debug/jaiba examples/plugins/mayusculas-flow.yaml 2>&1 | tee plugin.log
           grep -q '"name":"ADA"' plugin.log
 
+      - name: Plugin externo de ejemplo (contenedor Docker)
+        run: |
+          docker build -t jaiba-plugin-mayusculas:0.1.0 examples/plugins/mayusculas
+          JAIBA_PLUGIN_DIR=examples/plugins-container ./target/debug/jaiba examples/plugins/mayusculas-flow.yaml 2>&1 | tee plugin-container.log
+          grep -q '"name":"ADA"' plugin-container.log
+          sleep 2
+          test -z "$(docker ps -aq --filter label=jaiba.plugin)"
+
       - name: Memory and administrative API regressions
         run: python3 scripts/review-regression.py
 

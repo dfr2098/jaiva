@@ -9,7 +9,7 @@ import {
   type EngineStatus,
 } from "./desktopEngine";
 import { useEngineState } from "./engineState";
-import jaibaLogo from "./img/jaiba-logo.png";
+import jaibaLogo from "./img/jaiba-logo-256.webp";
 import type {
   DeadLetterEntry,
   FlowAction,
@@ -21,8 +21,8 @@ import type {
 } from "./types";
 
 export function CrabMark() {
-  // Mantener el arte original como archivo importado permite que Vite genere
-  // una URL versionada y evita depender de rutas absolutas en el contenedor.
+  // Importar el derivado permite que Vite genere una URL versionada y evita
+  // depender de rutas absolutas en el contenedor.
   return (
     <img
       className="crab-mark"

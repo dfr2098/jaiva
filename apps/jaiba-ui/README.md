@@ -14,13 +14,29 @@ La paleta visual procede de la jaiba:
 
 ## Identidad visual
 
-El encabezado y el favicon usan el arte original del cangrejo jarocho ubicado
-en `src/img/jaiba-logo.png`. El archivo es una copia sin modificaciones de la
-imagen de referencia; no debe regenerarse ni sobrescribirse durante el build.
+El arte original del cangrejo jarocho está en `src/img/jaiba-logo.png`
+(1448×1086, 3.2 MB). Es una copia sin modificaciones de la imagen de referencia;
+no debe regenerarse ni sobrescribirse, y no se importa en la UI: todo lo que
+importa la UI termina en `dist/` y, con ello, en el binario `jaiba`, el `.exe` y
+la imagen Docker.
 
-La importación ocurre desde `src/components.tsx`, por lo que Vite agrega un hash
-al nombre del recurso compilado. Para cambiar el tamaño visible se debe ajustar
-`.crab-mark` en `src/styles.css`, sin alterar los píxeles del archivo original.
+La UI usa derivados reducidos, generados con ImageMagick desde el original:
+
+```bash
+cd src/img
+magick jaiba-logo.png -resize 256x192 -strip -quality 85 jaiba-logo-256.webp
+magick jaiba-logo.png -gravity center -crop 1086x1086+0+0 +repage \
+  -resize 64x64 -strip -define png:compression-level=9 jaiba-favicon-64.png
+```
+
+- `jaiba-logo-256.webp` (~26 KB): encabezado, importado desde
+  `src/components.tsx` (Vite agrega un hash al nombre compilado). Se muestra a
+  62 px como máximo; 256 px cubre pantallas de alta densidad.
+- `jaiba-favicon-64.png` (~11 KB): favicon de `index.html`, recorte cuadrado
+  central.
+
+Para cambiar el tamaño visible ajusta `.crab-mark` en `src/styles.css`. Si el
+logo llega a mostrarse más grande, regenera el derivado con más resolución.
 
 ## Conexiones en la UI
 

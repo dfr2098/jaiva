@@ -12,7 +12,7 @@ default = []
 # Uso: `cargo test -p jaiba-cli --features release-core` / `scripts/smoke-release-core.sh`
 release-core = []
 # Todos los conectores opcionales (p. ej. sidecar del desktop: `npm run desktop:build:full`).
-# Oracle necesita Instant Client al ejecutar; Kafka necesita CMake al compilar.
+# Oracle necesita Instant Client al ejecutar (`jaiba oracle-client install`); Kafka necesita CMake al compilar.
 all-drivers = [
     "oracle-driver",
     "sqlserver-driver",

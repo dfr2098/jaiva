@@ -7,7 +7,7 @@ license.workspace = true
 
 [features]
 default = []
-oracle-driver = ["dep:oracle"]
+oracle-driver = ["dep:oracle", "dep:zip"]
 sqlserver-driver = ["dep:tiberius", "dep:tokio-util"]
 kafka-driver = ["dep:rdkafka"]
 mongodb-driver = ["dep:mongodb"]
@@ -35,6 +35,7 @@ tracing-subscriber.workspace = true
 url.workspace = true
 uuid.workspace = true
 oracle = { workspace = true, optional = true }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
 tiberius = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 rdkafka = { workspace = true, optional = true }

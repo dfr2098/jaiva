@@ -16,26 +16,48 @@ incidencias críticas.
 
 ## Requisitos
 
-1. Compilar con la feature `oracle-driver` (`all-drivers` la incluye; los
-   builds de Windows del release ya la traen):
+1. Un binario con la feature `oracle-driver`. Los del release (Linux x86_64 y
+   Windows) ya la traen; para compilar tú (`all-drivers` también la incluye):
 
    ```bash
    cargo build --release -p jaiba-cli --features release-core,oracle-driver
    ```
 
-2. Instalar **Oracle Instant Client** Basic o Basic Light (no se empaqueta con
-   Jaiba) y exponerlo al cargador:
+2. **Oracle Instant Client** (no va dentro de Jaiba). Lo más simple es dejar
+   que Jaiba lo instale:
+
+   ```bash
+   jaiba oracle-client install   # descarga Basic Light 23.26.3, verifica SHA-256
+   jaiba oracle-client status    # carpeta, versión instalada y si carga
+   jaiba oracle-client remove
+   ```
+
+   - Se descarga de `download.oracle.com` (sin login) con versión y SHA-256
+     fijos en el código, para Linux x86_64, Linux arm64 y Windows x64.
+   - Carpeta: `JAIBA_ORACLE_CLIENT_DIR`, o por defecto `~/.jaiba/oracle`
+     (`%LOCALAPPDATA%\Jaiba\oracle` en Windows).
+   - Jaiba lo encuentra solo: no hace falta `LD_LIBRARY_PATH` ni `PATH`. En
+     Linux, `jaiba` se relanza al arrancar con la carpeta en
+     `LD_LIBRARY_PATH` (las bibliotecas de Oracle no traen `RUNPATH`), así que
+     un `jaiba serve` que ya corría debe reiniciarse tras instalar.
+   - Linux necesita `libaio` del sistema; `install` y `status` avisan si falta:
+     `sudo apt install libaio1t64` + enlace `libaio.so.1` en Ubuntu 24.04+,
+     `sudo dnf install libaio` en Fedora/RHEL.
+   - Windows necesita el Visual C++ Redistributable de Microsoft (suele estar
+     instalado).
+   - `install` sobre la misma versión no hace nada; `--force` reinstala.
+
+   Si prefieres tu propio Instant Client (Basic o Basic Light, 64 bits), no
+   instales el gestionado y exponlo al cargador como siempre:
 
    | Sistema | Variable |
    | --- | --- |
    | Linux | `LD_LIBRARY_PATH=/ruta/instantclient_23_26` (y `libaio`) |
-   | macOS | `DYLD_LIBRARY_PATH` |
+   | macOS | `DYLD_LIBRARY_PATH` (Oracle no publica ZIP para `install`) |
    | Windows | `PATH` |
 
-   Descarga sin login (Linux x64):
-   `https://download.oracle.com/otn_software/linux/instantclient/instantclient-basiclite-linuxx64.zip`.
-   Si falta, el error es `DPI-1047` y Jaiba lo reporta como error de
-   configuración con esta misma indicación.
+   Si no hay cliente, el error es `DPI-1047` y Jaiba lo reporta como error de
+   configuración indicando `jaiba oracle-client install`.
 
 ## Conexión
 
@@ -152,7 +174,9 @@ docker run -d --name jaiba-oracle-test -p 127.0.0.1:15211:1521 \
   gvenzl/oracle-free:23-slim-faststart
 docker logs -f jaiba-oracle-test   # esperar "DATABASE IS READY TO USE"
 
-export LD_LIBRARY_PATH=/ruta/instantclient_23_26
+jaiba oracle-client install
+# Los binarios de prueba de cargo no se relanzan solos: necesitan la ruta.
+export LD_LIBRARY_PATH="$HOME/.jaiba/oracle/instantclient"
 export JAIBA_TEST_ORACLE_PASSWORD=<clave> JAIBA_TEST_ORACLE_PORT=15211 \
        JAIBA_TEST_ORACLE_SERVICE=FREEPDB1 JAIBA_TEST_ORACLE_USER=jaiba
 

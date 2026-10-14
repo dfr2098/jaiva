@@ -49,6 +49,7 @@ cargo run --features kafka-driver,mongodb-driver,sqlserver-driver,oracle-driver 
 
 | Quiero… | Documento |
 | --- | --- |
+| Oracle (Beta): conexión, tipos, errores, pruebas | [oracle.md](oracle.md) |
 | Oracle → PostgreSQL | [oracle-to-postgres.md](oracle-to-postgres.md) |
 | Memoria JME (capa fría) | [jme-cold-memory.md](jme-cold-memory.md) |
 | AI Prep | [ai-data-prep.md](ai-data-prep.md) |

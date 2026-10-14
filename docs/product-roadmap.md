@@ -19,13 +19,21 @@ Complementa [release-core.md](release-core.md) (defaults seguros / smoke).
 | MySQL | Beta |
 | MongoDB | Beta |
 | Kafka | Beta |
-| Oracle | Experimental |
+| Oracle | **Beta** (CI real nightly + PR; [oracle.md](oracle.md)) |
 | SQL Server | Experimental |
 | Memoria JME | Beta (madura en este repo; [checklist](history/priority-jme-memory-manager.md#checklist-beta-integración-oficial)) |
 | AI Prep toolkit | Experimental (lab; ver política abajo) |
 | Plugins externos (proceso o contenedor Docker/Podman, JSON Lines, nodo `external_plugin`, catálogo `jaiba plugins`) | Preview ([plugins.md](plugins.md)) |
 | Escritorio Tauri | Beta |
 | Imagen / release `jaiba-serve` | Beta (Prioridad 3) |
+
+### Criterios de madurez
+
+| Estado | Qué exige |
+| --- | --- |
+| **Experimental** | Compila con su feature y se probó a mano o con pruebas opt-in. La configuración puede cambiar sin aviso. |
+| **Beta** | Pruebas automáticas contra el motor real en CI (al menos nightly y en los PR que lo tocan); memoria acotada en lectura y escritura; comportamiento definido ante caídas, timeouts y cancelación, separando errores reintentables de rechazos; tipos documentados; guía de uso. Los cambios incompatibles se anuncian en las notas del release. |
+| **Estable** | Todo lo de Beta, más: forma parte de un recorrido documentado que el CI prueba en cada PR, soak largo en verde y dos releases seguidos sin incidencias críticas. Sin cambios incompatibles antes de una versión mayor. |
 
 ## Recorrido oficial (Estable)
 
@@ -94,7 +102,7 @@ Trabajo de producto **sin** abrir `priority-11+`:
 
 1. **Producto mínimo estable** — Ciclo 1 (Postgres→CSV).  
 2. **Pruebas end-to-end** — Playwright + smoke Compose.  
-3. **Integraciones reales** — Docker reproducible; nightly para Kafka/Oracle/SQL Server.  
+3. **Integraciones reales** — Docker reproducible; nightly para Kafka/Oracle/SQL Server (Oracle ya corre en `oracle.yml`).  
 4. **Reducir módulos grandes** — extraer responsabilidades sin rewrite masivo.  
 5. **Plugins externos** — adaptador REST JSON Lines de referencia.  
 6. **Operación y seguridad** — límites, rate limit, auditoría, TLS, recuperación.  

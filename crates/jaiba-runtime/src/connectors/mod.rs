@@ -18,7 +18,10 @@ pub use database::{
 };
 pub use mysql::MySqlWriter;
 #[cfg(feature = "oracle-driver")]
-pub use oracle::OracleWriter;
+pub use oracle::{
+    DEFAULT_CALL_TIMEOUT as ORACLE_DEFAULT_CALL_TIMEOUT, OraclePoolOptions, OracleQueryOptions,
+    OracleRowStream, OracleWriter,
+};
 pub use postgres::PostgresWriter;
 #[cfg(feature = "sqlserver-driver")]
 pub use sqlserver::SqlServerWriter;

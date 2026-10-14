@@ -48,9 +48,24 @@ pub enum FlowError {
     #[error("database connector error: {0}")]
     DatabaseConnector(String),
 
+    /// The database refused the statement or its data (syntax, constraint,
+    /// type). Repeating the same packet cannot succeed.
+    #[error("database rejected the request: {0}")]
+    DatabaseRejected(String),
+
     #[error("message connector error: {0}")]
     MessageConnector(String),
 
     #[error("circuit breaker '{connection}' is open")]
     CircuitOpen { connection: String },
+}
+
+impl FlowError {
+    /// Whether the engine should retry the packet after this error.
+    pub fn is_retryable(&self) -> bool {
+        !matches!(
+            self,
+            Self::PacketTooLarge { .. } | Self::DatabaseRejected(_)
+        )
+    }
 }

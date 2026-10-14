@@ -248,7 +248,8 @@ según las capacidades del driver y registra el plan en los atributos
 
 Ejecuta una consulta de solo lectura en Oracle y emite cada fila como un objeto
 JSON. Los nombres de columnas se normalizan a minúsculas para facilitar el
-mapeo al destino. Requiere compilar Jaiba con `oracle-driver`.
+mapeo al destino. Requiere compilar Jaiba con `oracle-driver` e Instant Client
+al ejecutar ([oracle.md](oracle.md)).
 
 ```yaml
 type: query_oracle
@@ -256,9 +257,20 @@ config:
   connection: Oracle
   query: SELECT ID, NAME FROM DMA_TEST.CUSTOMERS
   batch_size: 1000
+  call_timeout_ms: 300000
 ```
 
 Solo acepta sentencias cuyo primer término sea `SELECT` o `WITH`.
+
+- Lee por streaming: emite un paquete cada `batch_size` filas y mantiene como
+  máximo dos lotes por delante del flow, así que el resultado no tiene que caber
+  en memoria.
+- `call_timeout_ms` (por defecto 300000; `0` lo desactiva) limita cada viaje a
+  Oracle. Si el nodo tiene `timeout_ms` o el flow se detiene, la llamada en curso
+  se interrumpe y la sesión vuelve al pool.
+- Si falla a mitad de la lectura, el reintento vuelve a leer desde el principio
+  (entrega al menos una vez): usa `mode: upsert` en el destino.
+- Tipos: ver [oracle.md § Tipos](oracle.md#tipos).
 
 ## `publish_kafka`
 

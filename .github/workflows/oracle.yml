@@ -1,0 +1,139 @@
+# Integración real con Oracle: criterio de madurez Beta (docs/oracle.md).
+#
+# Corre cada noche, en push/PR que tocan el conector Oracle, en PRs con el
+# label `oracle` y a mano. Levanta Oracle Database Free en un contenedor y usa
+# el Instant Client público (sin login) para las pruebas del conector, la de
+# diagnóstico del servidor y un flow real con el binario.
+name: Oracle integration
+
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: oracle-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: ¿toca Oracle?
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decidir
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'oracle') }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == "schedule" || "$EVENT" == "workflow_dispatch" || "$HAS_LABEL" == "true" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "$BASE" || "$BASE" =~ ^0+$ ]] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pattern='^(crates/jaiba-runtime/src/connectors/(oracle|database)|crates/jaiba-runtime/src/processors/(query_oracle|put_database)|crates/jaiba-runtime/src/engine/(connections|executor/retry)|crates/jaiba-runtime/src/error\.rs|crates/jaiba-server/src/connection_api/|scripts/smoke-oracle\.sh|\.github/workflows/oracle\.yml|Cargo\.lock)'
+          if git diff --name-only "$BASE" HEAD | grep -Eq "$pattern"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  oracle:
+    name: oracle (Free 23ai)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      JAIBA_ORACLE_CONTAINER: jaiba-oracle-ci
+      JAIBA_TEST_ORACLE_HOST: 127.0.0.1
+      JAIBA_TEST_ORACLE_PORT: "1521"
+      JAIBA_TEST_ORACLE_SERVICE: FREEPDB1
+      JAIBA_TEST_ORACLE_USER: jaiba
+      # Las pruebas reales fallan en vez de saltarse si falta la contraseña.
+      JAIBA_TEST_ORACLE_REQUIRED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Contraseña efímera
+        run: |
+          password="Ci$(openssl rand -hex 12)"
+          echo "::add-mask::$password"
+          echo "JAIBA_TEST_ORACLE_PASSWORD=$password" >> "$GITHUB_ENV"
+
+      - name: Oracle Database Free
+        run: |
+          docker run -d --name "$JAIBA_ORACLE_CONTAINER" -p 127.0.0.1:1521:1521 \
+            -e ORACLE_PASSWORD="$JAIBA_TEST_ORACLE_PASSWORD" \
+            -e APP_USER="$JAIBA_TEST_ORACLE_USER" \
+            -e APP_USER_PASSWORD="$JAIBA_TEST_ORACLE_PASSWORD" \
+            gvenzl/oracle-free:23-slim-faststart
+
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Oracle Instant Client
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libaio1t64 unzip
+          # Instant Client busca libaio.so.1; Ubuntu 24.04 lo renombró a 1t64.
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libaio.so.1t64 /usr/lib/x86_64-linux-gnu/libaio.so.1
+          curl -fsSL -o "$RUNNER_TEMP/ic.zip" \
+            https://download.oracle.com/otn_software/linux/instantclient/instantclient-basiclite-linuxx64.zip
+          unzip -q "$RUNNER_TEMP/ic.zip" -d "$RUNNER_TEMP/oracle"
+          client_dir="$(ls -d "$RUNNER_TEMP"/oracle/instantclient_*)"
+          echo "LD_LIBRARY_PATH=$client_dir" >> "$GITHUB_ENV"
+
+      - name: Compilar pruebas y binario con oracle-driver
+        run: |
+          cargo test -p jaiba-runtime --features oracle-driver --lib --no-run
+          cargo test -p jaiba-server --features oracle-driver --lib --no-run
+          cargo build -p jaiba-cli --features release-core,oracle-driver --bin jaiba
+
+      - name: Esperar a Oracle
+        run: |
+          for _ in $(seq 1 90); do
+            if docker logs "$JAIBA_ORACLE_CONTAINER" 2>&1 | grep -q "DATABASE IS READY TO USE"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          docker logs "$JAIBA_ORACLE_CONTAINER" | tail -n 50
+          exit 1
+
+      - name: Conector (tipos, streaming, cancelación, array DML, MERGE, rollback)
+        run: cargo test -p jaiba-runtime --features oracle-driver --lib -- oracle --nocapture
+
+      - name: Diagnóstico y metadatos (Connection Manager)
+        run: cargo test -p jaiba-server --features oracle-driver --lib oracle_real -- --nocapture
+
+      - name: Flow real query_oracle -> put_database
+        run: ./scripts/smoke-oracle.sh target/debug/jaiba
+
+      - name: Logs de Oracle si falla
+        if: failure()
+        run: docker logs "$JAIBA_ORACLE_CONTAINER" | tail -n 100

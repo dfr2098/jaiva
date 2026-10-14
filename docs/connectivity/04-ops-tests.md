@@ -19,7 +19,8 @@ Los tres scripts de Python no usan Docker; sin argumento toman
 Si tocas código de un driver opcional (`connection_api/plugins/`, processors
 `query_*`), compila también con su feature, por ejemplo
 `cargo clippy -p jaiba-server --all-targets --features oracle-driver -- -D warnings`.
-El CI solo compila las features por defecto.
+El CI pasa Clippy con todas las features (`jaiba-cli/all-drivers`), pero solo
+ejecuta tests reales de Oracle (workflow `oracle.yml`).
 
 ## Stack Docker y carga
 
@@ -41,5 +42,18 @@ Env de ejemplo: `deploy/.env.example`
 Las pruebas de `connection_api/tests.rs` se activan con variables
 `JAIBA_TEST_<MOTOR>_PASSWORD` (más host/puerto opcionales); sin ellas se
 omiten. Ver [../ci.md § Phase 8](../ci.md#phase-8-opcional).
+
+Oracle tiene además pruebas del conector en `jaiba-runtime` (tipos, streaming,
+cancelación, array DML, MERGE, rollback) y un smoke con el binario:
+
+```bash
+export LD_LIBRARY_PATH=/ruta/instantclient_23_26
+export JAIBA_TEST_ORACLE_PASSWORD=... JAIBA_TEST_ORACLE_PORT=1521 \
+       JAIBA_TEST_ORACLE_SERVICE=FREEPDB1 JAIBA_TEST_ORACLE_USER=jaiba
+cargo test -p jaiba-runtime --features oracle-driver --lib -- oracle
+JAIBA_ORACLE_CONTAINER=<contenedor> ./scripts/smoke-oracle.sh
+```
+
+Detalle y contenedor de pruebas: [../oracle.md § Pruebas](../oracle.md#pruebas).
 
 Volver al índice: [README.md](README.md).

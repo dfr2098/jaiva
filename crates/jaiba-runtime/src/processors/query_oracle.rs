@@ -1,20 +1,26 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
+    connectors::{ORACLE_DEFAULT_CALL_TIMEOUT, OracleQueryOptions},
     engine::{DataPacket, OutputSender, Processor, ProcessorContext},
     error::FlowError,
 };
 
 /// Read-only Oracle source that emits one record packet per configured batch.
 ///
-/// The connector performs blocking OCI work outside Tokio's async workers;
-/// this processor handles validation and packet metadata.
+/// Rows are streamed: the connector fetches on Tokio's blocking pool and only
+/// a couple of batches are buffered ahead of the flow, so large results do not
+/// need to fit in memory. A retry after a mid-stream failure re-reads the query
+/// from the start (at-least-once delivery).
 pub struct QueryOracle {
     connection: String,
     query: String,
     batch_size: usize,
+    call_timeout: Option<Duration>,
 }
 
 #[derive(Deserialize)]
@@ -25,10 +31,17 @@ struct QueryOracleConfig {
     query: String,
     #[serde(default = "default_batch_size")]
     batch_size: usize,
+    /// Limit for each round trip to Oracle; `0` disables it.
+    #[serde(default = "default_call_timeout_ms")]
+    call_timeout_ms: u64,
 }
 
 fn default_batch_size() -> usize {
     1_000
+}
+
+fn default_call_timeout_ms() -> u64 {
+    ORACLE_DEFAULT_CALL_TIMEOUT.as_millis() as u64
 }
 
 impl QueryOracle {
@@ -52,6 +65,8 @@ impl QueryOracle {
             connection: config.connection,
             query: query.to_owned(),
             batch_size: config.batch_size.max(1),
+            call_timeout: (config.call_timeout_ms > 0)
+                .then(|| Duration::from_millis(config.call_timeout_ms)),
         })
     }
 }
@@ -64,13 +79,16 @@ impl Processor for QueryOracle {
         context: &ProcessorContext,
         output: &OutputSender,
     ) -> Result<(), FlowError> {
-        let batches = context
-            .connections
-            .oracle(&self.connection)?
-            .query_json_batches(&self.query, self.batch_size)
-            .await?;
-        for (batch_number, records) in batches.into_iter().enumerate() {
-            let mut result = DataPacket::with_records(records);
+        let mut batches = context.connections.oracle(&self.connection)?.query_stream(
+            &self.query,
+            OracleQueryOptions {
+                batch_size: self.batch_size,
+                call_timeout: self.call_timeout,
+            },
+        );
+        let mut batch_number = 0_u64;
+        while let Some(records) = batches.next_batch().await {
+            let mut result = DataPacket::with_records(records?);
             // Preserve correlation attributes and add source metadata used by
             // provenance, metrics and downstream diagnostics.
             result.attributes.clone_from(&packet.attributes);
@@ -85,6 +103,7 @@ impl Processor for QueryOracle {
                 result.records().expect("records packet").len().to_string(),
             );
             output.success(result).await?;
+            batch_number += 1;
         }
         Ok(())
     }
@@ -105,6 +124,18 @@ mod tests {
         .unwrap();
         assert_eq!(processor.query, "SELECT 1 FROM DUAL");
         assert_eq!(processor.batch_size, 1);
+        assert_eq!(processor.call_timeout, Some(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn call_timeout_zero_disables_the_limit() {
+        let processor = QueryOracle::from_config(&json!({
+            "connection": "oracle",
+            "query": "SELECT 1 FROM DUAL",
+            "call_timeout_ms": 0
+        }))
+        .unwrap();
+        assert_eq!(processor.call_timeout, None);
     }
 
     #[test]

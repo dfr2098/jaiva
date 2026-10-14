@@ -7,6 +7,9 @@
 | **CI · Rust** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | formato, tests, **smoke release-core**, regresiones API/memoria, **smoke y fallas JME**, Clippy `-D warnings` |
 | **CI · Desktop** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | build del sidecar y `cargo check` del shell Tauri en Linux |
 | **CI · UI** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | Node 22, `npm ci`, typecheck y build Vite |
+| **CI · drivers** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | Clippy `-D warnings` con `jaiba-cli/all-drivers` (Oracle, SQL Server, Kafka, MongoDB, ClickHouse) |
+| **Windows** | `.github/workflows/windows.yml` | push/PR | build nativo con `all-drivers,embedded-ui` y comprobación de los nodos de cada driver |
+| **Oracle integration** | `.github/workflows/oracle.yml` | nightly, push a `main` y PR que tocan Oracle, label `oracle`, o manual | Oracle Database Free 23ai en contenedor + Instant Client: pruebas reales del conector, diagnóstico del Connection Manager y `scripts/smoke-oracle.sh` ([oracle.md](oracle.md)) |
 | **Stable path** | `.github/workflows/stable-path.yml` | push a `main`/`master`, cron laborable, label `stable-path`, o manual | Compose + smoke CSV + regresión Playwright (recorrido **Estable**) |
 | **Release** | `.github/workflows/release.yml` | tag `v*` | binario Linux + imagen GHCR `jaiba-serve` |
 | **Phase 8** | `.github/workflows/phase8-integration.yml` | manual (`workflow_dispatch`) o PR con label `phase8` | `scripts/phase8-integration.sh` contra entorno real |
@@ -17,12 +20,12 @@ cambiar `channel`, correr `cargo clippy --workspace --all-targets -- -D warnings
 y corregir los lints nuevos en el mismo commit. Las imágenes Docker de
 `deploy/` usan su propia versión.
 
-El CI **no** levanta Postgres/Kafka/Mongo/SQL Server. Los tests opt-in que
-requieren servicios se omiten en ese job.
+El job **CI · Rust** no levanta bases externas: los tests opt-in que requieren
+servicios se omiten ahí. Solo Oracle tiene integración real automática (workflow
+**Oracle integration**); Postgres/Kafka/Mongo/SQL Server siguen en Phase 8.
 
-Tampoco compila las features de drivers opcionales (`oracle-driver`,
-`sqlserver-driver`, `mongodb-driver`, `kafka-driver`, `clickhouse-driver`). Si
-cambias código detrás de una de ellas, corre Clippy con esa feature en local.
+Las features de drivers opcionales se compilan y pasan Clippy en el job
+**CI · drivers**, pero sus tests solo corren donde hay servicio real.
 
 ### Scripts offline del job Rust
 

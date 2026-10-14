@@ -107,7 +107,7 @@ pub(super) async fn execute_with_retry(
                 }
                 return Ok(None);
             }
-            Err(error) if packet.attempt < retry.maximum_attempts => {
+            Err(error) if packet.attempt < retry.maximum_attempts && error.is_retryable() => {
                 packet.attempt += 1;
                 context.metrics.retried();
                 let multiplier = 2_u64.saturating_pow(packet.attempt.saturating_sub(1));

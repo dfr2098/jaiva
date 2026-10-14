@@ -120,7 +120,13 @@ impl Processor for PutDatabase {
         let summary = match writer.write(&self.request, records).await {
             Ok(summary) => summary,
             Err(error) => {
-                context.circuits.failure(&circuit);
+                // A rejected statement proves the database is reachable; only
+                // connectivity-style failures should open the circuit.
+                if error.is_retryable() {
+                    context.circuits.failure(&circuit);
+                } else {
+                    context.circuits.success(&circuit);
+                }
                 context
                     .metrics
                     .set_circuits_open(context.circuits.open_count());

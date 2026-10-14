@@ -12,10 +12,10 @@ use tracing::warn;
 
 #[cfg(feature = "clickhouse-driver")]
 use crate::connectors::ClickHouseWriter;
-#[cfg(feature = "oracle-driver")]
-use crate::connectors::OracleWriter;
 #[cfg(feature = "sqlserver-driver")]
 use crate::connectors::SqlServerWriter;
+#[cfg(feature = "oracle-driver")]
+use crate::connectors::{OraclePoolOptions, OracleWriter};
 use crate::{
     config::{DatabaseConnectionConfig, KafkaConnectionConfig},
     connectors::{DatabaseKind, DatabaseWriter, MySqlWriter, PostgresWriter},
@@ -377,7 +377,13 @@ async fn insert_database(
         "oracle" => {
             #[cfg(feature = "oracle-driver")]
             {
-                let connection = OracleWriter::from_url(url)?;
+                // The pool is created on first use so an unavailable Oracle
+                // does not block flow startup; each later call retries it.
+                let connection =
+                    OracleWriter::from_url(url)?.with_pool_options(OraclePoolOptions {
+                        max_connections,
+                        acquire_timeout: acquire_timeout.unwrap_or(DEFAULT_ACQUIRE_TIMEOUT),
+                    });
                 writers.insert(name.to_owned(), Arc::new(connection.clone()));
                 oracle.insert(name.to_owned(), connection);
             }

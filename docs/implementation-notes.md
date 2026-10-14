@@ -898,6 +898,50 @@ driver.
 5. **Limitación:** no hay build de Windows en CI; Kafka en Windows requiere
    CMake y no está validado allí.
 
+### Oracle a Beta (v0.8.0)
+
+1. **Problema:** Oracle era un prototipo: una conexión nueva por llamada,
+   lectura completa en memoria, una sentencia por fila, `NUMBER` a `f64`
+   (perdía precisión), fechas según la configuración regional del servidor,
+   ningún timeout y todos los errores se reintentaban igual. Tampoco había
+   pruebas reales en CI.
+2. **Archivos:** `crates/jaiba-runtime/src/connectors/oracle.rs` (pool, stream,
+   array DML, tipos, cancelación, clasificación de errores) y
+   `oracle_live_tests.rs`; `processors/query_oracle.rs` (`call_timeout_ms`,
+   consumo del stream); `error.rs` (`FlowError::DatabaseRejected` y
+   `is_retryable`); `engine/executor/retry.rs`; `processors/put_database.rs`
+   (un rechazo no abre el circuit breaker); `engine/connections.rs` (pasa
+   `max_connections`/`acquire_timeout` al pool); `scripts/smoke-oracle.sh`;
+   `.github/workflows/oracle.yml`; `docs/oracle.md` y criterios de madurez en
+   `docs/product-roadmap.md`.
+3. **Decisiones:**
+   - Pool perezoso: el flow arranca aunque Oracle esté caído; cada llamada
+     reintenta crearlo.
+   - Streaming con canal acotado a dos lotes desde el hilo bloqueante; al soltar
+     el stream o el futuro se llama a `break_execution` en otro hilo.
+   - Array DML con un tipo por columna fijado antes de la primera fila
+     (`Batch::set_type`); los tipos JSON mezclados se ensanchan a texto y los
+     decimales viajan como texto exacto.
+   - `NUMBER` se lee como texto y se decide aquí: entero, decimal exacto o
+     texto. Fechas y binarios con conversión propia (ISO 8601, base64), sin
+     depender de NLS.
+   - Los códigos ORA de sesión/red son reintentables; cualquier otro ORA es
+     `DatabaseRejected` y va a `failure` sin reintentar. El motor ahora respeta
+     `FlowError::is_retryable` para todos los nodos.
+   - Las credenciales de la URL se decodifican: `Url::set_password` del
+     Connection Manager las codificaba y el conector anterior las enviaba así.
+4. **Prueba:** 6 pruebas reales del conector (tipos, `BOOLEAN` en 23ai, streaming de 25 000 filas,
+   sesión liberada tras cancelar con un pool de 1, timeout por llamada,
+   clasificación de errores, 2 500 filas por array DML con CLOB > 32 KB, MERGE,
+   rollback de todo el paquete) más el smoke con el binario, verdes contra XE 21
+   y Free 23ai. En CI: `oracle.yml` (nightly, PR que tocan Oracle, label
+   `oracle`).
+5. **Limitación:** sin claves ni índices en el descriptor, sin escritura de
+   `RAW`/`BLOB` desde base64, sin TCPS/wallet, lectura *al menos una vez* tras
+   reintento. `rust-oracle` 0.6 no define columnas `JSON`/`VECTOR` de 23ai: el
+   error se reporta como rechazo con la indicación de usar `JSON_SERIALIZE` o
+   `FROM_VECTOR`.
+
 ## Regla para futuras implementaciones
 
 Al terminar una característica, añadir aquí:

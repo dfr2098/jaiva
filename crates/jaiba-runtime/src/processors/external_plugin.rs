@@ -24,7 +24,7 @@ use jaiba_plugin_sdk::{
         RequestOperation, validate_response,
     },
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -40,7 +40,7 @@ use crate::{
 pub const PLUGIN_DIR_ENV: &str = "JAIBA_PLUGIN_DIR";
 pub const CONTAINER_RUNTIME_ENV: &str = "JAIBA_CONTAINER_RUNTIME";
 const DEFAULT_CONTAINER_RUNTIME: &str = "docker";
-const MANIFEST_FILE: &str = "plugin.yaml";
+pub(crate) const MANIFEST_FILE: &str = "plugin.yaml";
 const DEFAULT_MEDIA_TYPE: &str = "application/octet-stream";
 
 #[derive(Deserialize)]
@@ -62,26 +62,42 @@ fn default_timeout_ms() -> u64 {
 }
 
 /// `plugin.yaml` de un plugin instalado.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginManifest {
     pub id: String,
     pub version: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     /// Programa a ejecutar: un nombre del `PATH` (`python3`) o una ruta relativa
     /// a la carpeta del plugin (`./mi-plugin`). Excluyente con `container`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container: Option<ContainerSpec>,
     /// Argumentos del programa o, en contenedor, del entrypoint de la imagen.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
 }
 
+impl PluginManifest {
+    pub fn validate(&self) -> Result<(), String> {
+        if !valid_plugin_id(&self.id) {
+            return Err(format!(
+                "id de plugin inválido '{}' (usa letras minúsculas, números, '-' o '_')",
+                self.id
+            ));
+        }
+        match (&self.command, &self.container) {
+            (Some(command), None) if !command.trim().is_empty() => Ok(()),
+            (None, Some(spec)) => spec.validate(),
+            _ => Err("define exactamente uno de `command` o `container`".to_owned()),
+        }
+    }
+}
+
 /// Plugin empaquetado como imagen OCI.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContainerSpec {
     /// Imagen ya presente en el host: Jaiba nunca la descarga (`--pull=never`).
@@ -96,7 +112,7 @@ pub struct ContainerSpec {
     pub pids: u32,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ContainerNetwork {
     #[default]
@@ -126,6 +142,19 @@ fn default_container_pids() -> u32 {
 }
 
 impl ContainerSpec {
+    /// `true` si la imagen está fijada por contenido (`…@sha256:<64 hex>`).
+    pub fn pinned_by_digest(&self) -> bool {
+        self.image
+            .rsplit_once("@sha256:")
+            .is_some_and(|(name, digest)| {
+                !name.is_empty()
+                    && digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+    }
+
     fn validate(&self) -> Result<(), String> {
         let image = &self.image;
         if image.is_empty()
@@ -296,23 +325,14 @@ impl ExternalPlugin {
                 manifest.id, config.plugin
             )));
         }
+        manifest.validate().map_err(invalid)?;
         let launch = match (manifest.command.as_deref(), manifest.container.take()) {
+            (_, Some(spec)) => Launch::Container {
+                runtime: container_runtime(),
+                spec,
+            },
             (Some(command), None) => Launch::Process(program_path(&directory, command)),
-            (None, Some(spec)) => {
-                spec.validate().map_err(invalid)?;
-                Launch::Container {
-                    runtime: std::env::var(CONTAINER_RUNTIME_ENV)
-                        .ok()
-                        .filter(|runtime| !runtime.trim().is_empty())
-                        .unwrap_or_else(|| DEFAULT_CONTAINER_RUNTIME.to_owned()),
-                    spec,
-                }
-            }
-            _ => {
-                return Err(invalid(
-                    "define exactamente uno de `command` o `container`".to_owned(),
-                ));
-            }
+            (None, None) => unreachable!("validate() exige command o container"),
         };
         Ok(Self {
             manifest,
@@ -520,6 +540,14 @@ async fn transact(
     Ok(response)
 }
 
+/// `JAIBA_CONTAINER_RUNTIME` o `docker`.
+pub fn container_runtime() -> String {
+    std::env::var(CONTAINER_RUNTIME_ENV)
+        .ok()
+        .filter(|runtime| !runtime.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_CONTAINER_RUNTIME.to_owned())
+}
+
 fn program_path(directory: &Path, command: &str) -> PathBuf {
     let command = Path::new(command);
     if command.components().count() > 1 {
@@ -545,7 +573,7 @@ fn writable(directory: &Path) -> bool {
     created
 }
 
-fn valid_plugin_id(id: &str) -> bool {
+pub(crate) fn valid_plugin_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id.bytes().all(|byte| {

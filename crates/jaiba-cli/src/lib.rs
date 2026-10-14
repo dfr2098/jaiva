@@ -12,6 +12,8 @@ use jaiba_runtime::{
 use jaiba_server::ObservabilityServer;
 use tracing::info;
 
+mod plugins;
+
 /// Construye un resolvedor de conexiones por alias desde el entorno
 /// (`JAIBA_MASTER_KEY` + `JAIBA_DATA_DIR`). Devuelve `None` en modo desarrollo.
 async fn connection_resolver() -> Result<Option<Arc<dyn ConnectionResolver>>, FlowError> {
@@ -44,6 +46,9 @@ Uso:
   jaiba provenance recent <flujo.yaml> [LÍMITE]
   jaiba provenance packet <flujo.yaml> <PACKET_ID> [LÍMITE]
   jaiba connections rotate-key <NUEVA_CLAVE>
+  jaiba plugins search [TEXTO]               Busca en el catálogo comunitario de plugins
+  jaiba plugins install <ID>[@VERSIÓN]       Instala en JAIBA_PLUGIN_DIR (verifica sha256 / digest)
+  jaiba plugins list | remove <ID>           Plugins instalados
   jaiba --help | --version
 
 Variables de entorno:
@@ -52,6 +57,7 @@ Variables de entorno:
   JAIBA_DATA_DIR      carpeta de datos (por defecto ./data)
   JAIBA_PLUGIN_DIR    carpeta de plugins externos (`external_plugin`); sin ella están desactivados
   JAIBA_CONTAINER_RUNTIME  `docker` (por defecto) o `podman` para plugins en contenedor
+  JAIBA_PLUGIN_CATALOG  URL o archivo del catálogo de plugins (por defecto, el comunitario)
 
 Guía: https://github.com/dfr2098/jaiva/blob/main/docs/guia-para-nuevos.md
 ",
@@ -73,6 +79,7 @@ pub async fn run() -> Result<(), FlowError> {
         }
         Some("validate") => return validate_command(arguments.get(1).map(String::as_str)),
         Some("connections") => return connections_command(&arguments).await,
+        Some("plugins") => return plugins::command(&arguments).await,
         Some(option) if option.starts_with('-') => {
             return Err(FlowError::Configuration(format!(
                 "opción desconocida '{option}'. Consulta: jaiba --help"

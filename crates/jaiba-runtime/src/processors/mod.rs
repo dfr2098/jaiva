@@ -4,7 +4,7 @@ mod checkpoint;
 mod consume_kafka;
 mod domain_memory;
 mod encode;
-mod external_plugin;
+pub(crate) mod external_plugin;
 mod generate_records;
 mod log_records;
 #[cfg(feature = "mongodb-driver")]

@@ -23,7 +23,7 @@ Complementa [release-core.md](release-core.md) (defaults seguros / smoke).
 | SQL Server | Experimental |
 | Memoria JME | Beta (madura en este repo; [checklist](history/priority-jme-memory-manager.md#checklist-beta-integración-oficial)) |
 | AI Prep toolkit | Experimental (lab; ver política abajo) |
-| Plugins externos (proceso o contenedor Docker/Podman, JSON Lines, nodo `external_plugin`) | Preview ([plugins.md](plugins.md)) |
+| Plugins externos (proceso o contenedor Docker/Podman, JSON Lines, nodo `external_plugin`, catálogo `jaiba plugins`) | Preview ([plugins.md](plugins.md)) |
 | Escritorio Tauri | Beta |
 | Imagen / release `jaiba-serve` | Beta (Prioridad 3) |
 
@@ -108,7 +108,7 @@ Trabajo de producto **sin** abrir `priority-11+`:
 | **1. Estabilidad** | Recorrido oficial, Docker, E2E base | Hecho |
 | **2. Mantenibilidad** | Split observability / connection_api / executor / FlowBuilder | En curso (executor y connection_api hechos) |
 | **3. Producción** | Seguridad, recuperación, benchmarks, soak | Pendiente |
-| **4. Extensibilidad** | Plugin externo real, SDK y docs de terceros | En curso: nodo `external_plugin` como proceso o contenedor + guía ([plugins.md](plugins.md)); faltan catálogo comunitario y Wasm |
+| **4. Extensibilidad** | Plugin externo real, SDK y docs de terceros | En curso: nodo `external_plugin` como proceso o contenedor, catálogo comunitario (`jaiba plugins search/install/list/remove`) y guía ([plugins.md](plugins.md)); faltan firmas del catálogo y Wasm |
 
 ## Comandos útiles
 

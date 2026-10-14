@@ -6,4 +6,5 @@ pub mod connectors;
 pub mod engine;
 pub mod error;
 pub mod logging;
+pub mod plugin_catalog;
 pub mod processors;

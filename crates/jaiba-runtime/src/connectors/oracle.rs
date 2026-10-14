@@ -182,6 +182,7 @@ impl OracleWriter {
         if let Some(pool) = slot.as_ref() {
             return Ok(pool.clone());
         }
+        super::oracle_client::ensure_initialized().map_err(oracle_error)?;
         let pool = PoolBuilder::new(
             self.settings.username.clone(),
             self.settings.password.clone(),
@@ -821,8 +822,9 @@ fn oracle_error(error: oracle::Error) -> FlowError {
     if let Some(code) = error.dpi_code() {
         if code == DPI_CLIENT_LIBRARY_MISSING {
             return FlowError::Configuration(format!(
-                "{message}. Install Oracle Instant Client and expose it through \
-                 LD_LIBRARY_PATH (Linux), DYLD_LIBRARY_PATH (macOS) or PATH (Windows)"
+                "{message}. Run `jaiba oracle-client install` (then restart Jaiba on Linux) \
+                 or expose an existing Instant Client through LD_LIBRARY_PATH (Linux), \
+                 DYLD_LIBRARY_PATH (macOS) or PATH (Windows)"
             ));
         }
         return FlowError::DatabaseConnector(message);

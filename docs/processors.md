@@ -248,8 +248,8 @@ según las capacidades del driver y registra el plan en los atributos
 
 Ejecuta una consulta de solo lectura en Oracle y emite cada fila como un objeto
 JSON. Los nombres de columnas se normalizan a minúsculas para facilitar el
-mapeo al destino. Requiere compilar Jaiba con `oracle-driver` e Instant Client
-al ejecutar ([oracle.md](oracle.md)).
+mapeo al destino. Requiere un binario con `oracle-driver` e Instant Client al
+ejecutar (`jaiba oracle-client install`, ver [oracle.md](oracle.md)).
 
 ```yaml
 type: query_oracle

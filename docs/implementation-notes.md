@@ -942,6 +942,42 @@ driver.
    error se reporta como rechazo con la indicación de usar `JSON_SERIALIZE` o
    `FROM_VECTOR`.
 
+### Instant Client gestionado: `jaiba oracle-client` (v0.8.0)
+
+1. **Problema:** usar Oracle exigía descargar Instant Client a mano y exportar
+   `LD_LIBRARY_PATH`/`PATH` antes de cada `jaiba`; el binario Linux del
+   release ni siquiera incluía Oracle.
+2. **Archivos:** `crates/jaiba-runtime/src/connectors/oracle_client.rs`
+   (paquetes fijos, descarga, extracción, carga), `crates/jaiba-cli/src/oracle_client.rs`
+   (`install`/`status`/`remove`), `crates/jaiba-cli/src/lib.rs`
+   (`prepare_process`) y los dos `bin/`; `connectors/oracle.rs` y
+   `jaiba-server/.../plugins/oracle.rs` inicializan ODPI-C con el cliente;
+   `.github/workflows/oracle.yml` y `release.yml`.
+3. **Decisiones:**
+   - Basic Light 23.26.3 con URL y SHA-256 fijos en el código (Linux x64/arm64,
+     Windows x64), solo https, tope de 512 MB; se extrae en una carpeta
+     temporal y se cambia de golpe por la anterior.
+   - La extracción quita la carpeta `instantclient_*`, ignora `META-INF` y solo
+     acepta enlaces simbólicos a archivos hermanos.
+   - Linux: `oracle_client_lib_dir` no basta porque las bibliotecas de Oracle no
+     traen `RUNPATH` (falla `libnnz.so`). `jaiba` se relanza con `exec` al
+     arrancar, antes de crear el runtime de Tokio, con la carpeta al frente de
+     `LD_LIBRARY_PATH`; una variable de guarda evita bucles. Windows/macOS usan
+     `oracle_client_lib_dir`.
+   - La inicialización de ODPI-C no se cachea si falla: en Windows basta
+     instalar, sin reiniciar.
+   - El binario Linux del release se compila con `oracle-driver` (ODPI-C carga
+     el cliente en tiempo de ejecución: sin dependencias nuevas del sistema).
+4. **Prueba:** unitarias de extracción y enlaces inseguros; instalación real
+   desde oracle.com, `status` con "Cargado: sí, cliente 23.26.3.0.0", smoke
+   Oracle → Oracle y prueba de conexión de `jaiba serve`, todo sin
+   `LD_LIBRARY_PATH`. CI `oracle.yml` instala el cliente con el comando y corre
+   el smoke sin la variable.
+5. **Limitación:** sin paquete para macOS (Oracle publica DMG, no ZIP); Linux
+   necesita `libaio` del sistema; los binarios de prueba de cargo no se
+   relanzan y siguen necesitando `LD_LIBRARY_PATH`; la imagen
+   `jaiba-serve` sigue sin Oracle.
+
 ## Regla para futuras implementaciones
 
 Al terminar una característica, añadir aquí:

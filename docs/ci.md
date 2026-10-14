@@ -9,7 +9,7 @@
 | **CI · UI** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | Node 22, `npm ci`, typecheck y build Vite |
 | **CI · drivers** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | Clippy `-D warnings` con `jaiba-cli/all-drivers` (Oracle, SQL Server, Kafka, MongoDB, ClickHouse) |
 | **Windows** | `.github/workflows/windows.yml` | push/PR | build nativo con `all-drivers,embedded-ui` y comprobación de los nodos de cada driver |
-| **Oracle integration** | `.github/workflows/oracle.yml` | nightly, push a `main` y PR que tocan Oracle, label `oracle`, o manual | Oracle Database Free 23ai en contenedor + Instant Client: pruebas reales del conector, diagnóstico del Connection Manager y `scripts/smoke-oracle.sh` ([oracle.md](oracle.md)) |
+| **Oracle integration** | `.github/workflows/oracle.yml` | nightly, push a `main` y PR que tocan Oracle, label `oracle`, o manual | Oracle Database Free 23ai en contenedor + Instant Client vía `jaiba oracle-client install`: pruebas reales del conector, diagnóstico del Connection Manager y `scripts/smoke-oracle.sh` ([oracle.md](oracle.md)) |
 | **Stable path** | `.github/workflows/stable-path.yml` | push a `main`/`master`, cron laborable, label `stable-path`, o manual | Compose + smoke CSV + regresión Playwright (recorrido **Estable**) |
 | **Release** | `.github/workflows/release.yml` | tag `v*` | binario Linux + imagen GHCR `jaiba-serve` |
 | **Phase 8** | `.github/workflows/phase8-integration.yml` | manual (`workflow_dispatch`) o PR con label `phase8` | `scripts/phase8-integration.sh` contra entorno real |

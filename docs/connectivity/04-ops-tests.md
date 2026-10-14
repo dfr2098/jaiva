@@ -47,7 +47,8 @@ Oracle tiene además pruebas del conector en `jaiba-runtime` (tipos, streaming,
 cancelación, array DML, MERGE, rollback) y un smoke con el binario:
 
 ```bash
-export LD_LIBRARY_PATH=/ruta/instantclient_23_26
+jaiba oracle-client install                       # o un Instant Client propio
+export LD_LIBRARY_PATH="$HOME/.jaiba/oracle/instantclient"   # solo para cargo test
 export JAIBA_TEST_ORACLE_PASSWORD=... JAIBA_TEST_ORACLE_PORT=1521 \
        JAIBA_TEST_ORACLE_SERVICE=FREEPDB1 JAIBA_TEST_ORACLE_USER=jaiba
 cargo test -p jaiba-runtime --features oracle-driver --lib -- oracle

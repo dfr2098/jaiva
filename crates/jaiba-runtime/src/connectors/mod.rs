@@ -6,6 +6,8 @@ mod database;
 mod mysql;
 #[cfg(feature = "oracle-driver")]
 mod oracle;
+#[cfg(feature = "oracle-driver")]
+pub mod oracle_client;
 mod postgres;
 #[cfg(feature = "sqlserver-driver")]
 mod sqlserver;

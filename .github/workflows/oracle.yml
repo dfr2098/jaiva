@@ -1,9 +1,9 @@
 # Integración real con Oracle: criterio de madurez Beta (docs/oracle.md).
 #
 # Corre cada noche, en push/PR que tocan el conector Oracle, en PRs con el
-# label `oracle` y a mano. Levanta Oracle Database Free en un contenedor y usa
-# el Instant Client público (sin login) para las pruebas del conector, la de
-# diagnóstico del servidor y un flow real con el binario.
+# label `oracle` y a mano. Levanta Oracle Database Free en un contenedor,
+# instala Instant Client con `jaiba oracle-client install` y corre las pruebas
+# del conector, la de diagnóstico del servidor y un flow real con el binario.
 name: Oracle integration
 
 on:
@@ -50,7 +50,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          pattern='^(crates/jaiba-runtime/src/connectors/(oracle|database)|crates/jaiba-runtime/src/processors/(query_oracle|put_database)|crates/jaiba-runtime/src/engine/(connections|executor/retry)|crates/jaiba-runtime/src/error\.rs|crates/jaiba-server/src/connection_api/|scripts/smoke-oracle\.sh|\.github/workflows/oracle\.yml|Cargo\.lock)'
+          pattern='^(crates/jaiba-runtime/src/connectors/(oracle|database)|crates/jaiba-runtime/src/processors/(query_oracle|put_database)|crates/jaiba-runtime/src/engine/(connections|executor/retry)|crates/jaiba-runtime/src/error\.rs|crates/jaiba-server/src/connection_api/|crates/jaiba-cli/src/(oracle_client\.rs|bin/)|scripts/smoke-oracle\.sh|\.github/workflows/oracle\.yml|Cargo\.lock)'
           if git diff --name-only "$BASE" HEAD | grep -Eq "$pattern"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
@@ -95,24 +95,30 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Oracle Instant Client
+      - name: libaio del sistema
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libaio1t64 unzip
+          sudo apt-get install -y --no-install-recommends libaio1t64
           # Instant Client busca libaio.so.1; Ubuntu 24.04 lo renombró a 1t64.
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libaio.so.1t64 /usr/lib/x86_64-linux-gnu/libaio.so.1
-          curl -fsSL -o "$RUNNER_TEMP/ic.zip" \
-            https://download.oracle.com/otn_software/linux/instantclient/instantclient-basiclite-linuxx64.zip
-          unzip -q "$RUNNER_TEMP/ic.zip" -d "$RUNNER_TEMP/oracle"
-          client_dir="$(ls -d "$RUNNER_TEMP"/oracle/instantclient_*)"
-          echo "LD_LIBRARY_PATH=$client_dir" >> "$GITHUB_ENV"
 
       - name: Compilar pruebas y binario con oracle-driver
         run: |
           cargo test -p jaiba-runtime --features oracle-driver --lib --no-run
           cargo test -p jaiba-server --features oracle-driver --lib --no-run
           cargo build -p jaiba-cli --features release-core,oracle-driver --bin jaiba
+
+      - name: Oracle Instant Client (jaiba oracle-client install)
+        run: |
+          set -euo pipefail
+          export JAIBA_ORACLE_CLIENT_DIR="$RUNNER_TEMP/oracle"
+          echo "JAIBA_ORACLE_CLIENT_DIR=$JAIBA_ORACLE_CLIENT_DIR" >> "$GITHUB_ENV"
+          target/debug/jaiba oracle-client install
+          target/debug/jaiba oracle-client status | tee "$RUNNER_TEMP/status.txt"
+          grep -q "Cargado:     sí" "$RUNNER_TEMP/status.txt"
+          # Los binarios de prueba de cargo no se relanzan solos: usan la ruta.
+          echo "LD_LIBRARY_PATH=$JAIBA_ORACLE_CLIENT_DIR/instantclient" >> "$GITHUB_ENV"
 
       - name: Esperar a Oracle
         run: |
@@ -131,8 +137,8 @@ jobs:
       - name: Diagnóstico y metadatos (Connection Manager)
         run: cargo test -p jaiba-server --features oracle-driver --lib oracle_real -- --nocapture
 
-      - name: Flow real query_oracle -> put_database
-        run: ./scripts/smoke-oracle.sh target/debug/jaiba
+      - name: Flow real query_oracle -> put_database (cliente gestionado, sin LD_LIBRARY_PATH)
+        run: env -u LD_LIBRARY_PATH ./scripts/smoke-oracle.sh target/debug/jaiba
 
       - name: Logs de Oracle si falla
         if: failure()

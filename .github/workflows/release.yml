@@ -50,7 +50,7 @@ jobs:
 
       - name: Build
         run: |
-          cargo build --release -p jaiba-cli --features release-core,embedded-ui --bin jaiba
+          cargo build --release -p jaiba-cli --features release-core,oracle-driver,embedded-ui --bin jaiba
           strip target/release/jaiba
           tar -C target/release -czf "jaiba-linux-x86_64.tar.gz" jaiba
           shasum -a 256 jaiba-linux-x86_64.tar.gz > jaiba-linux-x86_64.sha256
@@ -58,6 +58,7 @@ jobs:
       - name: Smoke del binario publicado
         run: |
           ./target/release/jaiba examples/smoke.yaml
+          ./target/release/jaiba oracle-client status
           JAIBA_ADMIN_AUTH=none JAIBA_SERVER_ADDR=127.0.0.1:19090 ./target/release/jaiba serve &
           for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:19090/health && break; sleep 1; done
           curl -fsS http://127.0.0.1:19090/ | grep -q __JAIBA_API_BASE__
@@ -172,12 +173,14 @@ jobs:
             La consola web va incluida: abre http://127.0.0.1:9090/ en el navegador.
             `JAIBA_ADMIN_AUTH=none` solo se acepta en loopback; con
             `JAIBA_ADMIN_TOKEN` pega el token en **Acceso** de la consola.
-            Incluye PostgreSQL, MySQL/MariaDB, SQLite y archivos. En Linux, Oracle,
+            Incluye PostgreSQL, MySQL/MariaDB, SQLite, Oracle y archivos. Para Oracle,
+            `./jaiba oracle-client install` descarga Instant Client (versión y SHA-256
+            fijos) y Jaiba lo usa sin configurar `LD_LIBRARY_PATH`. En Linux,
             SQL Server, MongoDB, Kafka y ClickHouse requieren compilar con
             `--features all-drivers` (los builds de Windows ya los traen).
 
             ## Artefactos
-            - Binario Linux x86_64 (`release-core`): `jaiba-linux-x86_64.tar.gz`
+            - Binario Linux x86_64 (`release-core` + Oracle): `jaiba-linux-x86_64.tar.gz`
             - Imagen: `ghcr.io/${{ github.repository_owner }}/jaiba-serve:${{ github.ref_name }}`
 
             ```bash

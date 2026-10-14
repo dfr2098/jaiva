@@ -202,6 +202,7 @@ pub(in crate::connection_api) fn oracle_connect(
     secret: &ConnectionSecret,
 ) -> Result<oracle::Connection, PluginError> {
     let service = endpoint.database.as_deref().unwrap_or("");
+    jaiba_runtime::connectors::oracle_client::ensure_initialized().map_err(oracle_connection)?;
     oracle::Connection::connect(
         &secret.username,
         &secret.password,
@@ -216,8 +217,8 @@ fn oracle_connection(error: oracle::Error) -> PluginError {
     let message = error.to_string();
     if message.contains("DPI-1047") {
         return PluginError::Connection(format!(
-            "{message}. Instala Oracle Instant Client de 64 bits y agrega su directorio a \
-             LD_LIBRARY_PATH antes de iniciar Jaiba"
+            "{message}. Ejecuta `jaiba oracle-client install` (en Linux, reinicia Jaiba \
+             después) o agrega un Instant Client de 64 bits a LD_LIBRARY_PATH / PATH"
         ));
     }
     PluginError::Connection(message)

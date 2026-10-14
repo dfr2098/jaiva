@@ -6,7 +6,8 @@
 # Requisitos:
 #   - Contenedor gvenzl/oracle-xe u oracle-free con sqlplus
 #     (JAIBA_ORACLE_CONTAINER, por defecto jaiba-oracle-test).
-#   - Instant Client en LD_LIBRARY_PATH.
+#   - Instant Client instalado con `jaiba oracle-client install` o en
+#     LD_LIBRARY_PATH.
 #   - JAIBA_TEST_ORACLE_PASSWORD (+ HOST/PORT/SERVICE/USER opcionales).
 #
 # Uso: ./scripts/smoke-oracle.sh [ruta-al-binario-jaiba]

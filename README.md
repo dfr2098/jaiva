@@ -482,8 +482,8 @@ cargo test --features mongodb-driver
 
 ## Oracle
 
-Oracle se compila de forma opcional para que PostgreSQL y MySQL no arrastren
-dependencias nativas:
+Los binarios del release (Linux x86_64 y Windows) incluyen Oracle. Al compilar
+tú, es la feature opcional `oracle-driver`:
 
 ```bash
 cargo run --features oracle-driver -- examples/oracle-write.yaml
@@ -491,9 +491,15 @@ cargo run --features oracle-driver -- examples/oracle-write.yaml
 
 La variable indicada por `url_env` usa el formato
 `oracle://usuario:contraseña@host:1521/servicio`. El proceso necesita Oracle
-Instant Client Basic o Basic Light en la ruta del cargador dinámico. Consulta
-la [instalación oficial de Instant Client](https://docs.oracle.com/en/database/oracle/oracle-database/26/lacli/install-instant-client-using-zip.html).
-El ejemplo completo está en
+Instant Client; Jaiba lo instala y lo encuentra solo, sin `LD_LIBRARY_PATH`:
+
+```bash
+jaiba oracle-client install   # Basic Light con versión y SHA-256 fijos
+jaiba oracle-client status
+```
+
+Detalles (carpeta, `libaio` en Linux, usar un cliente propio) en
+[`docs/oracle.md`](docs/oracle.md#requisitos). El ejemplo completo está en
 [`examples/oracle-write.yaml`](examples/oracle-write.yaml).
 
 Para probar una extracción y carga completa Oracle → PostgreSQL:
@@ -584,7 +590,6 @@ expone topic, partición y offset en atributos de procedencia. Consulta
 
 ## Próximas integraciones
 
-- Array binding y pool de sesiones para acelerar Oracle.
 - Cancelación coordinada y circuit breaker.
 - Almacenamiento de estado PostgreSQL/Redis.
 - API administrativa y editor visual.

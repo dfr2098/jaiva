@@ -1,1 +1,3 @@
 *.sh text eol=lf
+# Archivos que el catálogo de plugins verifica por sha256: sin conversión de fin de línea.
+examples/plugins/** -text

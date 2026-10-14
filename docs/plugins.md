@@ -19,7 +19,40 @@ El plugin [`examples/plugins/mayusculas`](../examples/plugins/mayusculas/)
 pasa a mayúsculas los campos indicados; en el log aparece
 `record={"city":"VERACRUZ","id":1,"name":"ADA"}`. Cópialo como plantilla.
 
-## Instalar un plugin
+## Instalar desde el catálogo comunitario
+
+```bash
+export JAIBA_PLUGIN_DIR=$HOME/.jaiba/plugins
+jaiba plugins search mayus               # busca por id o descripción
+jaiba plugins install mayusculas         # la versión más nueva
+jaiba plugins install mayusculas@0.1.0   # una versión concreta
+jaiba plugins list                       # lo instalado (del catálogo o a mano)
+jaiba plugins remove mayusculas
+```
+
+- El catálogo es [`catalog/plugins.json`](../catalog/plugins.json) de este
+  repo (rama `main`). Otro catálogo: `--catalog URL|ARCHIVO` o
+  `JAIBA_PLUGIN_CATALOG`. Para publicar un plugin, mira
+  [`catalog/README.md`](../catalog/README.md).
+- **Plugins de proceso:** cada archivo se descarga y se compara con el
+  `sha256` del catálogo. **En contenedor:** la imagen viene fijada por digest
+  (`…@sha256:…`) e `install` hace `docker pull` de ese digest (`--no-pull` si
+  la descargas tú; `JAIBA_CONTAINER_RUNTIME=podman` para Podman).
+- Jaiba escribe el `plugin.yaml` a partir del catálogo y deja en
+  `.jaiba-install.json` el origen, la versión y los checksums.
+- Si falla una descarga, un checksum o el `pull`, no se instala nada y la
+  versión anterior queda intacta. Para reemplazar un plugin instalado usa
+  `--force`.
+- Solo descarga por HTTPS (HTTP únicamente hacia `localhost`), con límites de
+  1 MiB para el catálogo y 64 MiB por archivo.
+- **Confianza:** los checksums garantizan que instalas exactamente lo que dice
+  el catálogo, no que el plugin sea bueno. El filtro es la revisión de cada PR
+  al catálogo; revisa el código antes de instalar y prefiere plugins en
+  contenedor para código de terceros.
+- Instalar es tarea del operador: `jaiba serve` no descarga plugins y puede
+  montar la carpeta de solo lectura.
+
+## Instalar un plugin a mano
 
 1. Elige una carpeta de plugins y exporta `JAIBA_PLUGIN_DIR` con su ruta. Sin
    esa variable los plugins externos están desactivados.
@@ -185,6 +218,6 @@ de quien edita `plugin.yaml`.
 
 ## Siguientes pasos
 
-Catálogo comunitario con versiones y checksums (`jaiba plugins search/install`)
-y WebAssembly como transporte opcional para transformaciones puras. Ver
+Firmas del catálogo, `jaiba plugins update`, ver el catálogo desde la consola y
+WebAssembly como transporte opcional para transformaciones puras. Ver
 [product-roadmap.md](product-roadmap.md).

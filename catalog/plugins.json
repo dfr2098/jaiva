@@ -1,0 +1,26 @@
+{
+  "catalog_version": 1,
+  "plugins": [
+    {
+      "id": "mayusculas",
+      "description": "Pasa a mayúsculas los campos de texto indicados en `fields` (requiere python3).",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/dfr2098/jaiva/tree/main/examples/plugins/mayusculas",
+      "versions": [
+        {
+          "version": "0.1.0",
+          "protocol_version": 1,
+          "command": "python3",
+          "args": ["mayusculas.py"],
+          "files": [
+            {
+              "path": "mayusculas.py",
+              "url": "../examples/plugins/mayusculas/mayusculas.py",
+              "sha256": "23941d562878884ad3ff64be2eeadc4ccc1611ae6d6505a19ddc459e5608c08a"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

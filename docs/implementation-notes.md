@@ -831,6 +831,45 @@ driver.
    no probado en CI; si Jaiba muere con SIGKILL, un contenedor colgado que
    no lea stdin queda hasta limpiarlo por etiqueta.
 
+## Catálogo comunitario de plugins: `jaiba plugins` (2026-10)
+
+1. **Problema:** instalar un plugin era copiar carpetas a mano, sin versiones
+   ni verificación de lo descargado.
+2. **Archivos:** `crates/jaiba-runtime/src/plugin_catalog.rs` (nuevo),
+   `external_plugin.rs` (manifiesto serializable, `PluginManifest::validate`,
+   `pinned_by_digest`), `crates/jaiba-cli/src/plugins.rs` (nuevo) y ayuda,
+   `catalog/plugins.json` + `catalog/README.md`, `.gitattributes`,
+   `scripts/smoke-plugin-catalog.sh`, paso de CI, `docs/plugins.md`.
+3. **Decisiones:**
+   - Catálogo JSON (`catalog_version: 1`) en este repo; URL por defecto la
+     rama `main` en raw.githubusercontent.com, otra con `--catalog` o
+     `JAIBA_PLUGIN_CATALOG` (URL o archivo). Puede mudarse a un repo propio
+     sin cambiar el formato.
+   - Proceso: archivos sueltos con URL y `sha256` (sin `.tar.gz`: nada que
+     extraer, sin dependencias nuevas). URLs relativas al catálogo. Contenedor:
+     imagen obligatoriamente `@sha256:` y `<runtime> pull` del digest.
+   - Jaiba escribe `plugin.yaml` desde el catálogo y lo valida con las mismas
+     reglas que `external_plugin`; `.jaiba-install.json` guarda origen,
+     versión y checksums.
+   - Instalación en `.install-<id>-<uuid>` dentro de `JAIBA_PLUGIN_DIR`; si
+     algo falla se borra y la versión previa queda intacta. Reemplazo con
+     `--force` (aparta la anterior y la restaura si el movimiento falla).
+   - Solo HTTPS (HTTP a loopback para pruebas), también en redirecciones;
+     límites de 1 MiB (catálogo) y 64 MiB (archivo). Versiones
+     `MAYOR.MENOR.PARCHE`; sin `@versión` se toma la mayor.
+   - `.gitattributes`: `examples/plugins/** -text` para que el checkout en
+     Windows no cambie los `sha256`.
+4. **Prueba:** tests del módulo (entradas inválidas, instalar / listar /
+   reemplazar / borrar, checksum incorrecto sin efectos, HTTP en loopback y
+   rechazo de HTTP remoto, contenedor con runtime falso que registra el
+   `pull`, catálogo del repo contra sus archivos);
+   `scripts/smoke-plugin-catalog.sh` en CI: catálogo del repo + flujo, y
+   registro local `registry:2` con la imagen del ejemplo fijada por digest.
+5. **Limitación:** sin firmas del catálogo (la confianza es la revisión del
+   PR), sin `update`, sin API/consola; `remove` no borra la imagen del
+   contenedor; la imagen de `mayusculas` no está publicada en GHCR (el
+   catálogo solo trae la versión de proceso).
+
 ## Trabajo posterior a la fase 9 / 10A–10C
 
 - procesadores ejecutables de consulta para MySQL y SQL Server;

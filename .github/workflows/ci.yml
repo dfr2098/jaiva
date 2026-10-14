@@ -49,6 +49,9 @@ jobs:
           sleep 2
           test -z "$(docker ps -aq --filter label=jaiba.plugin)"
 
+      - name: Catálogo de plugins (jaiba plugins, proceso y contenedor por digest)
+        run: bash scripts/smoke-plugin-catalog.sh ./target/debug/jaiba
+
       - name: Memory and administrative API regressions
         run: python3 scripts/review-regression.py
 

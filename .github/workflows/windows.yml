@@ -13,6 +13,8 @@ on:
       - "apps/jaiba-ui/package-lock.json"
       - "apps/jaiba-ui/src-tauri/**"
       - "scripts/prepare-desktop-sidecar.mjs"
+      - "LICENSE"
+      - "THIRD_PARTY_LICENSES.md"
       - ".github/workflows/windows.yml"
   workflow_dispatch:
   workflow_call:
@@ -97,7 +99,7 @@ jobs:
       - name: Empaquetar
         run: |
           New-Item -ItemType Directory -Force dist-windows | Out-Null
-          Compress-Archive -Path target\release\jaiba.exe -DestinationPath dist-windows\jaiba-windows-x86_64.zip
+          Compress-Archive -Path target\release\jaiba.exe, LICENSE, THIRD_PARTY_LICENSES.md -DestinationPath dist-windows\jaiba-windows-x86_64.zip
           $setup = Get-ChildItem apps\jaiba-ui\src-tauri\target\release\bundle\nsis\*-setup.exe | Select-Object -First 1
           if (-not $setup) { throw "no se generó el instalador NSIS" }
           Copy-Item $setup.FullName dist-windows\jaiba-desktop-windows-x86_64-setup.exe

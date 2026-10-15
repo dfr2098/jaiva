@@ -602,3 +602,10 @@ expone topic, partición y offset en atributos de procedencia. Consulta
 
 El diseño previo de escritura multi-base está documentado en
 [`docs/history/priority-4-database-writes.md`](docs/history/priority-4-database-writes.md).
+
+## Licencia
+
+Jaiba se distribuye bajo la licencia [Apache-2.0](LICENSE). Las licencias de
+las dependencias incluidas en los binarios están en
+[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md); ver
+[`docs/licencias.md`](docs/licencias.md).

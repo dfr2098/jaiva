@@ -30,6 +30,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libssl3 curl \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/jaiba /usr/local/bin/jaiba
+COPY LICENSE THIRD_PARTY_LICENSES.md /usr/share/doc/jaiba/
 RUN mkdir -p /data /output /flows /work \
     && useradd --system --uid 10001 --home /work --shell /usr/sbin/nologin jaiba \
     && chown -R jaiba:jaiba /data /output /flows /work

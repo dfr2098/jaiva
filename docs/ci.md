@@ -8,6 +8,7 @@
 | **CI · Desktop** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | build del sidecar y `cargo check` del shell Tauri en Linux |
 | **CI · UI** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | Node 22, `npm ci`, typecheck y build Vite |
 | **CI · drivers** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | Clippy `-D warnings` con `jaiba-cli/all-drivers` (Oracle, SQL Server, Kafka, MongoDB, ClickHouse) |
+| **CI · Licencias** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | `cargo deny check licenses` (motor y escritorio) contra `deny.toml` y que `THIRD_PARTY_LICENSES.md` esté al día ([licencias.md](licencias.md)) |
 | **Windows** | `.github/workflows/windows.yml` | push/PR | build nativo con `all-drivers,embedded-ui` y comprobación de los nodos de cada driver |
 | **Oracle integration** | `.github/workflows/oracle.yml` | nightly, push a `main` y PR que tocan Oracle, label `oracle`, o manual | Oracle Database Free 23ai en contenedor + Instant Client vía `jaiba oracle-client install`: pruebas reales del conector, diagnóstico del Connection Manager y `scripts/smoke-oracle.sh` ([oracle.md](oracle.md)) |
 | **MySQL integration** | `.github/workflows/mysql.yml` | nightly, push a `main` y PR que tocan MySQL, label `mysql`, o manual | MySQL 8.4 y MariaDB 11.4 en contenedores: pruebas reales del conector y de `query_mysql`, metadatos del Connection Manager y `scripts/smoke-mysql.sh` ([mysql.md](mysql.md)) |

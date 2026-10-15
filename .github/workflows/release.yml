@@ -52,7 +52,7 @@ jobs:
         run: |
           cargo build --release -p jaiba-cli --features release-core,oracle-driver,embedded-ui --bin jaiba
           strip target/release/jaiba
-          tar -C target/release -czf "jaiba-linux-x86_64.tar.gz" jaiba
+          tar -czf "jaiba-linux-x86_64.tar.gz" -C target/release jaiba -C "$GITHUB_WORKSPACE" LICENSE THIRD_PARTY_LICENSES.md
           shasum -a 256 jaiba-linux-x86_64.tar.gz > jaiba-linux-x86_64.sha256
 
       - name: Smoke del binario publicado

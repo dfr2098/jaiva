@@ -45,6 +45,7 @@ cargo run --features kafka-driver,mongodb-driver,sqlserver-driver,oracle-driver 
 | Defaults seguros / freeze | [release-core.md](release-core.md) |
 | Empaque / `jaiba-serve` / WS | [packaging.md](packaging.md) |
 | CI | [ci.md](ci.md) |
+| Licencias propias y de terceros | [licencias.md](licencias.md) |
 
 ### Temas concretos
 

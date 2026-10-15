@@ -1067,6 +1067,40 @@ driver.
    servidor; sin `aggregate` como fuente; lectura *al menos una vez* tras
    reintento.
 
+### Licencias: LICENSE, THIRD_PARTY_LICENSES.md y gate en CI (v0.9.0)
+
+1. **Problema:** el proyecto declaraba Apache-2.0 en `Cargo.toml` pero no tenía
+   archivo `LICENSE`, y los binarios publicados (con unos 700 crates, 25
+   paquetes npm y librdkafka, curl, zlib, AWS-LC y ODPI-C compilados dentro) no
+   incluían los textos de licencia que piden MIT, BSD y Apache-2.0 al
+   redistribuir.
+2. **Archivos:** `LICENSE`; `THIRD_PARTY_LICENSES.md` (generado);
+   `scripts/third-party-licenses.py`; `about.toml`; `deny.toml`;
+   `licenses/webview2-sdk-LICENSE.txt`; `ci.yml` (job de licencias);
+   `release.yml`, `windows.yml`, `tauri.conf.json` y
+   `deploy/Dockerfile.jaiba-serve` (los dos archivos en cada artefacto);
+   `apps/jaiba-ui/package.json`; `docs/licencias.md`.
+3. **Decisiones:**
+   - Un solo archivo para todos los artefactos, generado sobre el superconjunto
+     (todos los drivers, Linux y Windows, escritorio y consola).
+   - `cargo-about` con `--offline` para que el resultado sea reproducible (no
+     consulta ClearlyDefined). A `ring` se le fijan sus dos archivos de
+     licencia por checksum; sin eso tomaba encabezados de código como
+     licencias.
+   - Las bibliotecas de C se listan a mano (`NATIVE_LIBRARIES`) porque
+     cargo-about solo ve la licencia del crate que las envuelve. El SDK de
+     WebView2 no trae su licencia en el crate: se guardó la del paquete NuGet
+     1.0.3650.58.
+   - El escritorio instala los archivos como recursos; sin `licenseFile`, para
+     no añadir una página de "acepto" que Apache-2.0 no pide.
+4. **Prueba:** `python3 scripts/third-party-licenses.py --check` y
+   `cargo deny check licenses` (motor y escritorio) en el job
+   **Licencias de terceros**; quitar `MPL-2.0` de `deny.toml` hace fallar al
+   escritorio.
+5. **Limitación:** solo se revisan licencias, no avisos de seguridad
+   (`cargo deny check advisories`). La lista de bibliotecas de C y la nota
+   sobre OpenSSL/SQLite se mantienen a mano.
+
 ## Regla para futuras implementaciones
 
 Al terminar una característica, añadir aquí:

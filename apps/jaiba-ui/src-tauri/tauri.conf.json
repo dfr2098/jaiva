@@ -36,9 +36,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "resources/desktop-local-flow.yaml"
-    ],
+    "resources": {
+      "resources/desktop-local-flow.yaml": "resources/desktop-local-flow.yaml",
+      "../../../LICENSE": "LICENSE",
+      "../../../THIRD_PARTY_LICENSES.md": "THIRD_PARTY_LICENSES.md"
+    },
     "externalBin": [
       "binaries/jaiba"
     ],

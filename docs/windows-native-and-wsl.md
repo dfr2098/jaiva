@@ -10,8 +10,9 @@ GitHub con todos los conectores:
 
 - `jaiba-desktop-windows-x86_64-setup.exe`: instalador de la app de escritorio
   con el motor incluido (**Motor → Local → Arrancar**).
-- `jaiba-windows-x86_64.zip`: solo `jaiba.exe`, con la consola web en
-  `http://127.0.0.1:9090/` al correr `jaiba.exe serve`.
+- `jaiba-windows-x86_64.zip`: `jaiba.exe`, con la consola web en
+  `http://127.0.0.1:9090/` al correr `jaiba.exe serve`, más `LICENSE` y
+  `THIRD_PARTY_LICENSES.md`.
 
 Para Oracle hace falta Oracle Instant Client 64-bit en el `PATH`. El
 instalador no está firmado; Windows SmartScreen pide **Más información →

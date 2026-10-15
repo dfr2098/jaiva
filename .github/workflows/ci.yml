@@ -134,6 +134,40 @@ jobs:
       - name: YAML preservation regressions (no browser required)
         run: npm run e2e -- yaml-preservation.spec.ts
 
+  licenses:
+    name: Licencias de terceros
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - name: cargo-deny y cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2,cargo-about@0.9.2
+
+      - name: Solo licencias permitidas (deny.toml)
+        run: |
+          cargo deny --locked check licenses
+          cargo deny --locked --manifest-path apps/jaiba-ui/src-tauri/Cargo.toml check licenses
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/jaiba-ui/package-lock.json
+
+      - name: npm ci
+        working-directory: apps/jaiba-ui
+        run: npm ci --ignore-scripts
+
+      - name: THIRD_PARTY_LICENSES.md al día
+        run: python3 scripts/third-party-licenses.py --check
+
   drivers:
     name: clippy (all-drivers)
     runs-on: ubuntu-latest

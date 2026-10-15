@@ -38,6 +38,10 @@ Workflow [`.github/workflows/release.yml`](../.github/workflows/release.yml):
   instalador no se firma.
 - Imagen: `ghcr.io/<owner>/jaiba-serve:<version>`.
 
+Todos los artefactos llevan `LICENSE` y `THIRD_PARTY_LICENSES.md`: en la raíz
+del tar.gz y del zip, en la carpeta de instalación del escritorio y en
+`/usr/share/doc/jaiba/` dentro de la imagen. Ver [licencias](licencias.md).
+
 El tag debe coincidir con `version` de `[workspace.package]` en `Cargo.toml`
 (y con `apps/jaiba-ui/package.json` / `tauri.conf.json`). Crear el tag sobre
 `main` con el CI en verde:

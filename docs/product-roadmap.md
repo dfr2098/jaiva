@@ -16,9 +16,9 @@ Complementa [release-core.md](release-core.md) (defaults seguros / smoke).
 | --- | --- |
 | PostgreSQL → CSV (recorrido oficial) | **Estable** (CI automático) |
 | PostgreSQL escritura | Estable (secundario) |
-| MySQL | Beta |
-| MongoDB | Beta |
-| Kafka | Beta |
+| MySQL / MariaDB | **Beta** (CI real nightly + PR, MySQL 8.4 y MariaDB 11.4; [mysql.md](mysql.md)) |
+| MongoDB | Beta (sin CI real todavía; en curso) |
+| Kafka | Beta (sin CI real todavía; en curso) |
 | Oracle | **Beta** (CI real nightly + PR; [oracle.md](oracle.md)) |
 | SQL Server | Experimental |
 | Memoria JME | Beta (madura en este repo; [checklist](history/priority-jme-memory-manager.md#checklist-beta-integración-oficial)) |

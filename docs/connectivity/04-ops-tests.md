@@ -57,4 +57,16 @@ JAIBA_ORACLE_CONTAINER=<contenedor> ./scripts/smoke-oracle.sh
 
 Detalle y contenedor de pruebas: [../oracle.md § Pruebas](../oracle.md#pruebas).
 
+MySQL/MariaDB igual: pruebas del conector y de `query_mysql` en `jaiba-runtime`
+(tipos, streaming, cancelación con `KILL QUERY`, timeout, errores, upsert,
+rollback) y un smoke con el binario:
+
+```bash
+JAIBA_TEST_MYSQL_URL='mysql://jaiba:...@127.0.0.1:13306/jaiba' \
+  cargo test -p jaiba-runtime --lib -- mysql
+JAIBA_TEST_MYSQL_PASSWORD=... ./scripts/smoke-mysql.sh
+```
+
+Detalle: [../mysql.md § Pruebas](../mysql.md#pruebas).
+
 Volver al índice: [README.md](README.md).

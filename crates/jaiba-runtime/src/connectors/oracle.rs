@@ -9,7 +9,7 @@ use oracle::{
     pool::{GetMode, Pool, PoolBuilder},
     sql_type::{OracleType, Timestamp, ToSql},
 };
-use serde_json::{Map, Number, Value};
+use serde_json::{Map, Value};
 use tokio::sync::mpsc;
 use url::Url;
 
@@ -18,6 +18,7 @@ use crate::{connectors::database::validate_write_request, error::FlowError};
 use super::{
     DatabaseKind, DatabaseWriter, WriteCapabilities, WriteMode, WriteRequest, WriteSummary,
     quote_identifier, quote_qualified_identifier,
+    values::{base64_encode, float_value, number_value},
 };
 
 /// Upper bound for one OCI round trip unless a processor sets its own.
@@ -535,37 +536,6 @@ fn oracle_json_value(
 /// Maps Oracle NUMBER text to JSON without losing precision: integers when
 /// they fit 64 bits, floats only when the decimal round-trips exactly, and the
 /// original text otherwise.
-fn number_value(text: &str) -> Value {
-    let normalized = if let Some(rest) = text.strip_prefix("-.") {
-        format!("-0.{rest}")
-    } else if let Some(rest) = text.strip_prefix('.') {
-        format!("0.{rest}")
-    } else {
-        text.to_owned()
-    };
-    if let Ok(integer) = normalized.parse::<i64>() {
-        return Value::from(integer);
-    }
-    if let Ok(integer) = normalized.parse::<u64>() {
-        return Value::from(integer);
-    }
-    if let Ok(float) = normalized.parse::<f64>()
-        && float.is_finite()
-        && float.to_string() == normalized
-        && let Some(number) = Number::from_f64(float)
-    {
-        return Value::Number(number);
-    }
-    Value::String(normalized)
-}
-
-fn float_value(value: f64) -> Value {
-    // JSON has no NaN/Infinity; keep them visible as text.
-    Number::from_f64(value)
-        .map(Value::Number)
-        .unwrap_or_else(|| Value::String(value.to_string()))
-}
-
 fn iso_timestamp(value: &Timestamp, oracle_type: &OracleType) -> String {
     let mut text = format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
@@ -594,25 +564,6 @@ fn iso_timestamp(value: &Timestamp, oracle_type: &OracleType) -> String {
         text.push_str(&format!("{sign}{:02}:{:02}", minutes / 60, minutes % 60));
     }
     text
-}
-
-fn base64_encode(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let triple = (u32::from(chunk[0]) << 16)
-            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
-            | u32::from(*chunk.get(2).unwrap_or(&0));
-        for position in 0..4 {
-            if position <= chunk.len() {
-                let index = (triple >> (18 - position * 6)) & 0x3f;
-                output.push(char::from(ALPHABET[index as usize]));
-            } else {
-                output.push('=');
-            }
-        }
-    }
-    output
 }
 
 #[async_trait]
@@ -936,37 +887,6 @@ mod tests {
         assert_eq!(writer.settings.username, "app@corp");
         assert_eq!(writer.settings.password, "p:ss+w&x=y%z");
         assert_eq!(writer.settings.connect_string, "db:1522/SVC");
-    }
-
-    #[test]
-    fn maps_numbers_without_losing_precision() {
-        assert_eq!(number_value("42"), json!(42));
-        assert_eq!(number_value("-7"), json!(-7));
-        assert_eq!(
-            number_value("18446744073709551615"),
-            json!(18_446_744_073_709_551_615_u64)
-        );
-        assert_eq!(number_value("0.1"), json!(0.1));
-        assert_eq!(number_value(".5"), json!(0.5));
-        assert_eq!(number_value("-.25"), json!(-0.25));
-        assert_eq!(number_value("100000000000000000000"), json!(1e20));
-        assert_eq!(
-            number_value("12345678901234567890.123456789"),
-            json!("12345678901234567890.123456789")
-        );
-        assert_eq!(
-            number_value("0.12345678901234567890"),
-            json!("0.12345678901234567890")
-        );
-    }
-
-    #[test]
-    fn encodes_base64() {
-        assert_eq!(base64_encode(b""), "");
-        assert_eq!(base64_encode(b"f"), "Zg==");
-        assert_eq!(base64_encode(b"fo"), "Zm8=");
-        assert_eq!(base64_encode(b"foo"), "Zm9v");
-        assert_eq!(base64_encode(&[0xff, 0x00, 0x7f, 0x80]), "/wB/gA==");
     }
 
     #[test]

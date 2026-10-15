@@ -14,8 +14,9 @@ conexión y una UI que **no** guarda contraseñas ni carga drivers.
 | Capacidad | Estado |
 | --- | --- |
 | PostgreSQL → CSV (recorrido oficial) | **Estable** (CI automático en `main` + cron) |
-| MySQL / MongoDB / Kafka / JME | Beta |
+| MySQL / MariaDB | Beta ([guía](docs/mysql.md)) |
 | Oracle | Beta ([guía](docs/oracle.md)) |
+| MongoDB / Kafka / JME | Beta |
 | SQL Server | Experimental |
 | Plugins externos / Tauri | Preview / Beta |
 

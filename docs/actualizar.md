@@ -23,3 +23,21 @@ ahora límite de espera y no reintentan rechazos:
 
 Tabla completa, ejemplos y cómo conservar el comportamiento anterior:
 [mysql.md § Cambios respecto a v0.8](mysql.md#cambios-respecto-a-v08-revisa-tus-flows).
+
+### MongoDB
+
+El formato de `query_mongodb` no cambia (sigue en Extended JSON relajado). Cambia
+el comportamiento:
+
+- Clave duplicada, validación del esquema, registro sin la clave del upsert,
+  Extended JSON inválido y credenciales van a `failure` sin reintentar.
+- 300 s de espera máxima por respuesta de `query_mongodb` y por lote de
+  `put_mongodb` (`call_timeout_ms`, `0` = sin límite).
+- `upsert` envía un comando por lote; con `ordered: false` sigue con el resto
+  del lote tras un error (antes `ordered` se ignoraba en `upsert`).
+- Con `url_env`, el pool usa `max_connections` del YAML (5 por defecto) en lugar
+  de 10 si la URI no trae `maxPoolSize`.
+
+Nuevo: `json_format: canonical` (copia exacta de tipos) y `json_format: plain`
+(sin envolturas `$...`, para SQL/CSV). Detalle:
+[mongodb.md § Cambios respecto a v0.8](mongodb.md#cambios-respecto-a-v08-revisa-tus-flows).

@@ -1,6 +1,11 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
-use mongodb::bson::Document;
+use mongodb::{
+    Collection,
+    bson::{Bson, Document},
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -9,7 +14,10 @@ use crate::{
     error::FlowError,
 };
 
-use super::mongodb_support::{default_database, document_json, json_document};
+use super::mongodb_support::{
+    JsonFormat, call_timeout, default_call_timeout_ms, default_database, document_json,
+    json_document, with_call_timeout,
+};
 
 /// Fuente MongoDB con lectura streaming y memoria acotada por `batch_size`.
 pub struct QueryMongoDb {
@@ -21,6 +29,9 @@ pub struct QueryMongoDb {
     skip: u64,
     limit: Option<i64>,
     batch_size: usize,
+    call_timeout: Option<Duration>,
+    max_time: Option<Duration>,
+    json_format: JsonFormat,
 }
 
 #[derive(Deserialize)]
@@ -39,6 +50,14 @@ struct QueryMongoDbConfig {
     limit: Option<i64>,
     #[serde(default = "default_batch_size")]
     batch_size: usize,
+    /// Espera máxima por cada respuesta del servidor (`find`/`getMore`); 0 = sin límite.
+    #[serde(default = "default_call_timeout_ms")]
+    call_timeout_ms: u64,
+    /// `maxTimeMS` del servidor: tiempo total de ejecución del cursor; 0 = sin límite.
+    #[serde(default)]
+    max_time_ms: u64,
+    #[serde(default)]
+    json_format: JsonFormat,
 }
 
 fn empty_object() -> Value {
@@ -91,7 +110,69 @@ impl QueryMongoDb {
             skip: config.skip,
             limit: config.limit,
             batch_size: config.batch_size,
+            call_timeout: call_timeout(config.call_timeout_ms),
+            max_time: call_timeout(config.max_time_ms),
+            json_format: config.json_format,
         })
+    }
+
+    /// Lee el cursor y emite un paquete cada `batch_size` documentos. `comment`
+    /// identifica la operación en `currentOp` y en el profiler del servidor.
+    pub(super) async fn stream_documents(
+        &self,
+        collection: &Collection<Document>,
+        comment: &str,
+        packet: &DataPacket,
+        output: &OutputSender,
+    ) -> Result<(), FlowError> {
+        let driver_batch_size = u32::try_from(self.batch_size).map_err(|_| {
+            FlowError::Configuration("query_mongodb batch_size exceeds u32".to_owned())
+        })?;
+
+        let mut find = collection
+            .find(self.filter.clone())
+            .skip(self.skip)
+            .batch_size(driver_batch_size)
+            .comment(Bson::String(comment.to_owned()));
+        if let Some(projection) = &self.projection {
+            find = find.projection(projection.clone());
+        }
+        if let Some(sort) = &self.sort {
+            find = find.sort(sort.clone());
+        }
+        if let Some(limit) = self.limit {
+            find = find.limit(limit);
+        }
+        if let Some(max_time) = self.max_time {
+            find = find.max_time(max_time);
+        }
+
+        let mut cursor = with_call_timeout(self.call_timeout, find.into_future()).await?;
+        let mut records = Vec::with_capacity(self.batch_size);
+        let mut batch_number = 0_u64;
+
+        while let Some(document) = with_call_timeout(self.call_timeout, cursor.try_next()).await? {
+            records.push(document_json(document, self.json_format));
+            if records.len() == self.batch_size {
+                output
+                    .success(make_packet(
+                        packet,
+                        std::mem::take(&mut records),
+                        &self.collection,
+                        batch_number,
+                    ))
+                    .await?;
+                records = Vec::with_capacity(self.batch_size);
+                batch_number += 1;
+            }
+        }
+
+        if !records.is_empty() || batch_number == 0 {
+            output
+                .success(make_packet(packet, records, &self.collection, batch_number))
+                .await?;
+        }
+        Ok(())
     }
 }
 
@@ -106,61 +187,9 @@ impl Processor for QueryMongoDb {
         let client = context.connections.mongodb(&self.connection)?;
         let database = default_database(client)?;
         let collection = database.collection::<Document>(&self.collection);
-        let driver_batch_size = u32::try_from(self.batch_size).map_err(|_| {
-            FlowError::Configuration("query_mongodb batch_size exceeds u32".to_owned())
-        })?;
-
-        let mut find = collection
-            .find(self.filter.clone())
-            .skip(self.skip)
-            .batch_size(driver_batch_size);
-        if let Some(projection) = &self.projection {
-            find = find.projection(projection.clone());
-        }
-        if let Some(sort) = &self.sort {
-            find = find.sort(sort.clone());
-        }
-        if let Some(limit) = self.limit {
-            find = find.limit(limit);
-        }
-
-        let mut cursor = find
+        let comment = format!("jaiba:{}", context.processor_id);
+        self.stream_documents(&collection, &comment, &packet, output)
             .await
-            .map_err(|error| FlowError::DatabaseConnector(error.to_string()))?;
-        let mut records = Vec::with_capacity(self.batch_size);
-        let mut batch_number = 0_u64;
-
-        while let Some(document) = cursor
-            .try_next()
-            .await
-            .map_err(|error| FlowError::DatabaseConnector(error.to_string()))?
-        {
-            records.push(document_json(document));
-            if records.len() == self.batch_size {
-                output
-                    .success(make_packet(
-                        &packet,
-                        std::mem::take(&mut records),
-                        &self.collection,
-                        batch_number,
-                    ))
-                    .await?;
-                records = Vec::with_capacity(self.batch_size);
-                batch_number += 1;
-            }
-        }
-
-        if !records.is_empty() || batch_number == 0 {
-            output
-                .success(make_packet(
-                    &packet,
-                    records,
-                    &self.collection,
-                    batch_number,
-                ))
-                .await?;
-        }
-        Ok(())
     }
 }
 
@@ -190,11 +219,8 @@ fn make_packet(
 
 #[cfg(test)]
 mod tests {
-    use std::{env, fs};
-
     use mongodb::bson::{Bson, doc};
     use serde_json::json;
-    use uuid::Uuid;
 
     use super::*;
 
@@ -238,106 +264,31 @@ mod tests {
         assert!(error.to_string().contains("must be a JSON object"));
     }
 
-    /// Prueba opt-in de la fase 2: lee documentos filtrados y los carga con
-    /// upsert en otra colección. Se ejecuta dos veces para comprobar idempotencia.
-    #[tokio::test]
-    async fn mongodb_real_query_to_upsert_flow_is_idempotent() {
-        let Ok(url) = env::var("JAIBA_TEST_MONGODB_URL") else {
-            eprintln!("skipping MongoDB flow test: JAIBA_TEST_MONGODB_URL is not set");
-            return;
-        };
-        let client = mongodb::Client::with_uri_str(&url)
-            .await
-            .expect("connect to MongoDB");
-        let database = default_database(&client).expect("default MongoDB database");
-        let suffix = Uuid::new_v4().simple().to_string();
-        let source_name = format!("jaiba_phase_2_source_{suffix}");
-        let target_name = format!("jaiba_phase_2_target_{suffix}");
-        let source = database.collection::<Document>(&source_name);
-        let target = database.collection::<Document>(&target_name);
-        source
-            .insert_many(vec![
-                doc! { "_id": "customer-1", "name": "Ada", "active": true },
-                doc! { "_id": "customer-2", "name": "Grace", "active": true },
-                doc! { "_id": "customer-3", "name": "Hidden", "active": false },
-            ])
-            .await
-            .expect("seed source collection");
+    #[test]
+    fn reads_timeouts_and_json_format() {
+        let defaults = QueryMongoDb::from_config(&json!({
+            "connection": "mongo",
+            "collection": "customers"
+        }))
+        .expect("defaults");
+        assert_eq!(defaults.call_timeout, Some(Duration::from_secs(300)));
+        assert_eq!(defaults.max_time, None);
+        assert_eq!(defaults.json_format, JsonFormat::Relaxed);
 
-        let state_dir = env::temp_dir().join(format!("jaiba-mongodb-phase-2-{suffix}"));
-        fs::create_dir_all(&state_dir).expect("create state directory");
-        let state_file = state_dir
-            .join("state.json")
-            .to_string_lossy()
-            .replace('\\', "/");
-        let yaml = format!(
-            r#"
-id: mongodb-phase-2
-database_connections:
-  mongo:
-    type: mongodb
-    url_env: JAIBA_TEST_MONGODB_URL
-    max_connections: 2
-engine:
-  state_file: "{state_file}"
-  repository:
-    enabled: false
-processors:
-  - id: read
-    type: query_mongodb
-    config:
-      connection: mongo
-      collection: {source_name}
-      filter:
-        active: true
-      sort:
-        _id: 1
-      batch_size: 1
-  - id: write
-    type: put_mongodb
-    config:
-      connection: mongo
-      collection: {target_name}
-      mode: upsert
-      key_fields: [_id]
-      batch_size: 2
-connections:
-  - from: read
-    relationship: success
-    to: write
-"#
-        );
-        let config: jaiba_core::config::FlowConfig =
-            serde_yaml::from_str(&yaml).expect("parse MongoDB flow");
-
-        for _ in 0..2 {
-            let summary = crate::engine::FlowEngine::new(config.clone())
-                .expect("build MongoDB flow")
-                .run()
-                .await
-                .expect("run MongoDB flow");
-            assert_eq!(summary.failed, 0);
-        }
-
-        assert_eq!(
-            target
-                .count_documents(doc! {})
-                .await
-                .expect("count target documents"),
-            2
-        );
-        assert_eq!(
-            target
-                .find_one(doc! { "_id": "customer-1" })
-                .await
-                .expect("read target")
-                .expect("customer exists")
-                .get_str("name"),
-            Ok("Ada")
-        );
-
-        source.drop().await.expect("drop source collection");
-        target.drop().await.expect("drop target collection");
-        fs::remove_dir_all(state_dir).ok();
+        let custom = QueryMongoDb::from_config(&json!({
+            "connection": "mongo",
+            "collection": "customers",
+            "call_timeout_ms": 0,
+            "max_time_ms": 1500,
+            "json_format": "canonical"
+        }))
+        .expect("custom");
+        assert_eq!(custom.call_timeout, None);
+        assert_eq!(custom.max_time, Some(Duration::from_millis(1500)));
+        assert_eq!(custom.json_format, JsonFormat::Canonical);
     }
 }
+
+#[cfg(test)]
+#[path = "query_mongodb_live_tests.rs"]
+pub(crate) mod live_tests;

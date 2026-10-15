@@ -1,7 +1,10 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use mongodb::bson::Document;
+use mongodb::{
+    Collection, Database,
+    bson::{Bson, Document, RawDocumentBuf, doc},
+};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -10,7 +13,14 @@ use crate::{
     error::FlowError,
 };
 
-use super::mongodb_support::{default_database, json_document, value_at_path};
+use super::mongodb_support::{
+    call_timeout, default_call_timeout_ms, default_database, is_transient_code, record_document,
+    value_at_path, with_call_timeout,
+};
+
+/// Bytes of documents per `update` command. The server limit for a command is
+/// 16 MiB plus 16 KiB of overhead; the margin covers filters and field names.
+const UPSERT_COMMAND_BYTES: usize = 15 * 1024 * 1024;
 
 /// Destino MongoDB. `upsert` reemplaza el documento completo que coincide con
 /// los campos clave y resulta idempotente cuando dichas claves son estables.
@@ -21,6 +31,7 @@ pub struct PutMongoDb {
     key_fields: Vec<String>,
     batch_size: usize,
     ordered: bool,
+    call_timeout: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -43,6 +54,9 @@ struct PutMongoDbConfig {
     batch_size: usize,
     #[serde(default = "default_ordered")]
     ordered: bool,
+    /// Espera máxima por cada lote escrito; 0 = sin límite.
+    #[serde(default = "default_call_timeout_ms")]
+    call_timeout_ms: u64,
 }
 
 fn default_key_fields() -> Vec<String> {
@@ -95,8 +109,171 @@ impl PutMongoDb {
             key_fields: config.key_fields,
             batch_size: config.batch_size,
             ordered: config.ordered,
+            call_timeout: call_timeout(config.call_timeout_ms),
         })
     }
+
+    /// Escribe todos los registros y devuelve `(documentos, lotes)`.
+    pub(super) async fn write_records(
+        &self,
+        database: &Database,
+        records: &[Value],
+    ) -> Result<(u64, u64), FlowError> {
+        let documents = records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| record_document(record, &format!("put_mongodb record {index}")))
+            .collect::<Result<Vec<_>, _>>()?;
+        let collection = database.collection::<Document>(&self.collection);
+        match self.mode {
+            MongoWriteMode::Insert => self.insert_documents(&collection, &documents).await,
+            MongoWriteMode::Upsert => self.upsert_documents(database, &documents).await,
+        }
+    }
+
+    async fn insert_documents(
+        &self,
+        collection: &Collection<Document>,
+        documents: &[Document],
+    ) -> Result<(u64, u64), FlowError> {
+        let mut inserted = 0_u64;
+        let mut batches = 0_u64;
+        for batch in documents.chunks(self.batch_size) {
+            let result = with_call_timeout(
+                self.call_timeout,
+                collection
+                    .insert_many(batch)
+                    .ordered(self.ordered)
+                    .into_future(),
+            )
+            .await?;
+            inserted += result.inserted_ids.len() as u64;
+            batches += 1;
+        }
+        Ok((inserted, batches))
+    }
+
+    /// Un comando `update` por lote con una entrada `{q, u, upsert: true}` por
+    /// documento: un viaje al servidor por lote en lugar de uno por documento.
+    async fn upsert_documents(
+        &self,
+        database: &Database,
+        documents: &[Document],
+    ) -> Result<(u64, u64), FlowError> {
+        let mut written = 0_u64;
+        let mut batches = 0_u64;
+        let mut updates = Vec::with_capacity(self.batch_size.min(documents.len()));
+        let mut first_index = 0;
+        let mut bytes = 0;
+        for (index, document) in documents.iter().enumerate() {
+            let filter = self.upsert_filter(document, index)?;
+            let size = document_size(document)? + document_size(&filter)?;
+            if !updates.is_empty()
+                && (updates.len() == self.batch_size || bytes + size > UPSERT_COMMAND_BYTES)
+            {
+                written += self
+                    .run_upsert(database, std::mem::take(&mut updates), first_index)
+                    .await?;
+                batches += 1;
+                first_index = index;
+                bytes = 0;
+            }
+            bytes += size;
+            updates.push(Bson::Document(doc! {
+                "q": filter,
+                "u": document.clone(),
+                "upsert": true,
+            }));
+        }
+        if !updates.is_empty() {
+            written += self.run_upsert(database, updates, first_index).await?;
+            batches += 1;
+        }
+        Ok((written, batches))
+    }
+
+    async fn run_upsert(
+        &self,
+        database: &Database,
+        updates: Vec<Bson>,
+        first_index: usize,
+    ) -> Result<u64, FlowError> {
+        let command = doc! {
+            "update": self.collection.as_str(),
+            "updates": updates,
+            "ordered": self.ordered,
+        };
+        let reply = with_call_timeout(
+            self.call_timeout,
+            database.run_command(command).into_future(),
+        )
+        .await?;
+        upsert_reply(&reply, first_index)
+    }
+
+    fn upsert_filter(&self, document: &Document, index: usize) -> Result<Document, FlowError> {
+        let mut filter = Document::new();
+        for field in &self.key_fields {
+            let value = value_at_path(document, field).ok_or_else(|| {
+                FlowError::DatabaseRejected(format!(
+                    "put_mongodb upsert record {index} is missing key field '{field}'"
+                ))
+            })?;
+            filter.insert(field, value.clone());
+        }
+        Ok(filter)
+    }
+}
+
+fn document_size(document: &Document) -> Result<usize, FlowError> {
+    RawDocumentBuf::from_document(document)
+        .map(|raw| raw.as_bytes().len())
+        .map_err(|error| FlowError::DatabaseRejected(format!("put_mongodb record: {error}")))
+}
+
+/// Interpreta la respuesta de `update`: `n` cuenta documentos coincidentes más
+/// insertados. `writeErrors` llega con `ok: 1`, así que se revisa aquí.
+fn upsert_reply(reply: &Document, first_index: usize) -> Result<u64, FlowError> {
+    if let Ok(errors) = reply.get_array("writeErrors")
+        && !errors.is_empty()
+    {
+        let codes = errors
+            .iter()
+            .filter_map(Bson::as_document)
+            .map(|error| error.get_i32("code").unwrap_or_default())
+            .collect::<Vec<_>>();
+        let first = errors.first().and_then(Bson::as_document);
+        let index = first
+            .and_then(|error| error.get_i32("index").ok())
+            .unwrap_or_default() as usize;
+        let message = format!(
+            "put_mongodb upsert: {} write error(s); record {}: code {} ({})",
+            errors.len(),
+            first_index + index,
+            codes.first().copied().unwrap_or_default(),
+            first
+                .and_then(|error| error.get_str("errmsg").ok())
+                .unwrap_or("unknown error"),
+        );
+        return Err(if codes.iter().all(|code| is_transient_code(*code)) {
+            FlowError::DatabaseConnector(message)
+        } else {
+            FlowError::DatabaseRejected(message)
+        });
+    }
+    if let Ok(error) = reply.get_document("writeConcernError") {
+        return Err(FlowError::DatabaseConnector(format!(
+            "put_mongodb upsert write concern error: code {} ({})",
+            error.get_i32("code").unwrap_or_default(),
+            error.get_str("errmsg").unwrap_or("unknown error"),
+        )));
+    }
+    let count = match reply.get("n") {
+        Some(Bson::Int32(count)) => i64::from(*count),
+        Some(Bson::Int64(count)) => *count,
+        _ => 0,
+    };
+    Ok(count.max(0) as u64)
 }
 
 #[async_trait]
@@ -109,7 +286,6 @@ impl Processor for PutMongoDb {
     ) -> Result<(), FlowError> {
         let client = context.connections.mongodb(&self.connection)?;
         let database = default_database(client)?;
-        let collection = database.collection::<Document>(&self.collection);
         let circuit = format!("mongodb:{}", self.connection);
         if let Err(error) = context.circuits.permit(&circuit) {
             context.metrics.circuit_rejected();
@@ -120,20 +296,17 @@ impl Processor for PutMongoDb {
             processor_id: context.processor_id.clone(),
             message,
         })?;
-        let documents = records
-            .iter()
-            .enumerate()
-            .map(|(index, record)| json_document(record, &format!("put_mongodb record {index}")))
-            .collect::<Result<Vec<_>, _>>()?;
         let started = Instant::now();
-        let result = match self.mode {
-            MongoWriteMode::Insert => self.insert_documents(&collection, &documents).await,
-            MongoWriteMode::Upsert => self.upsert_documents(&collection, &documents).await,
-        };
-        let written = match result {
+        let (written, batches) = match self.write_records(&database, records).await {
             Ok(written) => written,
             Err(error) => {
-                context.circuits.failure(&circuit);
+                // A rejected document proves the server is reachable; only
+                // connectivity-style failures should open the circuit.
+                if error.is_retryable() {
+                    context.circuits.failure(&circuit);
+                } else {
+                    context.circuits.success(&circuit);
+                }
                 context
                     .metrics
                     .set_circuits_open(context.circuits.open_count());
@@ -146,7 +319,6 @@ impl Processor for PutMongoDb {
             .metrics
             .set_circuits_open(context.circuits.open_count());
 
-        let batches = documents.len().div_ceil(self.batch_size) as u64;
         let elapsed_ms = started.elapsed().as_millis() as u64;
         context.metrics.database_write(written, batches, elapsed_ms);
         packet
@@ -179,66 +351,6 @@ impl Processor for PutMongoDb {
     }
 }
 
-impl PutMongoDb {
-    async fn insert_documents(
-        &self,
-        collection: &mongodb::Collection<Document>,
-        documents: &[Document],
-    ) -> Result<u64, FlowError> {
-        let mut inserted = 0_u64;
-        for batch in documents.chunks(self.batch_size) {
-            if batch.is_empty() {
-                continue;
-            }
-            let result = collection
-                .insert_many(batch.to_vec())
-                .ordered(self.ordered)
-                .await
-                .map_err(|error| FlowError::DatabaseConnector(error.to_string()))?;
-            inserted += result.inserted_ids.len() as u64;
-        }
-        Ok(inserted)
-    }
-
-    async fn upsert_documents(
-        &self,
-        collection: &mongodb::Collection<Document>,
-        documents: &[Document],
-    ) -> Result<u64, FlowError> {
-        let mut written = 0_u64;
-        for batch in documents.chunks(self.batch_size) {
-            for document in batch {
-                let filter = self.upsert_filter(document)?;
-                let result = collection
-                    .replace_one(filter, document.clone())
-                    .upsert(true)
-                    .await
-                    .map_err(|error| FlowError::DatabaseConnector(error.to_string()))?;
-                written += result.modified_count + u64::from(result.upserted_id.is_some());
-                if result.matched_count > 0 && result.modified_count == 0 {
-                    // A retry may replace a document with identical content; it still
-                    // counts as a successfully handled record.
-                    written += 1;
-                }
-            }
-        }
-        Ok(written)
-    }
-
-    fn upsert_filter(&self, document: &Document) -> Result<Document, FlowError> {
-        let mut filter = Document::new();
-        for field in &self.key_fields {
-            let value = value_at_path(document, field).ok_or_else(|| {
-                FlowError::Configuration(format!(
-                    "put_mongodb upsert record is missing key field '{field}'"
-                ))
-            })?;
-            filter.insert(field, value.clone());
-        }
-        Ok(filter)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use mongodb::bson::{Bson, doc};
@@ -256,17 +368,20 @@ mod tests {
         }))
         .expect("valid writer");
         let filter = processor
-            .upsert_filter(&doc! {
-                "tenant": "north",
-                "customer": { "id": 42_i32 }
-            })
+            .upsert_filter(
+                &doc! {
+                    "tenant": "north",
+                    "customer": { "id": 42_i32 }
+                },
+                0,
+            )
             .expect("build filter");
         assert_eq!(filter.get_str("tenant"), Ok("north"));
         assert_eq!(filter.get("customer.id"), Some(&Bson::Int32(42)));
     }
 
     #[test]
-    fn upsert_rejects_missing_keys() {
+    fn upsert_rejects_missing_keys_without_retry() {
         let processor = PutMongoDb::from_config(&json!({
             "connection": "mongo",
             "collection": "customers",
@@ -275,8 +390,59 @@ mod tests {
         }))
         .expect("valid writer");
         let error = processor
-            .upsert_filter(&doc! { "name": "Ada" })
+            .upsert_filter(&doc! { "name": "Ada" }, 3)
             .expect_err("missing key must fail");
         assert!(error.to_string().contains("external_id"));
+        assert!(error.to_string().contains("record 3"));
+        assert!(!error.is_retryable());
+    }
+
+    #[test]
+    fn upsert_reply_counts_and_classifies_write_errors() {
+        assert_eq!(
+            upsert_reply(&doc! { "n": 3, "nModified": 1, "ok": 1 }, 0).expect("count"),
+            3
+        );
+
+        let duplicate = upsert_reply(
+            &doc! {
+                "n": 1,
+                "writeErrors": [{ "index": 1, "code": 11000, "errmsg": "E11000 duplicate key" }],
+                "ok": 1,
+            },
+            1000,
+        )
+        .expect_err("duplicate key");
+        assert!(!duplicate.is_retryable());
+        assert!(duplicate.to_string().contains("record 1001"));
+
+        let conflict = upsert_reply(
+            &doc! { "n": 0, "writeErrors": [{ "index": 0, "code": 112, "errmsg": "WriteConflict" }], "ok": 1 },
+            0,
+        )
+        .expect_err("write conflict");
+        assert!(conflict.is_retryable());
+
+        let concern = upsert_reply(
+            &doc! { "n": 2, "writeConcernError": { "code": 64, "errmsg": "waiting for replication timed out" }, "ok": 1 },
+            0,
+        )
+        .expect_err("write concern");
+        assert!(concern.is_retryable());
+    }
+
+    #[test]
+    fn reads_call_timeout_with_zero_as_unlimited() {
+        let writer = PutMongoDb::from_config(&json!({
+            "connection": "mongo",
+            "collection": "customers",
+            "call_timeout_ms": 0
+        }))
+        .expect("valid writer");
+        assert_eq!(writer.call_timeout, None);
     }
 }
+
+#[cfg(test)]
+#[path = "put_mongodb_live_tests.rs"]
+mod live_tests;

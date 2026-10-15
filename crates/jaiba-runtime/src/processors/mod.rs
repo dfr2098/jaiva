@@ -42,6 +42,8 @@ use encode::Encode;
 use external_plugin::ExternalPlugin;
 use generate_records::GenerateRecords;
 use log_records::LogRecords;
+#[cfg(feature = "mongodb-driver")]
+pub(crate) use mongodb_support::mongodb_error;
 #[cfg(feature = "kafka-driver")]
 use publish_kafka::PublishKafka;
 use put_database::PutDatabase;

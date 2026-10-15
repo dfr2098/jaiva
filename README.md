@@ -16,13 +16,15 @@ conexión y una UI que **no** guarda contraseñas ni carga drivers.
 | PostgreSQL → CSV (recorrido oficial) | **Estable** (CI automático en `main` + cron) |
 | MySQL / MariaDB | Beta ([guía](docs/mysql.md)) |
 | Oracle | Beta ([guía](docs/oracle.md)) |
-| MongoDB / Kafka / JME | Beta |
+| MongoDB | Beta ([guía](docs/mongodb.md)) |
+| Kafka / JME | Beta |
 | SQL Server | Experimental |
 | Plugins externos / Tauri | Preview / Beta |
 
 Detalle y ciclos: [docs/product-roadmap.md](docs/product-roadmap.md).
 Antes de subir de versión, revisa las
-[notas de actualización](docs/actualizar.md) (v0.9 cambia formatos de MySQL).
+[notas de actualización](docs/actualizar.md) (v0.9 cambia formatos de MySQL y
+el manejo de errores de MySQL y MongoDB).
 **Freeze:** sin `priority-11+` hasta 2 semanas verdes de smoke + release-core
 ([docs/release-core.md](docs/release-core.md#congelar-roadmap)).
 
@@ -539,7 +541,8 @@ cargo run --features mongodb-driver -- serve examples/visualisa-flow.yaml
 
 Configure host `127.0.0.1`, puerto `27017`, base `pruebas`, el usuario raíz del
 contenedor y SSL desactivado. Consulte los detalles y el alcance de esta fase en
-[`docs/connection-manager.md`](docs/connection-manager.md#mongodb).
+[`docs/connection-manager.md`](docs/connection-manager.md#mongodb). Tipos,
+errores, timeouts y pruebas: [`docs/mongodb.md`](docs/mongodb.md).
 
 Ejecute la carga de ejemplo:
 

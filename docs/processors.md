@@ -91,10 +91,17 @@ config:
   skip: 0
   limit: 10000
   batch_size: 500
+  call_timeout_ms: 300000   # espera máxima por cada respuesta; 0 = sin límite
+  max_time_ms: 0            # maxTimeMS del servidor; 0 = sin límite
+  json_format: relaxed      # relaxed | canonical | plain
 ```
 
-Los valores BSON que no existen de forma nativa en JSON conservan Extended JSON;
-por ejemplo, un `ObjectId` se transporta como `{"$oid":"..."}`.
+Con `relaxed` (por defecto) los valores BSON que no existen en JSON conservan
+Extended JSON; por ejemplo, un `ObjectId` se transporta como `{"$oid":"..."}`.
+`canonical` conserva cada tipo para copias MongoDB → MongoDB y `plain` entrega
+texto/números sin envolturas para destinos SQL o CSV. Si se excede
+`call_timeout_ms`, el nodo se cancela o el flow se detiene, el servidor
+interrumpe la consulta. Tipos, errores y pruebas: [mongodb.md](mongodb.md).
 
 ## `rename_fields`
 
@@ -208,18 +215,22 @@ config:
     - _id
   batch_size: 500
   ordered: true
+  call_timeout_ms: 300000   # espera máxima por lote; 0 = sin límite
 ```
 
 - `insert` usa inserciones múltiples por lote.
-- `upsert` busca por `key_fields` y reemplaza el documento completo; admite
-  rutas punteadas como `customer.id`.
+- `upsert` envía un comando `update` por lote que busca por `key_fields` y
+  reemplaza el documento completo; admite rutas punteadas como `customer.id`.
+  Los lotes con documentos grandes se parten para no pasar 16 MiB por comando.
 - `_id` es el campo clave predeterminado.
+- Clave duplicada, validación del esquema o un registro sin la clave van a
+  `failure` sin reintentar; los fallos de red o de servidor se reintentan.
 
-En un MongoDB independiente las escrituras de un paquete no son una transacción
-global. `insert` puede confirmar documentos antes de encontrar un error; para
-flujos reintentables se recomienda `upsert` con claves estables. Las
-transacciones multi-documento requieren un replica set y quedan fuera de esta
-fase.
+En MongoDB las escrituras de un paquete no son una transacción global. `insert`
+puede confirmar documentos antes de encontrar un error; para flujos
+reintentables se recomienda `upsert` con claves estables. Las transacciones
+multi-documento requieren un replica set y quedan fuera. Detalle:
+[mongodb.md](mongodb.md).
 
 ## `auto_destination`
 

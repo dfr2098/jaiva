@@ -17,7 +17,7 @@ Complementa [release-core.md](release-core.md) (defaults seguros / smoke).
 | PostgreSQL → CSV (recorrido oficial) | **Estable** (CI automático) |
 | PostgreSQL escritura | Estable (secundario) |
 | MySQL / MariaDB | **Beta** (CI real nightly + PR, MySQL 8.4 y MariaDB 11.4; [mysql.md](mysql.md)) |
-| MongoDB | Beta (sin CI real todavía; en curso) |
+| MongoDB | **Beta** (CI real nightly + PR, MongoDB 7.0 y 8.0; [mongodb.md](mongodb.md)) |
 | Kafka | Beta (sin CI real todavía; en curso) |
 | Oracle | **Beta** (CI real nightly + PR; [oracle.md](oracle.md)) |
 | SQL Server | Experimental |

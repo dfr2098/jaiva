@@ -69,4 +69,16 @@ JAIBA_TEST_MYSQL_PASSWORD=... ./scripts/smoke-mysql.sh
 
 Detalle: [../mysql.md § Pruebas](../mysql.md#pruebas).
 
+MongoDB igual: pruebas de `query_mongodb`/`put_mongodb` en `jaiba-runtime`
+(tipos en los tres formatos, streaming, cancelación, timeouts, errores, upsert
+por lotes, copia exacta) y un smoke con el binario:
+
+```bash
+JAIBA_TEST_MONGODB_URL='mongodb://jaiba:...@127.0.0.1:27028/jaiba?authSource=admin' \
+  cargo test -p jaiba-runtime --features mongodb-driver --lib -- mongo
+JAIBA_TEST_MONGODB_PASSWORD=... ./scripts/smoke-mongodb.sh
+```
+
+Detalle: [../mongodb.md § Pruebas](../mongodb.md#pruebas).
+
 Volver al índice: [README.md](README.md).

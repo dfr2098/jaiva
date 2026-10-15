@@ -1022,6 +1022,51 @@ driver.
    lee como texto; el upsert usa `VALUES(col)` (obsoleto en MySQL 8.0.20+, pero
    es lo que acepta MariaDB); lectura *al menos una vez* tras reintento.
 
+### MongoDB a Beta (v0.9.0)
+
+1. **Problema:** MongoDB figuraba como Beta sin pruebas reales en CI. Todo error
+   era `DatabaseConnector` (una clave duplicada se reintentaba y abría el
+   circuit breaker; un registro inválido salía como `Configuration`, que
+   también se reintenta), no había timeout, el upsert hacía un `replaceOne`
+   por documento, `max_connections` no llegaba al pool y la salida en Extended
+   JSON relajado perdía el ancho de los enteros al volver a MongoDB.
+2. **Archivos:** `crates/jaiba-runtime/src/processors/mongodb_support.rs`
+   (clasificación, timeout, `JsonFormat`), `query_mongodb.rs`
+   (`call_timeout_ms`, `max_time_ms`, `json_format`, comentario por nodo) y
+   `query_mongodb_live_tests.rs`; `put_mongodb.rs` (upsert con el comando
+   `update` por lotes, circuito solo con errores reintentables) y
+   `put_mongodb_live_tests.rs`; `engine/connections.rs` (`maxPoolSize` desde
+   `max_connections`, `appName`); `jaiba-server/.../tests.rs`;
+   `scripts/smoke-mongodb.sh`; `.github/workflows/mongodb.yml`;
+   `docs/mongodb.md`.
+3. **Decisiones:**
+   - Reintentables: errores de red, selección de servidor, etiquetas
+     `RetryableWriteError`/`TransientTransactionError`, write concern y una
+     lista de códigos (cambio de primario, `WriteConflict`, `MaxTimeMSExpired`,
+     cursor perdido…). El resto (`11000`, `121`, consultas inválidas,
+     credenciales) es `DatabaseRejected`.
+   - Upsert con `run_command({update, updates: [{q, u, upsert}]})`: funciona en
+     cualquier versión (el `bulkWrite` del cliente exige 8.0). La respuesta trae
+     `writeErrors` con `ok: 1`, así que se interpreta aquí; los lotes se parten
+     a ~15 MiB.
+   - Cancelación: al soltar el futuro el driver cierra la conexión y `mongod`
+     interrumpe la lectura; la prueba lo comprueba con `$currentOp` usando el
+     comentario `jaiba:<nodo>`.
+   - `json_format`: `relaxed` sigue por defecto (sin cambio para flows
+     existentes); `canonical` para copia exacta; `plain` para SQL/CSV con
+     `Decimal128` exacto vía `connectors/values.rs`.
+4. **Prueba:** 11 pruebas reales (tipos en los tres formatos, streaming de
+   25 000 documentos, cancelación y timeout comprobados en el servidor,
+   `maxTimeMS`, consulta inválida, upsert de 2 500 documentos idempotente,
+   división de lotes grandes, copia exacta, clasificación de errores reales),
+   las dos del Connection Manager y el smoke con el binario (5 000 documentos
+   idénticos, tipos incluidos), verdes contra MongoDB 7.0 y 8.0. En CI:
+   `mongodb.yml` (nightly, PR que tocan MongoDB, label `mongodb`).
+5. **Limitación:** sin transacciones (requieren replica set) ni pruebas contra
+   replica set; una escritura interrumpida por timeout puede completarse en el
+   servidor; sin `aggregate` como fuente; lectura *al menos una vez* tras
+   reintento.
+
 ## Regla para futuras implementaciones
 
 Al terminar una característica, añadir aquí:

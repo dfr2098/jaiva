@@ -87,7 +87,13 @@ fn postgres_test_configuration() -> Option<(ConnectionEndpoint, ConnectionSecret
 
 #[cfg(feature = "mongodb-driver")]
 fn mongodb_test_configuration() -> Option<(ConnectionEndpoint, ConnectionSecret)> {
-    let password = env::var("JAIBA_TEST_MONGODB_PASSWORD").ok()?;
+    let Ok(password) = env::var("JAIBA_TEST_MONGODB_PASSWORD") else {
+        assert!(
+            env::var_os("JAIBA_TEST_MONGODB_REQUIRED").is_none(),
+            "JAIBA_TEST_MONGODB_REQUIRED is set but JAIBA_TEST_MONGODB_PASSWORD is missing"
+        );
+        return None;
+    };
     let host = env::var("JAIBA_TEST_MONGODB_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
     // Puerto host típico del contenedor de pruebas (mapeo 27018→27017).
     let port = env::var("JAIBA_TEST_MONGODB_PORT")
@@ -923,15 +929,15 @@ async fn sqlserver_real_connection_diagnostics_and_metadata() {
 #[cfg(feature = "mongodb-driver")]
 #[tokio::test]
 async fn mongodb_real_connection_from_url() {
-    let Some(password) = env::var("JAIBA_TEST_MONGODB_PASSWORD").ok() else {
+    let Some((endpoint, secret)) = mongodb_test_configuration() else {
         eprintln!("skipping real MongoDB URL test: JAIBA_TEST_MONGODB_PASSWORD is not set");
         return;
     };
-    let host = env::var("JAIBA_TEST_MONGODB_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
-    let port = env::var("JAIBA_TEST_MONGODB_PORT").unwrap_or_else(|_| "27018".to_owned());
-    let database =
-        env::var("JAIBA_TEST_MONGODB_DATABASE").unwrap_or_else(|_| "dma_test".to_owned());
-    let username = env::var("JAIBA_TEST_MONGODB_USER").unwrap_or_else(|_| "dma_test".to_owned());
+    let host = endpoint.host;
+    let port = endpoint.port;
+    let database = endpoint.database.expect("database");
+    let username = secret.username;
+    let password = secret.password;
     let raw = format!("mongodb://{username}:{password}@{host}:{port}/{database}?authSource=admin");
 
     let input = ConnectionInput {

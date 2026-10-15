@@ -361,9 +361,14 @@ async fn insert_database(
         "mongodb" | "mongo" => {
             #[cfg(feature = "mongodb-driver")]
             {
-                let client = MongoClient::with_uri_str(url)
+                let mut options = mongodb::options::ClientOptions::parse(url)
                     .await
-                    .map_err(|error| FlowError::DatabaseConnector(error.to_string()))?;
+                    .map_err(crate::processors::mongodb_error)?;
+                // A `maxPoolSize` in the URI wins over the YAML pool size.
+                options.max_pool_size.get_or_insert(max_connections);
+                options.app_name.get_or_insert_with(|| "jaiba".to_owned());
+                let client =
+                    MongoClient::with_options(options).map_err(crate::processors::mongodb_error)?;
                 mongodb.insert(name.to_owned(), client);
             }
             #[cfg(not(feature = "mongodb-driver"))]

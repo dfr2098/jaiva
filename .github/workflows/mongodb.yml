@@ -1,0 +1,138 @@
+# Integración real con MongoDB: criterio de madurez Beta (docs/mongodb.md).
+#
+# Corre cada noche, en push/PR que tocan el conector MongoDB, en PRs con el
+# label `mongodb` y a mano. Levanta MongoDB 7.0 y 8.0 en contenedores y corre
+# las pruebas de query_mongodb/put_mongodb, las del Connection Manager y un
+# flow real con el binario.
+name: MongoDB integration
+
+on:
+  schedule:
+    - cron: "53 6 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: mongodb-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: ¿toca MongoDB?
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decidir
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'mongodb') }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == "schedule" || "$EVENT" == "workflow_dispatch" || "$HAS_LABEL" == "true" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "$BASE" || "$BASE" =~ ^0+$ ]] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pattern='^(crates/jaiba-runtime/src/processors/(query_mongodb|put_mongodb|mongodb_support)|crates/jaiba-runtime/src/engine/(connections|executor/retry)|crates/jaiba-runtime/src/error\.rs|crates/jaiba-server/src/connection_api/|scripts/smoke-mongodb\.sh|\.github/workflows/mongodb\.yml|Cargo\.lock)'
+          if git diff --name-only "$BASE" HEAD | grep -Eq "$pattern"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  mongodb:
+    name: ${{ matrix.name }}
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: MongoDB 7.0
+            image: mongo:7.0
+          - name: MongoDB 8.0
+            image: mongo:8.0
+    env:
+      JAIBA_MONGODB_CONTAINER: jaiba-mongodb-ci
+      JAIBA_TEST_MONGODB_HOST: 127.0.0.1
+      JAIBA_TEST_MONGODB_PORT: "27017"
+      JAIBA_TEST_MONGODB_DATABASE: jaiba
+      JAIBA_TEST_MONGODB_USER: jaiba
+      # Las pruebas reales fallan en vez de saltarse si falta la configuración.
+      JAIBA_TEST_MONGODB_REQUIRED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Contraseña efímera
+        run: |
+          password="Ci$(openssl rand -hex 12)"
+          echo "::add-mask::$password"
+          echo "JAIBA_TEST_MONGODB_PASSWORD=$password" >> "$GITHUB_ENV"
+          echo "JAIBA_TEST_MONGODB_URL=mongodb://jaiba:$password@127.0.0.1:27017/jaiba?authSource=admin" >> "$GITHUB_ENV"
+
+      - name: ${{ matrix.name }}
+        run: |
+          docker run -d --name "$JAIBA_MONGODB_CONTAINER" -p 127.0.0.1:27017:27017 \
+            -e "MONGO_INITDB_ROOT_USERNAME=$JAIBA_TEST_MONGODB_USER" \
+            -e "MONGO_INITDB_ROOT_PASSWORD=$JAIBA_TEST_MONGODB_PASSWORD" \
+            ${{ matrix.image }}
+
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Compilar pruebas y binario
+        run: |
+          cargo test -p jaiba-runtime --features mongodb-driver --lib --no-run
+          cargo test -p jaiba-server --features mongodb-driver --lib --no-run
+          cargo build -p jaiba-cli --features release-core,mongodb-driver --bin jaiba
+
+      - name: Esperar al servidor
+        run: |
+          # Por la IP del contenedor: el mongod temporal del entrypoint solo
+          # escucha en 127.0.0.1 y sin autenticación.
+          for _ in $(seq 1 60); do
+            if docker exec "$JAIBA_MONGODB_CONTAINER" sh -c \
+              'mongosh --quiet --host "$(hostname -i)" -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --eval "db.runCommand({ ping: 1 }).ok"' \
+              >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs "$JAIBA_MONGODB_CONTAINER" | tail -n 50
+          exit 1
+
+      - name: query_mongodb / put_mongodb (tipos, streaming, cancelación, timeouts, errores, upsert por lotes)
+        run: cargo test -p jaiba-runtime --features mongodb-driver --lib -- mongo --nocapture
+
+      - name: Diagnóstico y metadatos (Connection Manager)
+        run: cargo test -p jaiba-server --features mongodb-driver --lib mongodb_real -- --nocapture
+
+      - name: Flow real query_mongodb -> put_mongodb
+        run: ./scripts/smoke-mongodb.sh target/debug/jaiba
+
+      - name: Logs del servidor si falla
+        if: failure()
+        run: docker logs "$JAIBA_MONGODB_CONTAINER" | tail -n 100

@@ -1004,7 +1004,8 @@ driver.
      texto), `DATETIME`/`TIMESTAMP` como `YYYY-MM-DDTHH:MM:SS[.f]` sin zona
      (MySQL rechaza `Z` y MariaDB rechaza `+00:00`; ambos aceptan la `T`),
      `TIME` como duración con signo. Son **cambios de formato** respecto a
-     v0.8 (antes `DECIMAL` como `f64` y fechas con espacio en lugar de `T`).
+     v0.8, listados con su alternativa en `docs/mysql.md` y
+     `docs/actualizar.md`.
    - sqlx 0.8.6 marca como binarias las columnas de texto `_bin` (y el `JSON`
      de MariaDB) sin exponer el charset: se mantiene la lectura de bytes UTF-8
      válidos como texto y el resto como base64; `GEOMETRY` pasa a ser siempre

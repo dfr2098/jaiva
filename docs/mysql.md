@@ -13,6 +13,30 @@ Estado: **Beta** desde v0.9.0 (ver [criterios de madurez](product-roadmap.md#cri
 Para pasar a **Estable** falta: un soak largo verde con MySQL y dos releases sin
 incidencias críticas.
 
+## Cambios respecto a v0.8 (revisa tus flows)
+
+v0.9.0 cambia el formato de algunos valores que entrega `query_mysql` y el
+comportamiento ante errores y esperas largas. Si un flow compara, parsea o
+guarda estos valores como texto en otro sistema, revísalo antes de actualizar.
+
+| Qué | Hasta v0.8 | Desde v0.9 | Para conservar lo anterior |
+| --- | --- | --- | --- |
+| `DATETIME`, `TIMESTAMP` | `"2026-10-13 10:20:30.123"` (espacio) | `"2026-10-13T10:20:30.123"` (`T`, ISO 8601) | `CAST(col AS CHAR)` en la SELECT |
+| `DECIMAL` con decimales que no caben exactos en un número | número `f64` redondeado (`12345678901234.568`) | **texto** con todos los dígitos (`"12345678901234.5678"`) | `CAST(col AS DOUBLE)` en la SELECT (pierde precisión, como antes) |
+| `DECIMAL` entero mayor que `BIGINT` | número `f64` redondeado | entero sin signo o texto exacto | `CAST(col AS DOUBLE)` |
+| `FLOAT` | ensanchado a doble precisión (`0.10000000149011612`) | valor corto (`0.1`) | `CAST(col AS DOUBLE)` |
+| `TIME` | fracción con ceros de relleno (`"07:05:09.500"` en `TIME(3)`); negativo o ≥ 24 h hacía fallar la consulta | fracción sin ceros (`"07:05:09.5"`); acepta `"-838:59:58.5"` | `CAST(col AS CHAR)` |
+| `GEOMETRY` | texto si los bytes eran UTF-8 válido, si no base64 | siempre base64 | — |
+| Espera por la siguiente fila en `query_mysql` | sin límite | 300 s (`call_timeout_ms`), luego error reintentable | `call_timeout_ms: 0` |
+| Cada sentencia de `put_database` | sin límite | 300 s, luego rollback y error reintentable | bajar `batch_size` |
+| Rechazos (clave duplicada, NULL, dato muy largo, tabla inexistente, sintaxis) | se reintentaban y abrían el circuit breaker | van a `failure` al primer intento; el circuit breaker no se abre | — |
+
+Los valores sin cambio (enteros, `BOOLEAN`, `DATE`, `JSON`, texto, binarios,
+`DECIMAL` exactos como `12.5`) salen igual que antes. Escribir en MySQL valores
+leídos con v0.8 sigue funcionando: MySQL acepta fechas con espacio o con `T`.
+Las conversiones de la última columna están comprobadas en MySQL 8.4 y
+MariaDB 11.4.
+
 ## Conexión
 
 Va incluido en todos los binarios (no necesita feature ni bibliotecas extra).

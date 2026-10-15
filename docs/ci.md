@@ -10,6 +10,7 @@
 | **CI · drivers** | `.github/workflows/ci.yml` | push/PR a `main`/`master` | Clippy `-D warnings` con `jaiba-cli/all-drivers` (Oracle, SQL Server, Kafka, MongoDB, ClickHouse) |
 | **Windows** | `.github/workflows/windows.yml` | push/PR | build nativo con `all-drivers,embedded-ui` y comprobación de los nodos de cada driver |
 | **Oracle integration** | `.github/workflows/oracle.yml` | nightly, push a `main` y PR que tocan Oracle, label `oracle`, o manual | Oracle Database Free 23ai en contenedor + Instant Client vía `jaiba oracle-client install`: pruebas reales del conector, diagnóstico del Connection Manager y `scripts/smoke-oracle.sh` ([oracle.md](oracle.md)) |
+| **MySQL integration** | `.github/workflows/mysql.yml` | nightly, push a `main` y PR que tocan MySQL, label `mysql`, o manual | MySQL 8.4 y MariaDB 11.4 en contenedores: pruebas reales del conector y de `query_mysql`, metadatos del Connection Manager y `scripts/smoke-mysql.sh` ([mysql.md](mysql.md)) |
 | **Stable path** | `.github/workflows/stable-path.yml` | push a `main`/`master`, cron laborable, label `stable-path`, o manual | Compose + smoke CSV + regresión Playwright (recorrido **Estable**) |
 | **Release** | `.github/workflows/release.yml` | tag `v*` | binario Linux + imagen GHCR `jaiba-serve` |
 | **Phase 8** | `.github/workflows/phase8-integration.yml` | manual (`workflow_dispatch`) o PR con label `phase8` | `scripts/phase8-integration.sh` contra entorno real |
@@ -21,8 +22,9 @@ y corregir los lints nuevos en el mismo commit. Las imágenes Docker de
 `deploy/` usan su propia versión.
 
 El job **CI · Rust** no levanta bases externas: los tests opt-in que requieren
-servicios se omiten ahí. Solo Oracle tiene integración real automática (workflow
-**Oracle integration**); Postgres/Kafka/Mongo/SQL Server siguen en Phase 8.
+servicios se omiten ahí. Oracle y MySQL/MariaDB tienen integración real
+automática (workflows **Oracle integration** y **MySQL integration**);
+Kafka/Mongo/SQL Server siguen en Phase 8.
 
 Las features de drivers opcionales se compilan y pasan Clippy en el job
 **CI · drivers**, pero sus tests solo corren donde hay servicio real.

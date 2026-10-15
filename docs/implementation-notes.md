@@ -978,6 +978,50 @@ driver.
    relanzan y siguen necesitando `LD_LIBRARY_PATH`; la imagen
    `jaiba-serve` sigue sin Oracle.
 
+### MySQL a Beta (v0.9.0)
+
+1. **Problema:** MySQL figuraba como Beta sin pruebas reales en CI: todos los
+   errores se reintentaban igual (una clave duplicada se repetía hasta agotar
+   reintentos y abría el circuit breaker), no había timeout ni cancelación en
+   el servidor, `DECIMAL` con decimales pasaba por `f64` y un `TIME` negativo
+   o mayor de 24 h hacía fallar la lectura.
+2. **Archivos:** `crates/jaiba-runtime/src/connectors/mysql.rs` (clasificación
+   de errores, `MySqlSession` con `KILL QUERY`, timeout por llamada) y
+   `mysql_live_tests.rs`; `processors/query_mysql.rs` (`call_timeout_ms`,
+   tipos) y `query_mysql_live_tests.rs`; `connectors/values.rs` (conversión
+   de números y base64 compartida con Oracle); `jaiba-server/.../tests.rs`
+   (prueba `mysql_real` sin base ni versión fijas); `scripts/smoke-mysql.sh`;
+   `.github/workflows/mysql.yml`; `docs/mysql.md`.
+3. **Decisiones:**
+   - Cada lectura o escritura toma una conexión del pool y guarda su
+     `CONNECTION_ID()`. Si se suelta sin terminar (timeout, cancelación, parada
+     del flow), la conexión se cierra en lugar de volver al pool y se lanza
+     `KILL QUERY` desde otra conexión.
+   - Errores de sesión/red y los números de servidor transitorios (lock wait,
+     deadlock, demasiadas conexiones…) son reintentables; cualquier otro error
+     del servidor o de decodificación es `DatabaseRejected`.
+   - Lectura: `DECIMAL` exacto (número si se representa sin pérdida, si no
+     texto), `DATETIME`/`TIMESTAMP` como `YYYY-MM-DDTHH:MM:SS[.f]` sin zona
+     (MySQL rechaza `Z` y MariaDB rechaza `+00:00`; ambos aceptan la `T`),
+     `TIME` como duración con signo. Son **cambios de formato** respecto a
+     v0.8, listados con su alternativa en `docs/mysql.md` y
+     `docs/actualizar.md`.
+   - sqlx 0.8.6 marca como binarias las columnas de texto `_bin` (y el `JSON`
+     de MariaDB) sin exponer el charset: se mantiene la lectura de bytes UTF-8
+     válidos como texto y el resto como base64; `GEOMETRY` pasa a ser siempre
+     base64.
+   - `MySqlTime::is_negative()` de sqlx 0.8.6 está invertido; se usa
+     `sign().is_negative()`.
+4. **Prueba:** pruebas reales del conector y de `query_mysql` (tipos, streaming
+   de 25 000 filas, sesión liberada tras cancelar con un pool de 1, timeout por
+   llamada que mata la consulta, clasificación de errores, 2 500 filas en
+   lotes, upsert, rollback de todo el paquete), `mysql_real` del Connection
+   Manager y el smoke con el binario, verdes contra MySQL 8.4 y MariaDB 11.4.
+   En CI: `mysql.yml` (nightly, PR que tocan MySQL, label `mysql`).
+5. **Limitación:** fechas cero no se leen; un `BLOB` con bytes UTF-8 válidos se
+   lee como texto; el upsert usa `VALUES(col)` (obsoleto en MySQL 8.0.20+, pero
+   es lo que acepta MariaDB); lectura *al menos una vez* tras reintento.
+
 ## Regla para futuras implementaciones
 
 Al terminar una característica, añadir aquí:

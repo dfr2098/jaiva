@@ -147,6 +147,10 @@ jobs:
             jaiba-desktop-windows-x86_64-setup.exe
             jaiba-windows-x86_64.sha256
           body: |
+            > **¿Actualizas desde una versión anterior?** Revisa las
+            > [notas de actualización](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/actualizar.md):
+            > lista los cambios que obligan a revisar flows existentes.
+
             ## Windows 10/11 (x64)
 
             - **App de escritorio:** `jaiba-desktop-windows-x86_64-setup.exe`. Instala

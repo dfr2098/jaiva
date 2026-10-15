@@ -14,12 +14,15 @@ conexión y una UI que **no** guarda contraseñas ni carga drivers.
 | Capacidad | Estado |
 | --- | --- |
 | PostgreSQL → CSV (recorrido oficial) | **Estable** (CI automático en `main` + cron) |
-| MySQL / MongoDB / Kafka / JME | Beta |
+| MySQL / MariaDB | Beta ([guía](docs/mysql.md)) |
 | Oracle | Beta ([guía](docs/oracle.md)) |
+| MongoDB / Kafka / JME | Beta |
 | SQL Server | Experimental |
 | Plugins externos / Tauri | Preview / Beta |
 
 Detalle y ciclos: [docs/product-roadmap.md](docs/product-roadmap.md).
+Antes de subir de versión, revisa las
+[notas de actualización](docs/actualizar.md) (v0.9 cambia formatos de MySQL).
 **Freeze:** sin `priority-11+` hasta 2 semanas verdes de smoke + release-core
 ([docs/release-core.md](docs/release-core.md#congelar-roadmap)).
 

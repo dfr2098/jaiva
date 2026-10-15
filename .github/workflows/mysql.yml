@@ -1,0 +1,147 @@
+# Integración real con MySQL y MariaDB: criterio de madurez Beta (docs/mysql.md).
+#
+# Corre cada noche, en push/PR que tocan el conector MySQL, en PRs con el label
+# `mysql` y a mano. Levanta MySQL 8.4 y MariaDB 11.4 en contenedores y corre las
+# pruebas del conector, la del Connection Manager y un flow real con el binario.
+name: MySQL integration
+
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: mysql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: ¿toca MySQL?
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decidir
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'mysql') }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == "schedule" || "$EVENT" == "workflow_dispatch" || "$HAS_LABEL" == "true" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "$BASE" || "$BASE" =~ ^0+$ ]] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pattern='^(crates/jaiba-runtime/src/connectors/(mysql|values|database)|crates/jaiba-runtime/src/processors/(query_mysql|put_database)|crates/jaiba-runtime/src/engine/(connections|executor/retry)|crates/jaiba-runtime/src/error\.rs|crates/jaiba-server/src/connection_api/|scripts/smoke-mysql\.sh|\.github/workflows/mysql\.yml|Cargo\.lock)'
+          if git diff --name-only "$BASE" HEAD | grep -Eq "$pattern"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  mysql:
+    name: ${{ matrix.name }}
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: MySQL 8.4
+            image: mysql:8.4
+            kind: mysql
+            env_prefix: MYSQL
+          - name: MariaDB 11.4
+            image: mariadb:11.4
+            kind: mariadb
+            env_prefix: MARIADB
+    env:
+      JAIBA_MYSQL_CONTAINER: jaiba-mysql-ci
+      JAIBA_SMOKE_MYSQL_KIND: ${{ matrix.kind }}
+      JAIBA_TEST_MYSQL_HOST: 127.0.0.1
+      JAIBA_TEST_MYSQL_PORT: "3306"
+      JAIBA_TEST_MYSQL_DATABASE: jaiba
+      JAIBA_TEST_MYSQL_USER: jaiba
+      # Las pruebas reales fallan en vez de saltarse si falta la configuración.
+      JAIBA_TEST_MYSQL_REQUIRED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Contraseña efímera
+        run: |
+          password="Ci$(openssl rand -hex 12)"
+          echo "::add-mask::$password"
+          echo "JAIBA_TEST_MYSQL_PASSWORD=$password" >> "$GITHUB_ENV"
+          echo "JAIBA_TEST_MYSQL_URL=mysql://jaiba:$password@127.0.0.1:3306/jaiba" >> "$GITHUB_ENV"
+
+      - name: ${{ matrix.name }}
+        env:
+          PREFIX: ${{ matrix.env_prefix }}
+        run: |
+          # El runner trae su propio MySQL en el 3306, apagado por defecto.
+          sudo systemctl stop mysql 2>/dev/null || true
+          docker run -d --name "$JAIBA_MYSQL_CONTAINER" -p 127.0.0.1:3306:3306 \
+            -e "${PREFIX}_ROOT_PASSWORD=$JAIBA_TEST_MYSQL_PASSWORD" \
+            -e "${PREFIX}_DATABASE=$JAIBA_TEST_MYSQL_DATABASE" \
+            -e "${PREFIX}_USER=$JAIBA_TEST_MYSQL_USER" \
+            -e "${PREFIX}_PASSWORD=$JAIBA_TEST_MYSQL_PASSWORD" \
+            ${{ matrix.image }}
+
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Compilar pruebas y binario
+        run: |
+          cargo test -p jaiba-runtime --lib --no-run
+          cargo test -p jaiba-server --lib --no-run
+          cargo build -p jaiba-cli --features release-core --bin jaiba
+
+      - name: Esperar al servidor
+        run: |
+          # Por TCP: el servidor temporal del entrypoint solo escucha en socket.
+          client="$(docker exec "$JAIBA_MYSQL_CONTAINER" sh -c 'command -v mariadb || command -v mysql')"
+          for _ in $(seq 1 60); do
+            if docker exec -e MYSQL_PWD="$JAIBA_TEST_MYSQL_PASSWORD" "$JAIBA_MYSQL_CONTAINER" \
+              "$client" -h127.0.0.1 -u"$JAIBA_TEST_MYSQL_USER" -e 'SELECT 1' "$JAIBA_TEST_MYSQL_DATABASE" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs "$JAIBA_MYSQL_CONTAINER" | tail -n 50
+          exit 1
+
+      - name: Conector (tipos, streaming, cancelación, timeout, errores, upsert, rollback)
+        run: cargo test -p jaiba-runtime --lib -- mysql --nocapture
+
+      - name: Metadatos y compilación de consultas (Connection Manager)
+        run: cargo test -p jaiba-server --lib mysql_real -- --nocapture
+
+      - name: Flow real query_mysql -> put_database
+        run: ./scripts/smoke-mysql.sh target/debug/jaiba
+
+      - name: Logs del servidor si falla
+        if: failure()
+        run: docker logs "$JAIBA_MYSQL_CONTAINER" | tail -n 100

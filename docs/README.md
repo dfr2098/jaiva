@@ -41,6 +41,7 @@ cargo run --features kafka-driver,mongodb-driver,sqlserver-driver,oracle-driver 
 | Stress / soak / chaos (PASS/FAIL) | [stable-stack-tests.md](stable-stack-tests.md) |
 | Mapa del repo (dónde está cada cosa) | [connectivity/README.md](connectivity/README.md) |
 | Madurez y ciclos | [product-roadmap.md](product-roadmap.md) |
+| Cambios que obligan a revisar flows al actualizar | [actualizar.md](actualizar.md) |
 | Defaults seguros / freeze | [release-core.md](release-core.md) |
 | Empaque / `jaiba-serve` / WS | [packaging.md](packaging.md) |
 | CI | [ci.md](ci.md) |
@@ -50,6 +51,7 @@ cargo run --features kafka-driver,mongodb-driver,sqlserver-driver,oracle-driver 
 | Quiero… | Documento |
 | --- | --- |
 | Oracle (Beta): conexión, tipos, errores, pruebas | [oracle.md](oracle.md) |
+| MySQL / MariaDB (Beta): conexión, tipos, errores, pruebas | [mysql.md](mysql.md) |
 | Oracle → PostgreSQL | [oracle-to-postgres.md](oracle-to-postgres.md) |
 | Memoria JME (capa fría) | [jme-cold-memory.md](jme-cold-memory.md) |
 | AI Prep | [ai-data-prep.md](ai-data-prep.md) |

@@ -38,11 +38,14 @@ type: query_mysql
 config:
   connection: main
   batch_size: 1000
+  call_timeout_ms: 300000   # espera máxima por la siguiente fila; 0 = sin límite
   query: SELECT id, name FROM shop.customers WHERE active = ?
   parameters: [true]
 ```
 
-Ver [`examples/mysql-query.yaml`](../examples/mysql-query.yaml).
+Si se excede `call_timeout_ms`, el nodo se cancela o el flow se detiene, la
+consulta se detiene en el servidor con `KILL QUERY`. Tipos, errores y pruebas:
+[mysql.md](mysql.md). Ver [`examples/mysql-query.yaml`](../examples/mysql-query.yaml).
 
 ## `query_sqlserver`
 

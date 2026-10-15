@@ -24,7 +24,13 @@ use super::plugins::{mysql::mysql_pool, postgres::postgres_pool};
 use super::*;
 
 fn mysql_test_configuration() -> Option<(ConnectionEndpoint, ConnectionSecret)> {
-    let password = env::var("JAIBA_TEST_MYSQL_PASSWORD").ok()?;
+    let Ok(password) = env::var("JAIBA_TEST_MYSQL_PASSWORD") else {
+        assert!(
+            env::var_os("JAIBA_TEST_MYSQL_REQUIRED").is_none(),
+            "JAIBA_TEST_MYSQL_REQUIRED is set but JAIBA_TEST_MYSQL_PASSWORD is missing"
+        );
+        return None;
+    };
     let host = env::var("JAIBA_TEST_MYSQL_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
     let port = env::var("JAIBA_TEST_MYSQL_PORT")
         .ok()
@@ -329,7 +335,7 @@ async fn mysql_real_connection_metadata_and_query_compilation() {
         test_result
             .version
             .as_deref()
-            .is_some_and(|version| version.starts_with("8."))
+            .is_some_and(|version| !version.is_empty())
     );
 
     let diagnostics = manager
@@ -414,8 +420,11 @@ async fn mysql_real_connection_metadata_and_query_compilation() {
         .expect("compile MySQL query");
     assert_eq!(
         compiled.statement,
-        "SELECT `id`, `external_id` FROM `dma_test`.`jaiba_phase_9_3_probe` \
-         WHERE `active` = ? ORDER BY `id` ASC LIMIT 10"
+        format!(
+            "SELECT `id`, `external_id` FROM `{}`.`jaiba_phase_9_3_probe` \
+             WHERE `active` = ? ORDER BY `id` ASC LIMIT 10",
+            endpoint.database.as_deref().unwrap()
+        )
     );
     assert_eq!(compiled.parameters, vec![Value::Bool(true)]);
     assert_eq!(compiled.processor_type.as_deref(), Some("query_mysql"));

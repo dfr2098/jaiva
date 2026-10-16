@@ -21,8 +21,8 @@ suffix="$(date +%s)-$$"
 topic="jaiba.smoke.${suffix}"
 group="jaiba-smoke-${suffix}"
 
-# Forzar filtro: el resumen del CLI a info; silenciar log_records/retry para no
-# inundar GitHub Actions. No respetar un RUST_LOG=error externo.
+# Silenciar log_records/retry/rdkafka; el resumen machine-readable va por stdout
+# (`jaiba_summary`), así que no dependemos de RUST_LOG para validar.
 export RUST_LOG="jaiba_cli=info,jaiba_runtime::processors::log_records=off,jaiba_runtime::engine::executor::retry=warn,jaiba_runtime=warn,rdkafka=warn"
 export JAIBA_TEST_KAFKA_BROKERS="$brokers"
 
@@ -33,8 +33,14 @@ else
   jaiba="${CARGO_TARGET_DIR:-target}/debug/jaiba"
 fi
 
+if [[ ! -f "$jaiba" ]]; then
+  echo "ERROR: no hay binario en $jaiba" >&2
+  exit 1
+fi
+chmod +x "$jaiba" 2>/dev/null || true
 if [[ ! -x "$jaiba" ]]; then
-  echo "ERROR: no hay binario ejecutable en $jaiba" >&2
+  echo "ERROR: el binario no es ejecutable: $jaiba" >&2
+  ls -la "$jaiba" >&2 || true
   exit 1
 fi
 
@@ -60,27 +66,34 @@ create_topic() {
   echo "AVISO: no se pudo crear el tópico en el contenedor; se confía en auto-create" >&2
 }
 
+# Lee un campo de la línea `jaiba_summary ...` (stdout estable del CLI).
 summary_field() {
   local log="$1" field="$2"
-  sed -n "s/.*flow completed .*${field}=\([0-9][0-9]*\).*/\1/p" "$log" | tail -1
+  sed -n "s/.*jaiba_summary .*${field}=\([0-9][0-9]*\).*/\1/p" "$log" | tail -1
 }
 
 run_flow() {
   local label="$1" flow="$2" log="$3"
   echo "--- ${label} ---"
-  if ! "$jaiba" "$flow" >"$log" 2>&1; then
-    echo "ERROR: jaiba salió con error en ${label}" >&2
+  set +e
+  "$jaiba" "$flow" >"$log" 2>&1
+  local rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    echo "ERROR: jaiba salió con código ${rc} en ${label}" >&2
     cat "$log" >&2
     exit 1
   fi
-  grep 'flow completed' "$log" || {
-    echo "ERROR: no apareció el resumen 'flow completed'" >&2
+  if ! grep -q 'jaiba_summary ' "$log"; then
+    echo "ERROR: no apareció la línea 'jaiba_summary' (¿binario sin el resumen estable?)" >&2
     cat "$log" >&2
     exit 1
-  }
+  fi
+  grep 'jaiba_summary ' "$log" || true
 }
 
 echo "=== smoke Kafka (${messages} mensajes, brokers=${brokers}) ==="
+echo "binario: $jaiba ($(ls -la "$jaiba" | awk '{print $1, $5}'))"
 create_topic
 
 records=""
@@ -101,6 +114,8 @@ kafka_connections:
 engine:
   repository:
     enabled: false
+  logging:
+    enabled: false
 processors:
   - id: records
     type: generate_records
@@ -119,6 +134,13 @@ connections:
     relationship: success
     to: publish
 YAML
+
+# Preflight: si el binario no trae kafka-driver, falla aquí con mensaje claro.
+if ! "$jaiba" validate "$publish_flow" >"$work_dir/validate.log" 2>&1; then
+  echo "ERROR: validate del flow de publish falló (¿binario sin kafka-driver?)" >&2
+  cat "$work_dir/validate.log" >&2
+  exit 1
+fi
 
 run_flow "1) publicar ${messages} mensajes" "$publish_flow" "$work_dir/publish.log"
 pub_failed="$(summary_field "$work_dir/publish.log" failed)"
@@ -141,6 +163,8 @@ kafka_connections:
     message_timeout_ms: 30000
 engine:
   repository:
+    enabled: false
+  logging:
     enabled: false
 processors:
   - id: consume

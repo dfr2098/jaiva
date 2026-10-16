@@ -377,6 +377,17 @@ fn log_summary(summary: jaiba_runtime::engine::FlowSummary) {
         kafka_consumed = summary.kafka_messages_consumed,
         "flow completed"
     );
+    // Línea estable en stdout para smokes/CI: no depende de RUST_LOG ni del
+    // formato de tracing (colores, targets, filtros).
+    println!(
+        "jaiba_summary processed={} failed={} retried={} emitted={} kafka_published={} kafka_consumed={}",
+        summary.processed,
+        summary.failed,
+        summary.retried,
+        summary.emitted,
+        summary.kafka_messages_published,
+        summary.kafka_messages_consumed,
+    );
 }
 
 #[cfg(test)]

@@ -50,8 +50,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          pattern='^(crates/jaiba-runtime/src/processors/(publish_kafka|consume_kafka|kafka_support|kafka_live)|crates/jaiba-runtime/src/engine/(connections|executor/retry)|crates/jaiba-runtime/src/error\.rs|scripts/smoke-kafka\.sh|\.github/workflows/kafka\.yml|Cargo\.lock)'
-          if git diff --name-only "$BASE" HEAD | grep -Eq "$pattern"; then
+          pattern='^(crates/jaiba-runtime/src/processors/(publish_kafka|consume_kafka|kafka_support|kafka_live)|crates/jaiba-runtime/src/engine/(connections|executor/retry)|crates/jaiba-runtime/src/error\.rs|crates/jaiba-cli/src/lib\.rs|scripts/smoke-kafka\.sh|\.github/workflows/kafka\.yml|Cargo\.lock)'          if git diff --name-only "$BASE" HEAD | grep -Eq "$pattern"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -114,8 +113,14 @@ jobs:
 
       - name: Compilar pruebas y binario
         run: |
+          set -euo pipefail
+          # Evitar binario stale del cache de cargo sin kafka-driver / sin jaiba_summary.
+          rm -f target/debug/jaiba target/debug/jaiva-flow
           cargo test -p jaiba-runtime --features kafka-driver --lib --no-run
           cargo build -p jaiba-cli --features release-core,kafka-driver --bin jaiba
+          chmod +x target/debug/jaiba
+          test -x target/debug/jaiba
+          # El smoke hace `jaiba validate` del flow real (detecta binario sin kafka-driver).
 
       - name: Esperar al broker
         run: |
@@ -140,7 +145,7 @@ jobs:
         run: cargo test -p jaiba-runtime --features kafka-driver --lib -- kafka --nocapture
 
       - name: Flow real publish → consume
-        run: ./scripts/smoke-kafka.sh target/debug/jaiba
+        run: ./scripts/smoke-kafka.sh "$(pwd)/target/debug/jaiba"
 
       - name: Logs del broker si falla
         if: failure()

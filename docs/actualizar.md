@@ -41,3 +41,17 @@ el comportamiento:
 Nuevo: `json_format: canonical` (copia exacta de tipos) y `json_format: plain`
 (sin envolturas `$...`, para SQL/CSV). Detalle:
 [mongodb.md § Cambios respecto a v0.8](mongodb.md#cambios-respecto-a-v08-revisa-tus-flows).
+
+### Kafka
+
+El contrato YAML de `publish_kafka` / `consume_kafka` no cambia. Cambia el
+comportamiento ante errores y la publicación de lotes:
+
+- Un JSON inválido en `consume_kafka` (`decode: json`) ya no atasca el grupo:
+  sale por `failure`, confirma el offset y sigue. Conecta siempre una arista
+  `failure` si decodificas JSON.
+- Mensaje demasiado grande, autorización y formato rechazado por el broker van
+  a `failure` sin reintentar (antes se reintentaban y abrían el circuit breaker).
+- Varios registros en un paquete se publican en paralelo (mismo orden por clave).
+
+Detalle: [kafka.md § Cambios respecto a v0.8](kafka.md#cambios-respecto-a-v08-revisa-tus-flows).

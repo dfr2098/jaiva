@@ -6,6 +6,10 @@ mod domain_memory;
 mod encode;
 pub(crate) mod external_plugin;
 mod generate_records;
+#[cfg(all(test, feature = "kafka-driver"))]
+mod kafka_live;
+#[cfg(feature = "kafka-driver")]
+mod kafka_support;
 mod log_records;
 #[cfg(feature = "mongodb-driver")]
 mod mongodb_support;

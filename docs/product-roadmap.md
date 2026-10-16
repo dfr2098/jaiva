@@ -18,7 +18,7 @@ Complementa [release-core.md](release-core.md) (defaults seguros / smoke).
 | PostgreSQL escritura | Estable (secundario) |
 | MySQL / MariaDB | **Beta** (CI real nightly + PR, MySQL 8.4 y MariaDB 11.4; [mysql.md](mysql.md)) |
 | MongoDB | **Beta** (CI real nightly + PR, MongoDB 7.0 y 8.0; [mongodb.md](mongodb.md)) |
-| Kafka | Beta (sin CI real todavía; en curso) |
+| Kafka | **Beta** (CI real nightly + PR, Redpanda y Apache Kafka 3.9; [kafka.md](kafka.md)) |
 | Oracle | **Beta** (CI real nightly + PR; [oracle.md](oracle.md)) |
 | SQL Server | Experimental |
 | Memoria JME | Beta (madura en este repo; [checklist](history/priority-jme-memory-manager.md#checklist-beta-integración-oficial)) |
@@ -102,7 +102,7 @@ Trabajo de producto **sin** abrir `priority-11+`:
 
 1. **Producto mínimo estable** — Ciclo 1 (Postgres→CSV).  
 2. **Pruebas end-to-end** — Playwright + smoke Compose.  
-3. **Integraciones reales** — Docker reproducible; nightly para Kafka/Oracle/SQL Server (Oracle ya corre en `oracle.yml`).  
+3. **Integraciones reales** — Docker reproducible; nightly para Oracle/MySQL/MongoDB/Kafka (`oracle.yml`, `mysql.yml`, `mongodb.yml`, `kafka.yml`); SQL Server en Phase 8.  
 4. **Reducir módulos grandes** — extraer responsabilidades sin rewrite masivo.  
 5. **Plugins externos** — adaptador REST JSON Lines de referencia.  
 6. **Operación y seguridad** — límites, rate limit, auditoría, TLS, recuperación.  

@@ -56,6 +56,12 @@ pub enum FlowError {
     #[error("message connector error: {0}")]
     MessageConnector(String),
 
+    /// The broker or the client refused the message or its data (poison
+    /// payload, message too large, authorization). Repeating the same packet
+    /// cannot succeed.
+    #[error("message rejected: {0}")]
+    MessageRejected(String),
+
     #[error("circuit breaker '{connection}' is open")]
     CircuitOpen { connection: String },
 }
@@ -65,7 +71,7 @@ impl FlowError {
     pub fn is_retryable(&self) -> bool {
         !matches!(
             self,
-            Self::PacketTooLarge { .. } | Self::DatabaseRejected(_)
+            Self::PacketTooLarge { .. } | Self::DatabaseRejected(_) | Self::MessageRejected(_)
         )
     }
 }

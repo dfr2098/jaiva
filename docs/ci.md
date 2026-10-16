@@ -13,6 +13,7 @@
 | **Oracle integration** | `.github/workflows/oracle.yml` | nightly, push a `main` y PR que tocan Oracle, label `oracle`, o manual | Oracle Database Free 23ai en contenedor + Instant Client vía `jaiba oracle-client install`: pruebas reales del conector, diagnóstico del Connection Manager y `scripts/smoke-oracle.sh` ([oracle.md](oracle.md)) |
 | **MySQL integration** | `.github/workflows/mysql.yml` | nightly, push a `main` y PR que tocan MySQL, label `mysql`, o manual | MySQL 8.4 y MariaDB 11.4 en contenedores: pruebas reales del conector y de `query_mysql`, metadatos del Connection Manager y `scripts/smoke-mysql.sh` ([mysql.md](mysql.md)) |
 | **MongoDB integration** | `.github/workflows/mongodb.yml` | nightly, push a `main` y PR que tocan MongoDB, label `mongodb`, o manual | MongoDB 7.0 y 8.0 en contenedores: pruebas reales de `query_mongodb`/`put_mongodb`, diagnóstico del Connection Manager y `scripts/smoke-mongodb.sh` ([mongodb.md](mongodb.md)) |
+| **Kafka integration** | `.github/workflows/kafka.yml` | nightly, push a `main` y PR que tocan Kafka, label `kafka`, o manual | Redpanda y Apache Kafka 3.9 en contenedores: pruebas reales de `publish_kafka`/`consume_kafka` (poison, paralelo, errores) y `scripts/smoke-kafka.sh` ([kafka.md](kafka.md)) |
 | **Stable path** | `.github/workflows/stable-path.yml` | push a `main`/`master`, cron laborable, label `stable-path`, o manual | Compose + smoke CSV + regresión Playwright (recorrido **Estable**) |
 | **Release** | `.github/workflows/release.yml` | tag `v*` | binario Linux + imagen GHCR `jaiba-serve` |
 | **Phase 8** | `.github/workflows/phase8-integration.yml` | manual (`workflow_dispatch`) o PR con label `phase8` | `scripts/phase8-integration.sh` contra entorno real |
@@ -24,9 +25,9 @@ y corregir los lints nuevos en el mismo commit. Las imágenes Docker de
 `deploy/` usan su propia versión.
 
 El job **CI · Rust** no levanta bases externas: los tests opt-in que requieren
-servicios se omiten ahí. Oracle, MySQL/MariaDB y MongoDB tienen integración
-real automática (workflows **Oracle integration**, **MySQL integration** y
-**MongoDB integration**); Kafka/SQL Server siguen en Phase 8.
+servicios se omiten ahí. Oracle, MySQL/MariaDB, MongoDB y Kafka tienen
+integración real automática (workflows **Oracle**, **MySQL**, **MongoDB** y
+**Kafka integration**); SQL Server sigue en Phase 8.
 
 Las features de drivers opcionales se compilan y pasan Clippy en el job
 **CI · drivers**, pero sus tests solo corren donde hay servicio real.

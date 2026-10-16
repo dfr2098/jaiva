@@ -17,14 +17,15 @@ conexión y una UI que **no** guarda contraseñas ni carga drivers.
 | MySQL / MariaDB | Beta ([guía](docs/mysql.md)) |
 | Oracle | Beta ([guía](docs/oracle.md)) |
 | MongoDB | Beta ([guía](docs/mongodb.md)) |
-| Kafka / JME | Beta |
+| Kafka | Beta ([guía](docs/kafka.md)) |
+| JME | Beta |
 | SQL Server | Experimental |
 | Plugins externos / Tauri | Preview / Beta |
 
 Detalle y ciclos: [docs/product-roadmap.md](docs/product-roadmap.md).
 Antes de subir de versión, revisa las
 [notas de actualización](docs/actualizar.md) (v0.9 cambia formatos de MySQL y
-el manejo de errores de MySQL y MongoDB).
+el manejo de errores de MySQL, MongoDB y Kafka).
 **Freeze:** sin `priority-11+` hasta 2 semanas verdes de smoke + release-core
 ([docs/release-core.md](docs/release-core.md#congelar-roadmap)).
 
@@ -590,9 +591,7 @@ export KAFKA_BROKERS=127.0.0.1:29092
 cargo run --features kafka-driver -- examples/kafka-publish.yaml
 ```
 
-El productor espera confirmación del broker, usa `acks=all` e idempotencia y
-expone topic, partición y offset en atributos de procedencia. Consulta
-[`docs/history/priority-4-3-kafka.md`](docs/history/priority-4-3-kafka.md).
+Guía Beta (errores, poison messages, CI): [`docs/kafka.md`](docs/kafka.md).
 
 ## Próximas integraciones
 

@@ -1,0 +1,147 @@
+# Integración real con Kafka: criterio de madurez Beta (docs/kafka.md).
+#
+# Corre cada noche, en push/PR que tocan el conector Kafka, en PRs con el
+# label `kafka` y a mano. Levanta Redpanda (API Kafka) y Apache Kafka 3.9 en
+# contenedores y corre las pruebas de publish_kafka/consume_kafka y un flow
+# real con el binario.
+name: Kafka integration
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: kafka-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: ¿toca Kafka?
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decidir
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'kafka') }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == "schedule" || "$EVENT" == "workflow_dispatch" || "$HAS_LABEL" == "true" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "$BASE" || "$BASE" =~ ^0+$ ]] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pattern='^(crates/jaiba-runtime/src/processors/(publish_kafka|consume_kafka|kafka_support|kafka_live)|crates/jaiba-runtime/src/engine/(connections|executor/retry)|crates/jaiba-runtime/src/error\.rs|scripts/smoke-kafka\.sh|\.github/workflows/kafka\.yml|Cargo\.lock)'
+          if git diff --name-only "$BASE" HEAD | grep -Eq "$pattern"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  kafka:
+    name: ${{ matrix.name }}
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Redpanda
+            kind: redpanda
+          - name: Apache Kafka 3.9
+            kind: apache
+    env:
+      JAIBA_KAFKA_CONTAINER: jaiba-kafka-ci
+      JAIBA_TEST_KAFKA_BROKERS: 127.0.0.1:9092
+      JAIBA_TEST_KAFKA_FAIL_BROKER: 127.0.0.1:1
+      JAIBA_TEST_KAFKA_REQUIRED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Dependencias nativas (librdkafka / cmake)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++ libssl-dev pkg-config
+
+      - name: Brokers (${{ matrix.name }})
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.kind }}" == "redpanda" ]]; then
+            docker run -d --name "$JAIBA_KAFKA_CONTAINER" \
+              -p 127.0.0.1:9092:9092 \
+              docker.redpanda.com/redpandadata/redpanda:v24.3.8 \
+              redpanda start --overprovisioned --smp 1 --memory 512M --reserve-memory 0M \
+              --node-id 0 --check=false \
+              --kafka-addr PLAINTEXT://0.0.0.0:9092 \
+              --advertise-kafka-addr PLAINTEXT://127.0.0.1:9092 \
+              --rpc-addr 0.0.0.0:33145 \
+              --advertise-rpc-addr 127.0.0.1:33145
+          else
+            # Mapeo 9092:9092 para que el advertised localhost:9092 del
+            # contenedor coincida con el puerto del host.
+            docker run -d --name "$JAIBA_KAFKA_CONTAINER" \
+              -p 127.0.0.1:9092:9092 \
+              apache/kafka:3.9.1
+          fi
+
+      - name: Compilar pruebas y binario
+        run: |
+          cargo test -p jaiba-runtime --features kafka-driver --lib --no-run
+          cargo build -p jaiba-cli --features release-core,kafka-driver --bin jaiba
+
+      - name: Esperar al broker
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if [[ "${{ matrix.kind }}" == "redpanda" ]]; then
+              if docker exec "$JAIBA_KAFKA_CONTAINER" rpk cluster info >/dev/null 2>&1; then
+                exit 0
+              fi
+            else
+              if docker exec "$JAIBA_KAFKA_CONTAINER" \
+                /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1; then
+                exit 0
+              fi
+            fi
+            sleep 2
+          done
+          docker logs "$JAIBA_KAFKA_CONTAINER" | tail -n 80
+          exit 1
+
+      - name: publish_kafka / consume_kafka (poison, paralelo, errores, throughput)
+        run: cargo test -p jaiba-runtime --features kafka-driver --lib -- kafka --nocapture
+
+      - name: Flow real publish → consume
+        run: ./scripts/smoke-kafka.sh target/debug/jaiba
+
+      - name: Logs del broker si falla
+        if: failure()
+        run: docker logs "$JAIBA_KAFKA_CONTAINER" | tail -n 120

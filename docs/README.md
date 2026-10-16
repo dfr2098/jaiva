@@ -54,6 +54,7 @@ cargo run --features kafka-driver,mongodb-driver,sqlserver-driver,oracle-driver 
 | Oracle (Beta): conexión, tipos, errores, pruebas | [oracle.md](oracle.md) |
 | MySQL / MariaDB (Beta): conexión, tipos, errores, pruebas | [mysql.md](mysql.md) |
 | MongoDB (Beta): conexión, tipos, errores, pruebas | [mongodb.md](mongodb.md) |
+| Kafka (Beta): publicación, consumo, errores, pruebas | [kafka.md](kafka.md) |
 | Oracle → PostgreSQL | [oracle-to-postgres.md](oracle-to-postgres.md) |
 | Memoria JME (capa fría) | [jme-cold-memory.md](jme-cold-memory.md) |
 | AI Prep | [ai-data-prep.md](ai-data-prep.md) |

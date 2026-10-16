@@ -288,7 +288,9 @@ Solo acepta sentencias cuyo primer término sea `SELECT` o `WITH`.
 
 ## `publish_kafka`
 
-Publica registros JSON o contenido binario y espera confirmación del broker:
+Publica registros JSON o contenido binario y espera confirmación del broker.
+Los mensajes de un paquete se confirman en paralelo. Requiere
+`--features kafka-driver`. Guía: [kafka.md](kafka.md).
 
 ```yaml
 type: publish_kafka
@@ -299,13 +301,11 @@ config:
   queue_timeout_ms: 5000
 ```
 
-Requiere `--features kafka-driver`. Consulta
-`docs/history/priority-4-3-kafka.md` para garantías y observabilidad.
-
 ## `consume_kafka`
 
-Fuente Kafka: lee un lote de mensajes con auto-commit desactivado y confirma el
-offset tras emitir cada paquete por `success` (at-least-once en el MVP).
+Fuente Kafka: auto-commit desactivado; confirma el offset tras emitir por
+`success` o `failure` (un JSON inválido no atasca el grupo). Requiere
+`--features kafka-driver`. Guía: [kafka.md](kafka.md).
 
 ```yaml
 type: consume_kafka
@@ -319,8 +319,6 @@ config:
   max_idle_ms: 8000
   decode: json
 ```
-
-Requiere `--features kafka-driver`. Detalle en `docs/history/priority-4-3-kafka.md`.
 
 ## Checkpoints
 

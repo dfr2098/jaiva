@@ -290,8 +290,10 @@ impl Processor for ConsumeKafka {
                 }
                 Ok(Err(error)) => {
                     // Durante el join/metadata inicial librdkafka puede reportar
-                    // fallos de transporte transitorios; seguir hasta idle.
+                    // fallos de transporte transitorios; renovar el idle mientras
+                    // no se haya consumido nada para no abortar el join a medias.
                     if is_transient_join(&error) && consumed == 0 {
+                        idle_deadline = Instant::now() + Duration::from_millis(self.max_idle_ms);
                         continue;
                     }
                     let mapped = kafka_error(error);
@@ -303,7 +305,8 @@ impl Processor for ConsumeKafka {
                     return Err(mapped);
                 }
                 Err(_) => {
-                    // Timeout de poll: si aún no hay mensajes, respetar idle.
+                    // Timeout de poll: si aún no hay mensajes, respetar idle
+                    // (así un tópico vacío termina el ciclo).
                     if consumed == 0 {
                         continue;
                     }

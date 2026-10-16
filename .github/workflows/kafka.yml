@@ -50,7 +50,8 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          pattern='^(crates/jaiba-runtime/src/processors/(publish_kafka|consume_kafka|kafka_support|kafka_live)|crates/jaiba-runtime/src/engine/(connections|executor/retry)|crates/jaiba-runtime/src/error\.rs|crates/jaiba-cli/src/lib\.rs|scripts/smoke-kafka\.sh|\.github/workflows/kafka\.yml|Cargo\.lock)'          if git diff --name-only "$BASE" HEAD | grep -Eq "$pattern"; then
+          pattern='^(crates/jaiba-runtime/src/processors/(publish_kafka|consume_kafka|kafka_support|kafka_live)|crates/jaiba-runtime/src/engine/(connections|executor/retry)|crates/jaiba-runtime/src/error\.rs|crates/jaiba-cli/src/lib\.rs|scripts/smoke-kafka\.sh|\.github/workflows/kafka\.yml|Cargo\.lock)'
+          if git diff --name-only "$BASE" HEAD | grep -Eq "$pattern"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"

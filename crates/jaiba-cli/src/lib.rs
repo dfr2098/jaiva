@@ -373,6 +373,8 @@ fn log_summary(summary: jaiba_runtime::engine::FlowSummary) {
         failed = summary.failed,
         retried = summary.retried,
         emitted = summary.emitted,
+        kafka_published = summary.kafka_messages_published,
+        kafka_consumed = summary.kafka_messages_consumed,
         "flow completed"
     );
 }

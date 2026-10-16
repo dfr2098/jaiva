@@ -81,4 +81,16 @@ JAIBA_TEST_MONGODB_PASSWORD=... ./scripts/smoke-mongodb.sh
 
 Detalle: [../mongodb.md § Pruebas](../mongodb.md#pruebas).
 
+Kafka igual: pruebas de `publish_kafka`/`consume_kafka` (poison, paralelo,
+errores, throughput) y un smoke con el binario:
+
+```bash
+export JAIBA_TEST_KAFKA_BROKERS=127.0.0.1:29092
+export JAIBA_TEST_KAFKA_FAIL_BROKER=127.0.0.1:1
+cargo test -p jaiba-runtime --features kafka-driver --lib -- kafka
+./scripts/smoke-kafka.sh
+```
+
+Detalle: [../kafka.md § Pruebas](../kafka.md#pruebas).
+
 Volver al índice: [README.md](README.md).

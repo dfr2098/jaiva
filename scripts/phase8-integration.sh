@@ -211,6 +211,8 @@ fi
 if ! grep -E 'kafka_real_consume_kafka_processor \.\.\. ok' "$log_file" >/dev/null \
   || ! grep -E 'kafka_throughput_smoke \.\.\. ok' "$log_file" >/dev/null \
   || ! grep -E 'kafka_fail_broker_is_controlled \.\.\. ok' "$log_file" >/dev/null \
+  || ! grep -E 'kafka_poison_message_goes_to_failure_and_is_committed \.\.\. ok' "$log_file" >/dev/null \
+  || ! grep -E 'kafka_parallel_publish_preserves_keyed_order \.\.\. ok' "$log_file" >/dev/null \
   || ! grep -E 'kafka_real_publish_is_acknowledged_and_consumable \.\.\. ok' "$log_file" >/dev/null \
   || ! grep -E 'flow_retry_then_dead_letter \.\.\. ok' "$log_file" >/dev/null \
   || ! grep -E 'postgres_real_connection_query_builder_and_flow_execution \.\.\. ok' "$log_file" >/dev/null \

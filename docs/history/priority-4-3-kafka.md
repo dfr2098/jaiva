@@ -1,6 +1,8 @@
-# Kafka: publicación y consumo
+# Kafka: publicación y consumo (histórico)
 
-Jaiva incorpora Kafka como bus de eventos, separado del contrato
+La guía actual de Kafka en Beta está en [`docs/kafka.md`](../kafka.md).
+
+Jaiba incorpora Kafka como bus de eventos, separado del contrato
 `DatabaseWriter`. Requiere compilar con `--features kafka-driver`.
 
 ## Conexión

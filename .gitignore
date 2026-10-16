@@ -45,3 +45,7 @@ Thumbs.db
 /yolo11n/
 /yolo*.pt
 /runs/
+
+# Python
+**/__pycache__/
+**/*.py[cod]

@@ -1067,6 +1067,32 @@ driver.
    servidor; sin `aggregate` como fuente; lectura *al menos una vez* tras
    reintento.
 
+### Kafka a Beta (v0.9.0)
+
+1. **Problema:** Kafka figuraba como Beta sin pruebas reales en CI. Un JSON
+   inválido en `consume_kafka` abortaba el ciclo sin confirmar el offset (el
+   grupo se quedaba atascado en el mensaje envenenado); todo error de broker
+   era `MessageConnector` (se reintentaba y abría el circuit breaker); la
+   publicación de un paquete con N registros era estrictamente secuencial.
+2. **Archivos:** `kafka_support.rs` (clasificación, circuit),
+   `consume_kafka.rs` (poison → `failure` + commit), `publish_kafka.rs`
+   (confirmaciones en paralelo), `*_live_tests.rs`, `scripts/smoke-kafka.sh`,
+   `.github/workflows/kafka.yml`, `docs/kafka.md`.
+3. **Decisiones:**
+   - `MessageRejected` (nueva variante no reintentable) para tamaño,
+     autorización, formato y política; el poison de decode no abre el circuit.
+   - Commit tras emitir por `success` **o** `failure`: at-least-once sin
+     bloquear el grupo.
+   - Publicación: se encola en orden y se espera con `join_all` (idempotencia +
+     `acks=all` conservan el orden por clave).
+   - CI con Redpanda (API Kafka) y Apache Kafka 3.9.
+4. **Prueba:** 17 tests (unitarios + live: publish/consume, poison con segundo
+   ciclo vacío, paralelo de 250, oversized → rejected, fail-broker,
+   throughput 100) y smoke de 200 mensajes con el binario, verdes en local
+   contra Redpanda. En CI: `kafka.yml`.
+5. **Limitación:** sin TLS/SASL; commit no espera al destino aguas abajo; sin
+   pause por backpressure ni pruebas de rebalanceo.
+
 ### Licencias: LICENSE, THIRD_PARTY_LICENSES.md y gate en CI (v0.9.0)
 
 1. **Problema:** el proyecto declaraba Apache-2.0 en `Cargo.toml` pero no tenía

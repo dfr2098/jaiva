@@ -10,7 +10,7 @@ use crate::{config::FlowConfig, error::FlowError};
 
 use super::{
     ConnectionResolver, FlowControl, FlowControlSnapshot, FlowEngine, FlowLifecycle, FlowMetrics,
-    FlowSummary,
+    FlowSummary, ProcessorRegistry,
 };
 
 type FlowTask = JoinHandle<Result<FlowSummary, FlowError>>;
@@ -32,6 +32,7 @@ pub struct FlowSupervisor {
     control: FlowControl,
     task: Arc<Mutex<Option<FlowTask>>>,
     resolver: Option<Arc<dyn ConnectionResolver>>,
+    registry: Option<ProcessorRegistry>,
 }
 
 impl FlowSupervisor {
@@ -44,6 +45,7 @@ impl FlowSupervisor {
             control: FlowControl::default(),
             task: Arc::new(Mutex::new(None)),
             resolver: None,
+            registry: None,
         }
     }
 
@@ -54,6 +56,12 @@ impl FlowSupervisor {
         resolver: Option<Arc<dyn ConnectionResolver>>,
     ) -> Self {
         self.resolver = resolver;
+        self
+    }
+
+    /// Sustituye el registry de processors en cada arranque (pruebas / plugins).
+    pub fn with_registry(mut self, registry: ProcessorRegistry) -> Self {
+        self.registry = Some(registry);
         self
     }
 
@@ -95,10 +103,13 @@ impl FlowSupervisor {
             if let Some(finished) = task.take() {
                 let _ = finished.await;
             }
-            let engine = FlowEngine::new((*self.config).clone())?
+            let mut engine = FlowEngine::new((*self.config).clone())?
                 .with_metrics(self.metrics.clone())
                 .with_control(self.control.clone())
                 .with_connection_resolver(self.resolver.clone());
+            if let Some(registry) = self.registry.clone() {
+                engine = engine.with_registry(registry);
+            }
             self.control.starting();
             self.metrics.set_flow_status(1);
             let (started, ready) = tokio::sync::oneshot::channel();
@@ -217,6 +228,87 @@ impl FlowSupervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::{DataPacket, OutputSender, Processor, ProcessorContext};
+    use async_trait::async_trait;
+    use std::sync::Arc;
+
+    struct SlowSource;
+    struct Sink;
+    struct HangSource;
+
+    #[async_trait]
+    impl Processor for SlowSource {
+        async fn execute(
+            &self,
+            packet: DataPacket,
+            _: &ProcessorContext,
+            output: &OutputSender,
+        ) -> Result<(), FlowError> {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            output.success(packet).await
+        }
+    }
+
+    #[async_trait]
+    impl Processor for Sink {
+        async fn execute(
+            &self,
+            _: DataPacket,
+            _: &ProcessorContext,
+            _: &OutputSender,
+        ) -> Result<(), FlowError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Processor for HangSource {
+        async fn execute(
+            &self,
+            _: DataPacket,
+            _: &ProcessorContext,
+            _: &OutputSender,
+        ) -> Result<(), FlowError> {
+            // Long enough to outlive drain_timeout_seconds=1 in V3/V4.
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            Ok(())
+        }
+    }
+
+    fn lifecycle_registry() -> ProcessorRegistry {
+        let mut registry = ProcessorRegistry::default();
+        registry.register("slow_source", |_| Ok(Arc::new(SlowSource)));
+        registry.register("test_sink", |_| Ok(Arc::new(Sink)));
+        registry.register("hang_source", |_| Ok(Arc::new(HangSource)));
+        registry
+    }
+
+    fn lifecycle_yaml() -> FlowConfig {
+        serde_yaml::from_str(
+            r#"
+id: lifecycle
+processors:
+  - { id: source, type: slow_source }
+  - { id: sink, type: test_sink }
+connections:
+  - { from: source, relationship: success, to: sink }
+"#,
+        )
+        .unwrap()
+    }
+
+    async fn wait_until(supervisor: &FlowSupervisor, state: FlowLifecycle) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while supervisor.control.state() != state {
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "timeout waiting for {state:?}, got {:?}",
+                    supervisor.control.state()
+                );
+            }
+            tokio::task::yield_now().await;
+        }
+    }
 
     #[tokio::test]
     async fn completed_flow_can_be_started_again() {
@@ -284,5 +376,112 @@ processors:
         assert!(started.is_err());
         assert_eq!(supervisor.control.state(), FlowLifecycle::Stopped);
         unsafe { std::env::remove_var(&url_env) };
+    }
+
+    /// V1: pause vía Supervisor no tumba el flujo; resume completa el trabajo.
+    #[tokio::test]
+    async fn supervisor_pause_resume_preserves_work() {
+        let supervisor = FlowSupervisor::new(lifecycle_yaml(), FlowMetrics::default())
+            .with_registry(lifecycle_registry());
+        assert!(supervisor.start().await.unwrap());
+        wait_until(&supervisor, FlowLifecycle::Running).await;
+        assert!(supervisor.snapshot().ready);
+        assert!(supervisor.pause());
+        assert_eq!(supervisor.control.state(), FlowLifecycle::Paused);
+        assert!(supervisor.snapshot().ready);
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert_eq!(supervisor.control.state(), FlowLifecycle::Paused);
+        assert!(supervisor.resume());
+        let summary = supervisor.wait_for_terminal().await.unwrap();
+        assert_eq!(summary.processed, 2);
+        assert!(!supervisor.snapshot().ready);
+    }
+
+    /// V2: drain vía Supervisor termina sin programar el trabajo pendiente.
+    #[tokio::test]
+    async fn supervisor_drain_finishes_active_without_pending() {
+        let supervisor = FlowSupervisor::new(lifecycle_yaml(), FlowMetrics::default())
+            .with_registry(lifecycle_registry());
+        assert!(supervisor.start().await.unwrap());
+        wait_until(&supervisor, FlowLifecycle::Running).await;
+        assert!(supervisor.drain());
+        let summary = supervisor.wait_for_terminal().await.unwrap();
+        assert_eq!(summary.processed, 1);
+        assert_eq!(supervisor.control.state(), FlowLifecycle::Stopped);
+    }
+
+    /// V3: timeout sin force conserva la tarea y deja DRAINING.
+    #[tokio::test]
+    async fn stop_gracefully_timeout_without_force_keeps_task() {
+        let config: FlowConfig = serde_yaml::from_str(
+            r#"
+id: hang-noforce
+engine:
+  shutdown:
+    drain_timeout_seconds: 1
+    force_after_timeout: false
+processors:
+  - { id: source, type: hang_source }
+"#,
+        )
+        .unwrap();
+        let supervisor =
+            FlowSupervisor::new(config, FlowMetrics::default()).with_registry(lifecycle_registry());
+        assert!(supervisor.start().await.unwrap());
+        wait_until(&supervisor, FlowLifecycle::Running).await;
+        let error = supervisor.stop_gracefully().await.unwrap_err();
+        assert!(
+            error.to_string().contains("force_after_timeout"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(supervisor.control.state(), FlowLifecycle::Draining);
+        assert!(
+            supervisor.task.lock().await.is_some(),
+            "task must be retained when force is false"
+        );
+        // Cleanup: hang ends → engine reaches Stopped.
+        tokio::time::timeout(Duration::from_secs(10), supervisor.wait_for_terminal())
+            .await
+            .expect("hang source should finish")
+            .unwrap();
+    }
+
+    /// V4: timeout con force aborta y deja STOPPED.
+    #[tokio::test]
+    async fn stop_gracefully_force_aborts_after_timeout() {
+        let config: FlowConfig = serde_yaml::from_str(
+            r#"
+id: hang-force
+engine:
+  shutdown:
+    drain_timeout_seconds: 1
+    force_after_timeout: true
+processors:
+  - { id: source, type: hang_source }
+"#,
+        )
+        .unwrap();
+        let supervisor =
+            FlowSupervisor::new(config, FlowMetrics::default()).with_registry(lifecycle_registry());
+        assert!(supervisor.start().await.unwrap());
+        wait_until(&supervisor, FlowLifecycle::Running).await;
+        tokio::time::timeout(Duration::from_secs(5), supervisor.stop_gracefully())
+            .await
+            .expect("force stop must return within timeout+margin")
+            .unwrap();
+        assert_eq!(supervisor.control.state(), FlowLifecycle::Stopped);
+        assert!(supervisor.task.lock().await.is_none());
+    }
+
+    /// V5: segundo start con tarea viva devuelve false.
+    #[tokio::test]
+    async fn start_returns_false_while_already_running() {
+        let supervisor = FlowSupervisor::new(lifecycle_yaml(), FlowMetrics::default())
+            .with_registry(lifecycle_registry());
+        assert!(supervisor.start().await.unwrap());
+        wait_until(&supervisor, FlowLifecycle::Running).await;
+        assert!(!supervisor.start().await.unwrap());
+        assert!(supervisor.drain());
+        supervisor.wait_for_terminal().await.unwrap();
     }
 }

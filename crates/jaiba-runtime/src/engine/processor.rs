@@ -25,7 +25,12 @@ pub struct ProcessorEmission {
 /// Bounded output channel supplied to each processor.
 ///
 /// Sending waits when channel or memory capacity is exhausted. Acceptance by
-/// this channel does not mean a downstream database has committed the packet.
+/// this channel does **not** mean a downstream database or broker has committed
+/// the packet (nivel A ≠ C; ver `docs/core-hardening-delivery.md`).
+///
+/// If a processor emits and later returns a retryable error, those emissions are
+/// **not** rolled back; a retry may emit again (at-least-once / posibles
+/// duplicados).
 #[derive(Clone)]
 pub struct OutputSender {
     sender: mpsc::Sender<ProcessorEmission>,

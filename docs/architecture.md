@@ -63,6 +63,9 @@ La garantía actual es `at-least-once`. Jaiva evita perder trabajo persistido,
 pero un paquete puede repetirse después de una caída. Los destinos deben usar
 `upsert`, restricciones únicas o claves idempotentes.
 
+Detalle de niveles (canal vs cola vs sink), reintentos tras emitir y tests:
+[`core-hardening-delivery.md`](core-hardening-delivery.md).
+
 ## Streaming y backpressure
 
 Los procesadores no devuelven todos sus resultados al finalizar. Emiten cada

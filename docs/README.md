@@ -36,6 +36,7 @@ cargo run --features kafka-driver,mongodb-driver,sqlserver-driver,oracle-driver 
 | Entender el producto | [project-vision.md](project-vision.md), [architecture.md](architecture.md) |
 | Endurecer cola / provenance (PacketRepository) | [core-hardening-repository.md](core-hardening-repository.md) |
 | Endurecer scheduler / DAG | [core-hardening-scheduler.md](core-hardening-scheduler.md) |
+| Endurecer retry / OutputSender / entrega | [core-hardening-delivery.md](core-hardening-delivery.md) |
 | Escribir YAML | [configuration.md](configuration.md) |
 | Ver nodos | [processors.md](processors.md) |
 | Perfiles / secretos | [connection-manager.md](connection-manager.md) |

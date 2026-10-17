@@ -4,12 +4,12 @@
 //! contracts are independent from source and destination database connectors.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs::{self, OpenOptions},
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -50,6 +50,13 @@ pub struct RepositoryStats {
     pub running: u64,
     pub dead_letter: u64,
     pub content_bytes: u64,
+}
+
+/// Resultado de barrer blobs/temporales sin fila de cola (Fase 2).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReconcileReport {
+    pub orphan_blobs_removed: u64,
+    pub stale_tmp_removed: u64,
 }
 
 /// Metadata for a packet retained after exhausting processor retries.
@@ -266,7 +273,66 @@ impl LocalPacketRepository {
             content: LocalContentRepository::new(&config.content_path)?,
         };
         repository.migrate().await?;
+        // C1 / .tmp viejos: limpia basura de crashes anteriores al aceptar trabajo.
+        repository.reconcile_orphans().await?;
         Ok(repository)
+    }
+
+    /// Elimina blobs `.bin` sin fila en cola y ficheros `.tmp` más viejos que
+    /// una hora. Idempotente; seguro tras un kill a mitad de `enqueue`.
+    pub async fn reconcile_orphans(&self) -> Result<ReconcileReport, FlowError> {
+        self.reconcile_orphans_with_tmp_max_age(Duration::from_secs(3600))
+            .await
+    }
+
+    /// Como [`Self::reconcile_orphans`], con edad máxima configurable para `.tmp`
+    /// (las pruebas usan `Duration::ZERO` para borrar todos).
+    pub async fn reconcile_orphans_with_tmp_max_age(
+        &self,
+        tmp_max_age: Duration,
+    ) -> Result<ReconcileReport, FlowError> {
+        let referenced: HashSet<String> =
+            sqlx::query_scalar("SELECT DISTINCT content_key FROM jaiva_packet_queue")
+                .fetch_all(&self.pool)
+                .await?
+                .into_iter()
+                .collect();
+        let mut report = ReconcileReport::default();
+        let now = SystemTime::now();
+        for path in list_content_files(self.content.root.as_path())? {
+            let name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            if name.ends_with(".tmp") {
+                let age_ok = match path.metadata().and_then(|meta| meta.modified()) {
+                    Ok(modified) => {
+                        now.duration_since(modified).unwrap_or(Duration::ZERO) >= tmp_max_age
+                    }
+                    Err(_) => true,
+                };
+                if age_ok {
+                    let _ = fs::remove_file(&path);
+                    report.stale_tmp_removed += 1;
+                }
+                continue;
+            }
+            if !name.ends_with(".bin") {
+                continue;
+            }
+            let Some(key) = name.strip_suffix(".bin") else {
+                continue;
+            };
+            if referenced.contains(key) {
+                continue;
+            }
+            let _ = fs::remove_file(&path);
+            report.orphan_blobs_removed += 1;
+            if let Some(parent) = path.parent() {
+                let _ = fs::remove_dir(parent);
+            }
+        }
+        Ok(report)
     }
 
     async fn migrate(&self) -> Result<(), FlowError> {
@@ -333,25 +399,38 @@ impl LocalPacketRepository {
         event: ProvenanceEvent,
         details: Value,
     ) -> Result<(), FlowError> {
-        let details = serde_json::to_string(&details)
-            .map_err(|error| FlowError::Repository(error.to_string()))?;
-        sqlx::query(
-            r#"
-            INSERT INTO jaiva_provenance
-                (queue_id, packet_id, flow_id, processor_id, event_type, details_json, created_at)
-            SELECT queue_id, packet_id, flow_id, processor_id, ?, ?, ?
-            FROM jaiva_packet_queue
-            WHERE queue_id = ?
-            "#,
-        )
-        .bind(event.as_str())
-        .bind(details)
-        .bind(now_epoch())
-        .bind(queue_id)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        insert_provenance(&self.pool, queue_id, event, details).await
     }
+}
+
+/// Inserta provenance leyendo identidad de la fila de cola (misma conexión/TX).
+async fn insert_provenance<'e, E>(
+    executor: E,
+    queue_id: &str,
+    event: ProvenanceEvent,
+    details: Value,
+) -> Result<(), FlowError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let details = serde_json::to_string(&details)
+        .map_err(|error| FlowError::Repository(error.to_string()))?;
+    sqlx::query(
+        r#"
+        INSERT INTO jaiva_provenance
+            (queue_id, packet_id, flow_id, processor_id, event_type, details_json, created_at)
+        SELECT queue_id, packet_id, flow_id, processor_id, ?, ?, ?
+        FROM jaiva_packet_queue
+        WHERE queue_id = ?
+        "#,
+    )
+    .bind(event.as_str())
+    .bind(details)
+    .bind(now_epoch())
+    .bind(queue_id)
+    .execute(executor)
+    .await?;
+    Ok(())
 }
 
 #[async_trait]
@@ -441,6 +520,7 @@ impl PacketRepository for LocalPacketRepository {
     }
 
     async fn claim(&self, queue_id: &str) -> Result<bool, FlowError> {
+        let mut transaction = self.pool.begin().await?;
         let result = sqlx::query(
             r#"
             UPDATE jaiva_packet_queue
@@ -450,19 +530,20 @@ impl PacketRepository for LocalPacketRepository {
         )
         .bind(now_epoch())
         .bind(queue_id)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
-        if result.rows_affected() == 1 {
-            self.provenance_details(
-                queue_id,
-                ProvenanceEvent::Claimed,
-                serde_json::json!({"status": "RUNNING"}),
-            )
-            .await?;
-            Ok(true)
-        } else {
-            Ok(false)
+        if result.rows_affected() != 1 {
+            return Ok(false);
         }
+        insert_provenance(
+            &mut *transaction,
+            queue_id,
+            ProvenanceEvent::Claimed,
+            serde_json::json!({"status": "RUNNING"}),
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(true)
     }
 
     async fn complete(&self, queue_id: &str, event: ProvenanceEvent) -> Result<(), FlowError> {
@@ -470,23 +551,35 @@ impl PacketRepository for LocalPacketRepository {
             ProvenanceEvent::Failed => "DEAD_LETTER",
             _ => "COMPLETED",
         };
-        sqlx::query(
+        let mut transaction = self.pool.begin().await?;
+        let result = sqlx::query(
             r#"
             UPDATE jaiva_packet_queue
             SET status = ?, completed_at = ?
-            WHERE queue_id = ?
+            WHERE queue_id = ? AND status = 'RUNNING'
             "#,
         )
         .bind(status)
         .bind(now_epoch())
         .bind(queue_id)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
-        self.provenance_details(queue_id, event, serde_json::json!({"status": status}))
-            .await
+        if result.rows_affected() != 1 {
+            return Ok(());
+        }
+        insert_provenance(
+            &mut *transaction,
+            queue_id,
+            event,
+            serde_json::json!({"status": status}),
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(())
     }
 
     async fn fail(&self, queue_id: &str, error: &str, attempt: u32) -> Result<(), FlowError> {
+        let mut transaction = self.pool.begin().await?;
         let result = sqlx::query(
             "UPDATE jaiva_packet_queue SET status = 'DEAD_LETTER', attempt = ?, error = ?, completed_at = ? WHERE queue_id = ? AND status = 'RUNNING'",
         )
@@ -494,20 +587,23 @@ impl PacketRepository for LocalPacketRepository {
         .bind(error)
         .bind(now_epoch())
         .bind(queue_id)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
-        if result.rows_affected() == 1 {
-            self.provenance_details(
-                queue_id,
-                ProvenanceEvent::Failed,
-                serde_json::json!({
-                    "status": "DEAD_LETTER",
-                    "attempt": attempt,
-                    "error": error
-                }),
-            )
-            .await?;
+        if result.rows_affected() != 1 {
+            return Ok(());
         }
+        insert_provenance(
+            &mut *transaction,
+            queue_id,
+            ProvenanceEvent::Failed,
+            serde_json::json!({
+                "status": "DEAD_LETTER",
+                "attempt": attempt,
+                "error": error
+            }),
+        )
+        .await?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -547,6 +643,7 @@ impl PacketRepository for LocalPacketRepository {
     }
 
     async fn requeue_dead_letter(&self, queue_id: &str) -> Result<bool, FlowError> {
+        let mut transaction = self.pool.begin().await?;
         let result = sqlx::query(
             r#"UPDATE jaiva_packet_queue
                SET status = 'PENDING', attempt = 0, error = NULL,
@@ -554,19 +651,20 @@ impl PacketRepository for LocalPacketRepository {
                WHERE queue_id = ? AND status = 'DEAD_LETTER'"#,
         )
         .bind(queue_id)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
-        if result.rows_affected() == 1 {
-            self.provenance_details(
-                queue_id,
-                ProvenanceEvent::Requeued,
-                serde_json::json!({"status": "PENDING", "attempt": 0}),
-            )
-            .await?;
-            Ok(true)
-        } else {
-            Ok(false)
+        if result.rows_affected() != 1 {
+            return Ok(false);
         }
+        insert_provenance(
+            &mut *transaction,
+            queue_id,
+            ProvenanceEvent::Requeued,
+            serde_json::json!({"status": "PENDING", "attempt": 0}),
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(true)
     }
 
     async fn record_event(
@@ -668,6 +766,7 @@ impl PacketRepository for LocalPacketRepository {
         abandoned_after_seconds: u64,
     ) -> Result<u64, FlowError> {
         let cutoff = now_epoch().saturating_sub(abandoned_after_seconds as i64);
+        let mut transaction = self.pool.begin().await?;
         let ids: Vec<String> = sqlx::query_scalar(
             r#"
             SELECT queue_id
@@ -677,27 +776,34 @@ impl PacketRepository for LocalPacketRepository {
         )
         .bind(flow_id)
         .bind(cutoff)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *transaction)
         .await?;
+        let mut recovered = 0_u64;
         for queue_id in &ids {
-            sqlx::query(
+            let result = sqlx::query(
                 r#"
                 UPDATE jaiva_packet_queue
                 SET status = 'PENDING', claimed_at = NULL
-                WHERE queue_id = ?
+                WHERE queue_id = ? AND status = 'RUNNING'
                 "#,
             )
             .bind(queue_id)
-            .execute(&self.pool)
+            .execute(&mut *transaction)
             .await?;
-            self.provenance_details(
+            if result.rows_affected() != 1 {
+                continue;
+            }
+            insert_provenance(
+                &mut *transaction,
                 queue_id,
                 ProvenanceEvent::Recovered,
                 serde_json::json!({"status": "PENDING", "reason": "abandoned"}),
             )
             .await?;
+            recovered += 1;
         }
-        Ok(ids.len() as u64)
+        transaction.commit().await?;
+        Ok(recovered)
     }
 
     async fn cleanup_completed(&self, retention_hours: u64) -> Result<u64, FlowError> {
@@ -848,6 +954,26 @@ fn hex_digest(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn list_content_files(root: &Path) -> Result<Vec<PathBuf>, FlowError> {
+    let mut files = Vec::new();
+    if !root.exists() {
+        return Ok(files);
+    }
+    for shard in fs::read_dir(root)? {
+        let shard = shard?;
+        if !shard.file_type()?.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(shard.path())? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                files.push(entry.path());
+            }
+        }
+    }
+    Ok(files)
+}
+
 fn now_epoch() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -968,5 +1094,373 @@ mod tests {
             .expect("test database has parent");
         drop(content);
         let _ = fs::remove_dir_all(root);
+    }
+
+    async fn queue_status(repository: &LocalPacketRepository, queue_id: &str) -> String {
+        sqlx::query_scalar("SELECT status FROM jaiva_packet_queue WHERE queue_id = ?")
+            .bind(queue_id)
+            .fetch_one(&repository.pool)
+            .await
+            .unwrap()
+    }
+
+    async fn event_count(
+        repository: &LocalPacketRepository,
+        queue_id: &str,
+        event_type: &str,
+    ) -> i64 {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM jaiva_provenance WHERE queue_id = ? AND event_type = ?",
+        )
+        .bind(queue_id)
+        .bind(event_type)
+        .fetch_one(&repository.pool)
+        .await
+        .unwrap()
+    }
+
+    async fn close_repo(repository: LocalPacketRepository, config: RepositoryConfig) {
+        repository.pool.close().await;
+        let root = config
+            .database_path
+            .parent()
+            .expect("test database has parent");
+        drop(repository);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// T1: un solo claim gana; el ganador deja CLAIMED visible tras el commit.
+    #[tokio::test]
+    async fn claim_is_exclusive_and_records_claimed_in_same_commit() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 1})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+
+        let left = repository.clone();
+        let right = repository.clone();
+        let left_id = queue_id.clone();
+        let right_id = queue_id.clone();
+        let (a, b) = tokio::join!(left.claim(&left_id), right.claim(&right_id));
+        let won = [a.unwrap(), b.unwrap()]
+            .into_iter()
+            .filter(|ok| *ok)
+            .count();
+        assert_eq!(won, 1);
+        assert_eq!(queue_status(&repository, &queue_id).await, "RUNNING");
+        assert_eq!(event_count(&repository, &queue_id, "CLAIMED").await, 1);
+
+        close_repo(repository, config).await;
+    }
+
+    /// T2: complete exige RUNNING; con éxito estado + provenance van juntos.
+    #[tokio::test]
+    async fn complete_requires_running_and_is_atomic_with_provenance() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 2})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+
+        repository
+            .complete(&queue_id, ProvenanceEvent::Completed)
+            .await
+            .unwrap();
+        assert_eq!(queue_status(&repository, &queue_id).await, "PENDING");
+        assert_eq!(event_count(&repository, &queue_id, "COMPLETED").await, 0);
+
+        assert!(repository.claim(&queue_id).await.unwrap());
+        repository
+            .complete(&queue_id, ProvenanceEvent::Completed)
+            .await
+            .unwrap();
+        assert_eq!(queue_status(&repository, &queue_id).await, "COMPLETED");
+        assert_eq!(event_count(&repository, &queue_id, "COMPLETED").await, 1);
+
+        close_repo(repository, config).await;
+    }
+
+    /// T3: fail exige RUNNING; DEAD_LETTER + FAILED atómicos.
+    #[tokio::test]
+    async fn fail_requires_running_and_is_atomic_with_provenance() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 3})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+
+        repository.fail(&queue_id, "too early", 1).await.unwrap();
+        assert_eq!(queue_status(&repository, &queue_id).await, "PENDING");
+        assert_eq!(event_count(&repository, &queue_id, "FAILED").await, 0);
+
+        assert!(repository.claim(&queue_id).await.unwrap());
+        repository.fail(&queue_id, "boom", 2).await.unwrap();
+        assert_eq!(queue_status(&repository, &queue_id).await, "DEAD_LETTER");
+        assert_eq!(event_count(&repository, &queue_id, "FAILED").await, 1);
+
+        close_repo(repository, config).await;
+    }
+
+    /// T4: recover no deja PENDING abandonado sin RECOVERED.
+    #[tokio::test]
+    async fn recover_abandoned_is_atomic_per_row() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 4})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+        assert!(repository.claim(&queue_id).await.unwrap());
+
+        assert_eq!(repository.recover_abandoned("flow", 0).await.unwrap(), 1);
+        assert_eq!(queue_status(&repository, &queue_id).await, "PENDING");
+        assert_eq!(event_count(&repository, &queue_id, "RECOVERED").await, 1);
+
+        close_repo(repository, config).await;
+    }
+
+    /// T5: requeue solo desde DEAD_LETTER.
+    #[tokio::test]
+    async fn requeue_dead_letter_requires_dead_letter() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 5})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+
+        assert!(!repository.requeue_dead_letter(&queue_id).await.unwrap());
+        assert_eq!(event_count(&repository, &queue_id, "REQUEUED").await, 0);
+
+        assert!(repository.claim(&queue_id).await.unwrap());
+        repository
+            .complete(&queue_id, ProvenanceEvent::Completed)
+            .await
+            .unwrap();
+        assert!(!repository.requeue_dead_letter(&queue_id).await.unwrap());
+        assert_eq!(event_count(&repository, &queue_id, "REQUEUED").await, 0);
+
+        let dead = repository
+            .enqueue("flow", "sink", "failure", &packet)
+            .await
+            .unwrap();
+        assert!(repository.claim(&dead).await.unwrap());
+        repository.fail(&dead, "gone", 1).await.unwrap();
+        assert!(repository.requeue_dead_letter(&dead).await.unwrap());
+        assert_eq!(queue_status(&repository, &dead).await, "PENDING");
+        assert_eq!(event_count(&repository, &dead, "REQUEUED").await, 1);
+
+        close_repo(repository, config).await;
+    }
+
+    /// T6: regresión — enqueue mantiene fila + ENQUEUED atómicos.
+    #[tokio::test]
+    async fn enqueue_keeps_queue_row_and_enqueued_atomic() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 6})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+
+        assert_eq!(queue_status(&repository, &queue_id).await, "PENDING");
+        assert_eq!(event_count(&repository, &queue_id, "ENQUEUED").await, 1);
+        assert_eq!(repository.pending("flow").await.unwrap().len(), 1);
+
+        close_repo(repository, config).await;
+    }
+
+    /// T7: blob sin fila de cola → reconcile lo elimina (C1).
+    #[tokio::test]
+    async fn reconcile_deletes_content_without_queue_row() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let orphan = repository.content.put(b"orphan-bytes").await.unwrap();
+        assert!(repository.content.path_for(&orphan.key).exists());
+
+        let report = repository.reconcile_orphans().await.unwrap();
+        assert_eq!(report.orphan_blobs_removed, 1);
+        assert!(!repository.content.path_for(&orphan.key).exists());
+
+        close_repo(repository, config).await;
+    }
+
+    /// T8: blob referenciado por la cola no se toca.
+    #[tokio::test]
+    async fn reconcile_keeps_content_referenced_by_queue() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 8})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+        let key: String =
+            sqlx::query_scalar("SELECT content_key FROM jaiva_packet_queue WHERE queue_id = ?")
+                .bind(&queue_id)
+                .fetch_one(&repository.pool)
+                .await
+                .unwrap();
+        let path = repository.content.path_for(&key);
+        assert!(path.exists());
+
+        let report = repository.reconcile_orphans().await.unwrap();
+        assert_eq!(report.orphan_blobs_removed, 0);
+        assert!(path.exists());
+
+        close_repo(repository, config).await;
+    }
+
+    /// T9: `*.tmp` antiguos se limpian.
+    #[tokio::test]
+    async fn stale_content_tmp_files_are_removed() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let shard = config.content_path.join("aa");
+        fs::create_dir_all(&shard).unwrap();
+        let tmp = shard.join("deadbeef.tmp");
+        fs::write(&tmp, b"partial").unwrap();
+        assert!(tmp.exists());
+
+        let report = repository
+            .reconcile_orphans_with_tmp_max_age(Duration::ZERO)
+            .await
+            .unwrap();
+        assert_eq!(report.stale_tmp_removed, 1);
+        assert!(!tmp.exists());
+
+        close_repo(repository, config).await;
+    }
+
+    /// T10: contenido ausente o corrupto → error de repositorio (C10).
+    #[tokio::test]
+    async fn missing_or_corrupt_content_surfaces_repository_error() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 10})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+        let key: String =
+            sqlx::query_scalar("SELECT content_key FROM jaiva_packet_queue WHERE queue_id = ?")
+                .bind(&queue_id)
+                .fetch_one(&repository.pool)
+                .await
+                .unwrap();
+        let path = repository.content.path_for(&key);
+
+        fs::remove_file(&path).unwrap();
+        let missing = repository.pending("flow").await;
+        assert!(missing.is_err(), "missing content must fail pending()");
+
+        // Restaurar bytes incorrectos con el mismo path (hash distinto).
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"tampered").unwrap();
+        let corrupt = repository.pending("flow").await;
+        assert!(
+            matches!(corrupt, Err(FlowError::Repository(_))),
+            "corrupt content must be FlowError::Repository, got {corrupt:?}"
+        );
+
+        close_repo(repository, config).await;
+    }
+
+    /// T11: reinicio + recover_abandoned recupera RUNNING abandonado.
+    #[tokio::test]
+    async fn restart_requeues_abandoned_running_work() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 11})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+        assert!(repository.claim(&queue_id).await.unwrap());
+        assert_eq!(queue_status(&repository, &queue_id).await, "RUNNING");
+        repository.pool.close().await;
+        drop(repository);
+
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        assert_eq!(repository.recover_abandoned("flow", 0).await.unwrap(), 1);
+        assert_eq!(queue_status(&repository, &queue_id).await, "PENDING");
+        assert!(repository.claim(&queue_id).await.unwrap());
+        repository
+            .complete(&queue_id, ProvenanceEvent::Completed)
+            .await
+            .unwrap();
+        assert_eq!(queue_status(&repository, &queue_id).await, "COMPLETED");
+
+        close_repo(repository, config).await;
+    }
+
+    /// T12: tras COMMIT de enqueue, un reopen ve el trabajo (C2).
+    #[tokio::test]
+    async fn pending_after_crash_mid_enqueue_commit_is_visible() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 12})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+        repository.pool.close().await;
+        drop(repository);
+
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let pending = repository.pending("flow").await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].queue_id, queue_id);
+        assert_eq!(pending[0].packet.records().unwrap()[0]["n"], 12);
+
+        close_repo(repository, config).await;
+    }
+
+    /// T13: tras recover + complete + cleanup + reconcile, stats e invariantes OK.
+    #[tokio::test]
+    async fn stats_and_invariants_hold_after_recover_and_cleanup() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 13})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+        assert!(repository.claim(&queue_id).await.unwrap());
+        assert_eq!(repository.recover_abandoned("flow", 0).await.unwrap(), 1);
+        assert!(repository.claim(&queue_id).await.unwrap());
+        repository
+            .complete(&queue_id, ProvenanceEvent::Completed)
+            .await
+            .unwrap();
+
+        let _ = repository.content.put(b"leftover-orphan").await.unwrap();
+        let cleaned = repository.cleanup_completed(0).await.unwrap();
+        assert_eq!(cleaned, 1);
+        let report = repository.reconcile_orphans().await.unwrap();
+        assert!(report.orphan_blobs_removed >= 1);
+
+        let stats = repository.stats().await.unwrap();
+        assert_eq!(stats.pending, 0);
+        assert_eq!(stats.running, 0);
+        assert_eq!(stats.dead_letter, 0);
+        assert_eq!(
+            list_content_files(config.content_path.as_path())
+                .unwrap()
+                .len(),
+            0
+        );
+
+        close_repo(repository, config).await;
     }
 }

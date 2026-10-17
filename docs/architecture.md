@@ -103,6 +103,9 @@ La implementación local utiliza:
 - SHA-256 para direccionamiento y verificación;
 - escritura temporal, `fsync` y renombrado atómico.
 
+Contrato de estados, matriz de crash y tests de endurecimiento del
+`PacketRepository`: [`core-hardening-repository.md`](core-hardening-repository.md).
+
 Los contratos permiten añadir posteriormente PostgreSQL, S3 o MinIO sin cambiar
 el scheduler.
 

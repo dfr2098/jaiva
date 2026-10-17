@@ -155,7 +155,7 @@ Se abre PR a `main` solo cuando T1–T13 pasan en CI.
 - [x] Máquina de estados e invariantes escritos.
 - [x] Matriz C1–C10 con hoy/deseado.
 - [x] Tests T1–T13 implementados y verdes en unidad.
-- [ ] PR a `main` tras revisión y CI verde.
+- [x] PR a `main` tras revisión y CI verde (#19).
 
 ## Referencia rápida de API
 

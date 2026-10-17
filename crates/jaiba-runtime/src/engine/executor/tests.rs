@@ -55,6 +55,8 @@ async fn branches_reserve_independent_copies_before_routing() {
     }
 }
 use async_trait::async_trait;
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct SlowSource;
@@ -690,4 +692,266 @@ connections:
 "#,
     );
     assert!(FlowEngine::new(config).is_err());
+}
+
+/// Probe de partición: mide concurrencia total y por clave (`partition_by`).
+struct PartitionProbe {
+    active_by_key: Mutex<HashMap<String, usize>>,
+    max_same_key: AtomicUsize,
+    active_total: AtomicUsize,
+    max_total: AtomicUsize,
+}
+
+#[async_trait]
+impl Processor for PartitionProbe {
+    async fn execute(
+        &self,
+        packet: DataPacket,
+        _: &ProcessorContext,
+        _: &OutputSender,
+    ) -> Result<(), FlowError> {
+        let key = packet.records().unwrap()[0]["customer_id"].to_string();
+        {
+            let mut map = self.active_by_key.lock().expect("probe lock");
+            let active = map.entry(key.clone()).or_insert(0);
+            *active += 1;
+            self.max_same_key.fetch_max(*active, Ordering::SeqCst);
+        }
+        let total = self.active_total.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_total.fetch_max(total, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        self.active_total.fetch_sub(1, Ordering::SeqCst);
+        let mut map = self.active_by_key.lock().expect("probe lock");
+        *map.get_mut(&key).expect("key tracked") -= 1;
+        Ok(())
+    }
+}
+
+struct PartitionedSource;
+
+#[async_trait]
+impl Processor for PartitionedSource {
+    async fn execute(
+        &self,
+        _: DataPacket,
+        _: &ProcessorContext,
+        output: &OutputSender,
+    ) -> Result<(), FlowError> {
+        for (index, customer) in [10, 10, 11, 11, 10, 11].into_iter().enumerate() {
+            output
+                .success(DataPacket::with_records(vec![serde_json::json!({
+                    "index": index,
+                    "customer_id": customer
+                })]))
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+/// S1: la misma partition_key nunca corre en paralelo en un processor partitioned.
+#[tokio::test]
+async fn partitioned_same_key_runs_serially() {
+    let config = parse(
+        r#"
+id: partitioned-serial
+engine:
+  max_concurrency: 8
+processors:
+  - { id: source, type: partitioned_source }
+  - id: sink
+    type: partition_probe
+    scheduling:
+      concurrent_tasks: 4
+      ordering: partitioned
+      partition_by: customer_id
+connections:
+  - { from: source, relationship: success, to: sink }
+"#,
+    );
+    let probe = Arc::new(PartitionProbe {
+        active_by_key: Mutex::new(HashMap::new()),
+        max_same_key: AtomicUsize::new(0),
+        active_total: AtomicUsize::new(0),
+        max_total: AtomicUsize::new(0),
+    });
+    let mut registry = ProcessorRegistry::default();
+    registry.register("partitioned_source", |_| Ok(Arc::new(PartitionedSource)));
+    let registered = probe.clone();
+    registry.register("partition_probe", move |_| Ok(registered.clone()));
+
+    FlowEngine::new(config)
+        .unwrap()
+        .with_registry(registry)
+        .run()
+        .await
+        .unwrap();
+    assert_eq!(
+        probe.max_same_key.load(Ordering::SeqCst),
+        1,
+        "same partition key must be serialized"
+    );
+}
+
+/// S2: claves distintas pueden solaparse hasta concurrent_tasks.
+#[tokio::test]
+async fn partitioned_different_keys_run_in_parallel() {
+    let config = parse(
+        r#"
+id: partitioned-parallel
+engine:
+  max_concurrency: 8
+processors:
+  - { id: source, type: partitioned_source }
+  - id: sink
+    type: partition_probe
+    scheduling:
+      concurrent_tasks: 4
+      ordering: partitioned
+      partition_by: customer_id
+connections:
+  - { from: source, relationship: success, to: sink }
+"#,
+    );
+    let probe = Arc::new(PartitionProbe {
+        active_by_key: Mutex::new(HashMap::new()),
+        max_same_key: AtomicUsize::new(0),
+        active_total: AtomicUsize::new(0),
+        max_total: AtomicUsize::new(0),
+    });
+    let mut registry = ProcessorRegistry::default();
+    registry.register("partitioned_source", |_| Ok(Arc::new(PartitionedSource)));
+    let registered = probe.clone();
+    registry.register("partition_probe", move |_| Ok(registered.clone()));
+
+    FlowEngine::new(config)
+        .unwrap()
+        .with_registry(registry)
+        .run()
+        .await
+        .unwrap();
+    assert!(
+        probe.max_total.load(Ordering::SeqCst) >= 2,
+        "distinct partition keys should overlap, max_total={}",
+        probe.max_total.load(Ordering::SeqCst)
+    );
+    assert_eq!(probe.max_same_key.load(Ordering::SeqCst), 1);
+}
+
+struct SlowSibling;
+struct FastSibling {
+    processed: AtomicUsize,
+}
+
+#[async_trait]
+impl Processor for SlowSibling {
+    async fn execute(
+        &self,
+        _: DataPacket,
+        _: &ProcessorContext,
+        _: &OutputSender,
+    ) -> Result<(), FlowError> {
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Processor for FastSibling {
+    async fn execute(
+        &self,
+        _: DataPacket,
+        _: &ProcessorContext,
+        _: &OutputSender,
+    ) -> Result<(), FlowError> {
+        self.processed.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// S3: un sink lento no impide que el hermano rápido vacíe su cola.
+#[tokio::test]
+async fn slow_processor_does_not_starve_sibling() {
+    let config = parse(
+        r#"
+id: fairness
+engine:
+  max_concurrency: 4
+  queue_capacity: 8
+processors:
+  - { id: source, type: burst_source }
+  - id: slow
+    type: slow_sibling
+    scheduling: { concurrent_tasks: 1 }
+  - id: fast
+    type: fast_sibling
+    scheduling: { concurrent_tasks: 2 }
+connections:
+  - { from: source, relationship: success, to: slow }
+  - { from: source, relationship: success, to: fast }
+"#,
+    );
+    let fast = Arc::new(FastSibling {
+        processed: AtomicUsize::new(0),
+    });
+    let mut registry = ProcessorRegistry::default();
+    registry.register("burst_source", |_| Ok(Arc::new(BurstSource)));
+    registry.register("slow_sibling", |_| Ok(Arc::new(SlowSibling)));
+    let registered = fast.clone();
+    registry.register("fast_sibling", move |_| Ok(registered.clone()));
+
+    let summary = tokio::time::timeout(
+        Duration::from_secs(3),
+        FlowEngine::new(config)
+            .unwrap()
+            .with_registry(registry)
+            .run(),
+    )
+    .await
+    .expect("fair scheduling must finish")
+    .unwrap();
+    assert_eq!(fast.processed.load(Ordering::SeqCst), 6);
+    assert_eq!(summary.failed, 0);
+}
+
+/// S4: fan-out a dos sinks con capacidad justa no deadlock-ea.
+#[tokio::test]
+async fn fan_out_under_tight_capacity_completes() {
+    let config = parse(
+        r#"
+id: fanout-tight
+engine:
+  max_concurrency: 3
+  queue_capacity: 2
+processors:
+  - { id: source, type: burst_source }
+  - { id: left, type: test_sink }
+  - { id: right, type: test_sink }
+connections:
+  - from: source
+    relationship: success
+    to: left
+    queue: { capacity: 2 }
+  - from: source
+    relationship: success
+    to: right
+    queue: { capacity: 2 }
+"#,
+    );
+    let mut registry = lifecycle_registry();
+    registry.register("burst_source", |_| Ok(Arc::new(BurstSource)));
+    let summary = tokio::time::timeout(
+        Duration::from_secs(3),
+        FlowEngine::new(config)
+            .unwrap()
+            .with_registry(registry)
+            .run(),
+    )
+    .await
+    .expect("fan-out under tight capacity must not deadlock")
+    .unwrap();
+    // source + 6 emissions × 2 branches (left/right) = 1 + 12 processor runs…
+    // processed counts processor executions that complete successfully.
+    assert!(summary.processed >= 7, "processed={}", summary.processed);
+    assert_eq!(summary.failed, 0);
 }

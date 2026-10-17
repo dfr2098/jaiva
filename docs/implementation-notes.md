@@ -1127,6 +1127,23 @@ driver.
    (`cargo deny check advisories`). La lista de bibliotecas de C y la nota
    sobre OpenSSL/SQLite se mantienen a mano.
 
+### FlowSupervisor: pause / drain / stop (core hardening)
+
+1. **Problema:** el contrato pause/resume/drain/`stop_gracefully` (timeout +
+   `force_after_timeout`) y el `start` idempotente no estaban cubiertos por
+   tests de aceptación en la capa `FlowSupervisor` (solo en `FlowControl` /
+   motor).
+2. **Archivos:** `crates/jaiba-runtime/src/engine/supervisor.rs`,
+   `docs/core-hardening-supervisor.md`, enlaces en `architecture.md` / `README`.
+3. **Decisiones:** sin cambiar el grafo de estados; `with_registry` para
+   probes de prueba; V1–V5 documentan pause/drain, timeout con/sin force y
+   doble `start`.
+4. **Prueba:** `cargo test -p jaiba-runtime --lib supervisor_pause
+   supervisor_drain stop_gracefully_timeout stop_gracefully_force
+   start_returns_false`.
+5. **Limitación:** no cubre deploy asíncrono FAILED tras HTTP 200 (revisión
+   general §4); no toca soak/plugins.
+
 ### Retry / OutputSender / entrega (core hardening)
 
 1. **Problema:** no estaba explícito que `OutputSender` es aceptación de canal

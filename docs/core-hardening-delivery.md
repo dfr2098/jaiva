@@ -82,4 +82,4 @@ vez.
 
 - [x] E1–E3 verdes.
 - [x] Contrato documentado (este archivo + architecture).
-- [ ] PR fusionado a `main`.
+- [x] PR fusionado a `main`.

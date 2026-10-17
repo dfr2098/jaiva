@@ -115,6 +115,16 @@ Contrato de estados, matriz de crash y tests de endurecimiento del
 Los contratos permiten añadir posteriormente PostgreSQL, S3 o MinIO sin cambiar
 el scheduler.
 
+## Ciclo de vida (control)
+
+`FlowSupervisor` expone start / pause / resume / drain / stop sobre
+`FlowControl`. En `PAUSED` o `DRAINING` no se programa trabajo nuevo; las
+tareas activas pueden terminar. `stop_gracefully` respeta
+`drain_timeout_seconds` y `force_after_timeout`.
+
+Contrato y tests V1–V5:
+[`core-hardening-supervisor.md`](core-hardening-supervisor.md).
+
 ## Extensibilidad
 
 `ProcessorRegistry` permite registrar procesadores externos. Los conectores de

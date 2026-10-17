@@ -75,4 +75,4 @@ STARTING / RUNNING / DRAINING → FAILED
 
 - [x] V1–V5 verdes.
 - [x] Contrato documentado (este archivo + architecture).
-- [ ] PR fusionado a `main`.
+- [x] PR fusionado a `main`.

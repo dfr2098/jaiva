@@ -1127,6 +1127,21 @@ driver.
    (`cargo deny check advisories`). La lista de bibliotecas de C y la nota
    sobre OpenSSL/SQLite se mantienen a mano.
 
+### Soak / plugins: probes locales (core hardening)
+
+1. **Problema:** el soak de 1 h del stack Estable no cabe en CI; faltaban
+   probes rápidas de reutilización del proceso `external_plugin` y ciclos
+   repetidos del flujo ejemplo.
+2. **Archivos:** `crates/jaiba-runtime/src/processors/external_plugin.rs`,
+   `scripts/mini-soak-plugins.sh`, `docs/core-hardening-soak-plugins.md`,
+   enlaces en `architecture.md` / `README` / ops, paso CI.
+3. **Decisiones:** capa A (P1–P3) en CI/local; capa B (soak 1 h) sigue siendo
+   aceptación operativa. Sin cambiar el protocolo de plugins.
+4. **Prueba:** `cargo test -p jaiba-runtime --lib sustained_plugin_reuse
+   plugin_burst_packet`; `bash scripts/mini-soak-plugins.sh`.
+5. **Limitación:** no sustituye stress/soak/chaos del stack Estable; no mide
+   fugas RSS a largo plazo.
+
 ### FlowSupervisor: pause / drain / stop (core hardening)
 
 1. **Problema:** el contrato pause/resume/drain/`stop_gracefully` (timeout +

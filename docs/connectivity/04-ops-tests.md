@@ -12,6 +12,7 @@
 | Smoke JME (política embebida, Cold tras reinicio) | `python3 scripts/smoke-jme.py [binario]` |
 | Fallas JME (cuota, disco de solo lectura, segmentos dañados, `kill -9`) | `python3 scripts/chaos-jme.py [binario]` |
 | Smoke offline | `cargo run -p jaiba-cli --features release-core -- examples/smoke.yaml` |
+| Mini-soak plugins (N ciclos, sin Docker 1 h) | `bash scripts/mini-soak-plugins.sh [binario] [ciclos]` |
 
 Los tres scripts de Python no usan Docker; sin argumento toman
 `target/debug/jaiba`.

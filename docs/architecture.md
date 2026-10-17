@@ -131,3 +131,7 @@ Contrato y tests V1–V5:
 base se separarán por driver y declararán capacidades comunes. El diseño
 multi-base de escritura está en
 [`history/priority-4-database-writes.md`](history/priority-4-database-writes.md).
+
+Plugins externos (`external_plugin`) y probes de carga corta (mini-soak) frente
+al soak operativo de 1 h:
+[`core-hardening-soak-plugins.md`](core-hardening-soak-plugins.md).

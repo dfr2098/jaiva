@@ -875,6 +875,54 @@ for line in sys.stdin:
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// P1: muchas peticiones seguidas reutilizan el mismo proceso hijo.
+    #[tokio::test]
+    async fn sustained_plugin_reuse_across_many_packets() {
+        if !python_available() {
+            eprintln!("skipping: python3 not available");
+            return;
+        }
+        let root = temp_root("soak-reuse");
+        write_plugin(&root, "upper", UPPERCASE_PLUGIN);
+        let upper = plugin(&root, serde_json::json!({"plugin": "upper"}));
+        for i in 0..40 {
+            let name = format!("item{i}");
+            let packets = run(&upper, vec![serde_json::json!({"name": name})])
+                .await
+                .unwrap();
+            assert_eq!(packets.len(), 1);
+            assert_eq!(packets[0].records().unwrap()[0]["name"], format!("ITEM{i}"));
+            assert!(
+                upper.slot.lock().await.process.is_some(),
+                "process should stay alive after packet {i}"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// P2: un paquete con muchos records transforma todos.
+    #[tokio::test]
+    async fn plugin_burst_packet_transforms_all_records() {
+        if !python_available() {
+            eprintln!("skipping: python3 not available");
+            return;
+        }
+        let root = temp_root("soak-burst");
+        write_plugin(&root, "upper", UPPERCASE_PLUGIN);
+        let upper = plugin(&root, serde_json::json!({"plugin": "upper"}));
+        let records: Vec<Value> = (0..80)
+            .map(|i| serde_json::json!({"name": format!("n{i}")}))
+            .collect();
+        let packets = run(&upper, records).await.unwrap();
+        assert_eq!(packets.len(), 1);
+        let out = packets[0].records().unwrap();
+        assert_eq!(out.len(), 80);
+        for (i, record) in out.iter().enumerate() {
+            assert_eq!(record["name"], format!("N{i}"));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn write_manifest(root: &Path, id: &str, manifest: &str) {
         let directory = root.join(id);
         fs::create_dir_all(&directory).unwrap();

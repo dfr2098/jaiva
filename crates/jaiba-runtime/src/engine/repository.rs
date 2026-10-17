@@ -306,10 +306,9 @@ impl LocalPacketRepository {
                 .unwrap_or_default();
             if name.ends_with(".tmp") {
                 let age_ok = match path.metadata().and_then(|meta| meta.modified()) {
-                    Ok(modified) => now
-                        .duration_since(modified)
-                        .unwrap_or(Duration::ZERO)
-                        >= tmp_max_age,
+                    Ok(modified) => {
+                        now.duration_since(modified).unwrap_or(Duration::ZERO) >= tmp_max_age
+                    }
                     Err(_) => true,
                 };
                 if age_ok {
@@ -1146,7 +1145,10 @@ mod tests {
         let left_id = queue_id.clone();
         let right_id = queue_id.clone();
         let (a, b) = tokio::join!(left.claim(&left_id), right.claim(&right_id));
-        let won = [a.unwrap(), b.unwrap()].into_iter().filter(|ok| *ok).count();
+        let won = [a.unwrap(), b.unwrap()]
+            .into_iter()
+            .filter(|ok| *ok)
+            .count();
         assert_eq!(won, 1);
         assert_eq!(queue_status(&repository, &queue_id).await, "RUNNING");
         assert_eq!(event_count(&repository, &queue_id, "CLAIMED").await, 1);

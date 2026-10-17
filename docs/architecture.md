@@ -81,6 +81,9 @@ futuros de red permanecen en el runtime asíncrono, mientras que el trabajo CPU
 y el I/O bloqueante usan cupos separados. Los procesadores pueden ejecutarse
 sin orden, en orden completo o con afinidad por una clave de partición.
 
+Contrato de cupos, particiones y tests de no-deadlock/equidad:
+[`core-hardening-scheduler.md`](core-hardening-scheduler.md).
+
 ## Memoria
 
 Jaiva detecta el menor valor entre la RAM física y el límite cgroup. De forma

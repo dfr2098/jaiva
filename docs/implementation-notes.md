@@ -1127,6 +1127,20 @@ driver.
    (`cargo deny check advisories`). La lista de bibliotecas de C y la nota
    sobre OpenSSL/SQLite se mantienen a mano.
 
+### Scheduler: particiones, equidad y no-deadlock (core hardening)
+
+1. **Problema:** el contrato de `ordering: partitioned`, la rotación de trabajo
+   diferido y el fan-out bajo `queue_capacity` justo no estaban cubiertos por
+   tests de aceptación explícitos (solo preserve/global/many-sources).
+2. **Archivos:** `crates/jaiba-runtime/src/engine/executor/tests.rs`,
+   `docs/core-hardening-scheduler.md`, enlaces en `architecture.md` / `README`.
+3. **Decisiones:** sin cambio de algoritmo del scheduler; se documenta el
+   contrato y se añaden probes S1–S4. Si un test fallara, el arreglo sería
+   mínimo en `scheduler.rs`.
+4. **Prueba:** `cargo test -p jaiba-runtime --lib partitioned_ slow_processor fan_out_under`.
+5. **Limitación:** no mide fairness cuantitativa a largo plazo (soak); no toca
+   retry/OutputSender ni supervisor.
+
 ### PacketRepository: transiciones atómicas y reconcile (core hardening)
 
 1. **Problema:** `claim` / `complete` / `fail` / `recover` / `requeue` escribían

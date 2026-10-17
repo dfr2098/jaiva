@@ -8,6 +8,7 @@ use crate::{
     config::{ExecutionMode, RetryConfig},
     engine::{OutputSender, ProcessorContext},
 };
+use tokio::sync::mpsc;
 
 #[tokio::test]
 async fn branches_reserve_independent_copies_before_routing() {
@@ -219,6 +220,224 @@ async fn exhausted_packet_memory_fails_the_packet_not_the_flow() {
     assert!(message.contains("memory capacity exhausted"));
     drop(input);
     assert_eq!(metrics.summary().memory_used_bytes, 0);
+}
+
+/// Emite `success` y luego falla de forma reintentable (para E1).
+struct EmitThenFailOnce {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl Processor for EmitThenFailOnce {
+    async fn execute(
+        &self,
+        _: DataPacket,
+        context: &ProcessorContext,
+        output: &OutputSender,
+    ) -> Result<(), FlowError> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        output
+            .success(DataPacket::with_records(vec![serde_json::json!({
+                "call": call
+            })]))
+            .await?;
+        if call == 0 {
+            return Err(FlowError::Processor {
+                processor_id: context.processor_id.clone(),
+                message: "intentional retryable failure after emit".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+struct RejectOnce {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl Processor for RejectOnce {
+    async fn execute(
+        &self,
+        _: DataPacket,
+        _: &ProcessorContext,
+        _: &OutputSender,
+    ) -> Result<(), FlowError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(FlowError::MessageRejected(
+            "intentional non-retryable rejection".to_owned(),
+        ))
+    }
+}
+
+struct FailTwiceThenOk {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl Processor for FailTwiceThenOk {
+    async fn execute(
+        &self,
+        _: DataPacket,
+        context: &ProcessorContext,
+        _: &OutputSender,
+    ) -> Result<(), FlowError> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        if call < 2 {
+            return Err(FlowError::Processor {
+                processor_id: context.processor_id.clone(),
+                message: format!("retryable failure #{call}"),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn retry_test_context(metrics: FlowMetrics, state_path: &std::path::Path) -> ProcessorContext {
+    ProcessorContext {
+        flow_id: "delivery-test".into(),
+        processor_id: "under-test".into(),
+        parameters: Arc::new(HashMap::new()),
+        connections: ConnectionManager::default(),
+        metrics,
+        state: StateStore::load(state_path).unwrap(),
+        circuits: CircuitBreakers::new(crate::config::CircuitBreakerConfig {
+            enabled: false,
+            ..Default::default()
+        })
+        .unwrap(),
+        domain_memory: None,
+    }
+}
+
+/// E1: emitir y fallar reintentable puede duplicar emisiones en el reintento.
+#[tokio::test]
+async fn emit_then_retryable_fail_can_duplicate_on_retry() {
+    let metrics = FlowMetrics::default();
+    let memory = MemoryLimiter::from_budget(4 * 65536, metrics.clone());
+    let (sender, mut receiver) = mpsc::channel(8);
+    let output = OutputSender::new(sender, "under-test", memory, metrics.clone())
+        .with_routed_relationships(["success".into(), "failure".into()].into_iter().collect());
+    let state_path =
+        std::env::temp_dir().join(format!("jaiba-delivery-e1-{}.json", uuid::Uuid::new_v4()));
+    let context = retry_test_context(metrics.clone(), &state_path);
+    let processor = Arc::new(EmitThenFailOnce {
+        calls: AtomicUsize::new(0),
+    });
+    let retry = RetryConfig {
+        maximum_attempts: 3,
+        initial_delay_ms: 1,
+        maximum_delay_ms: 1,
+    };
+
+    let join = tokio::spawn(async move {
+        execute_with_retry(
+            processor,
+            DataPacket::empty(),
+            context,
+            retry,
+            None,
+            output,
+            None,
+            None,
+        )
+        .await
+    });
+
+    let mut successes = 0_u32;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while successes < 2 && tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(200), receiver.recv()).await {
+            Ok(Some(emission)) if emission.relationship == "success" => successes += 1,
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => break,
+        }
+    }
+    let outcome = join.await.unwrap().unwrap();
+    assert!(outcome.is_none(), "second attempt should succeed");
+    assert!(
+        successes >= 2,
+        "at-least-once: emit-then-retry duplicates success emissions, got {successes}"
+    );
+    assert_eq!(metrics.summary().retried, 1);
+    let _ = std::fs::remove_file(state_path);
+}
+
+/// E2: rechazo no reintentable no vuelve a ejecutar el processor.
+#[tokio::test]
+async fn non_retryable_rejection_does_not_retry() {
+    let metrics = FlowMetrics::default();
+    let memory = MemoryLimiter::from_budget(65536, metrics.clone());
+    let (sender, mut receiver) = mpsc::channel(4);
+    let output = OutputSender::new(sender, "under-test", memory, metrics.clone())
+        .with_routed_relationships(["success".into(), "failure".into()].into_iter().collect());
+    let state_path =
+        std::env::temp_dir().join(format!("jaiba-delivery-e2-{}.json", uuid::Uuid::new_v4()));
+    let context = retry_test_context(metrics.clone(), &state_path);
+    let processor = Arc::new(RejectOnce {
+        calls: AtomicUsize::new(0),
+    });
+
+    let result = execute_with_retry(
+        processor.clone(),
+        DataPacket::empty(),
+        context,
+        RetryConfig {
+            maximum_attempts: 5,
+            initial_delay_ms: 1,
+            maximum_delay_ms: 1,
+        },
+        None,
+        output,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(result.is_some(), "must finish as failure");
+    assert_eq!(processor.calls.load(Ordering::SeqCst), 1);
+    let failure = receiver.recv().await.expect("failure emission");
+    assert_eq!(failure.relationship, "failure");
+    assert_eq!(metrics.summary().retried, 0);
+    assert_eq!(metrics.summary().failed, 1);
+    let _ = std::fs::remove_file(state_path);
+}
+
+/// E3: fallos reintentables incrementan attempt hasta el éxito.
+#[tokio::test]
+async fn retry_backoff_increments_attempt_until_success() {
+    let metrics = FlowMetrics::default();
+    let memory = MemoryLimiter::from_budget(65536, metrics.clone());
+    let (sender, _receiver) = mpsc::channel(4);
+    let output = OutputSender::new(sender, "under-test", memory, metrics.clone());
+    let state_path =
+        std::env::temp_dir().join(format!("jaiba-delivery-e3-{}.json", uuid::Uuid::new_v4()));
+    let context = retry_test_context(metrics.clone(), &state_path);
+    let processor = Arc::new(FailTwiceThenOk {
+        calls: AtomicUsize::new(0),
+    });
+
+    let result = execute_with_retry(
+        processor.clone(),
+        DataPacket::empty(),
+        context,
+        RetryConfig {
+            maximum_attempts: 5,
+            initial_delay_ms: 1,
+            maximum_delay_ms: 1,
+        },
+        None,
+        output,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(result.is_none());
+    assert_eq!(processor.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(metrics.summary().retried, 2);
+    assert_eq!(metrics.summary().processed, 1);
+    let _ = std::fs::remove_file(state_path);
 }
 
 fn lifecycle_registry() -> ProcessorRegistry {

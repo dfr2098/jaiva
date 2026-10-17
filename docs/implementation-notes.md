@@ -1127,6 +1127,22 @@ driver.
    (`cargo deny check advisories`). La lista de bibliotecas de C y la nota
    sobre OpenSSL/SQLite se mantienen a mano.
 
+### Retry / OutputSender / entrega (core hardening)
+
+1. **Problema:** no estaba explícito que `OutputSender` es aceptación de canal
+   (nivel A), no commit de sink (C), ni que emitir y luego fallar reintentable
+   puede duplicar emisiones en el reintento.
+2. **Archivos:** `crates/jaiba-runtime/src/engine/executor/tests.rs`,
+   `crates/jaiba-runtime/src/engine/processor.rs`,
+   `docs/core-hardening-delivery.md`, enlaces en `architecture.md` / `README`.
+3. **Decisiones:** sin cambiar semántica — sigue at-least-once; no exactly-once.
+   Se documentan niveles A/B/C y se añaden tests E1–E3 (duplicado esperado,
+   rechazo no reintentable, backoff/`attempt`).
+4. **Prueba:** `cargo test -p jaiba-runtime --lib emit_then_retryable
+   non_retryable_rejection_does_not_retry retry_backoff_increments_attempt`.
+5. **Limitación:** no hay rollback de emisiones; sinks deben ser idempotentes;
+   no toca supervisor ni soak.
+
 ### Scheduler: particiones, equidad y no-deadlock (core hardening)
 
 1. **Problema:** el contrato de `ordering: partitioned`, la rotación de trabajo

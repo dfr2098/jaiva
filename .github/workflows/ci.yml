@@ -41,6 +41,9 @@ jobs:
           JAIBA_PLUGIN_DIR=examples/plugins ./target/debug/jaiba examples/plugins/mayusculas-flow.yaml 2>&1 | tee plugin.log
           grep -q '"name":"ADA"' plugin.log
 
+      - name: Mini-soak plugins (ciclos locales)
+        run: bash scripts/mini-soak-plugins.sh ./target/debug/jaiba 20
+
       - name: Plugin externo de ejemplo (contenedor Docker)
         run: |
           docker build -t jaiba-plugin-mayusculas:0.1.0 examples/plugins/mayusculas

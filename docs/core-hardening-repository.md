@@ -76,11 +76,11 @@ Resumen del código en `LocalPacketRepository` al documentar esta fase:
 | Operación | Hoy | Deseado (Fase 1–2) |
 | --- | --- | --- |
 | `enqueue` | `content.put` **antes** del `BEGIN`; luego INSERT cola + `ENQUEUED` en **una** TX | Mantener TX SQL; añadir reconcile de blobs huérfanos (Fase 2) |
-| `claim` | `UPDATE` y luego provenance **separado** | Misma TX; solo si `status = PENDING` |
-| `complete` | `UPDATE` sin exigir `RUNNING`; provenance aparte | `WHERE status = 'RUNNING'`; misma TX |
-| `fail` | `UPDATE` condicionado a `RUNNING`; provenance aparte | Misma TX |
-| `recover_abandoned` | Loop: `UPDATE` + provenance por id | Batch/`UPDATE`+provenance en TX (idealmente atómico por fila) |
-| `requeue_dead_letter` | `UPDATE` + provenance aparte | Misma TX; solo desde `DEAD_LETTER` |
+| `claim` | ~~`UPDATE` y provenance separados~~ → **Fase 1:** misma TX; solo si `PENDING` | Hecho |
+| `complete` | ~~sin exigir `RUNNING`~~ → **Fase 1:** `WHERE status = 'RUNNING'`; misma TX | Hecho |
+| `fail` | ~~provenance aparte~~ → **Fase 1:** misma TX | Hecho |
+| `recover_abandoned` | ~~loop suelto~~ → **Fase 1:** una TX; `UPDATE` solo si sigue `RUNNING` | Hecho |
+| `requeue_dead_letter` | ~~provenance aparte~~ → **Fase 1:** misma TX; solo desde `DEAD_LETTER` | Hecho |
 | Contenido `.tmp` | rename atómico tras `fsync` | Igual; GC de `.tmp` viejos + blobs sin fila |
 
 ## Matriz de interrupción (crash)
@@ -112,14 +112,14 @@ fusionar el PR que los haga pasar.
 
 ### Máquina de estados y atomicidad (Fase 1)
 
-| ID | Test | Comprueba |
-| --- | --- | --- |
-| T1 | `claim_is_exclusive_and_records_claimed_in_same_commit` | Dos `claim` concurrentes: un ganador; si gana, existe `CLAIMED` en la misma visibilidad post-commit |
-| T2 | `complete_requires_running_and_is_atomic_with_provenance` | `complete` desde `PENDING` no cambia estado ni escribe cierre; desde `RUNNING` deja `COMPLETED` + evento juntos |
-| T3 | `fail_requires_running_and_is_atomic_with_provenance` | Igual para `DEAD_LETTER` + `FAILED` |
-| T4 | `recover_abandoned_is_atomic_per_row` | Tras recover, no hay `PENDING` “abandonado” sin `RECOVERED` |
-| T5 | `requeue_dead_letter_requires_dead_letter` | Desde `COMPLETED`/`PENDING` → no-op; desde DLQ → `PENDING` + `REQUEUED` atómicos |
-| T6 | `enqueue_keeps_queue_row_and_enqueued_atomic` | Regresión: ya existe; mantener verde |
+| ID | Test | Comprueba | Estado |
+| --- | --- | --- | --- |
+| T1 | `claim_is_exclusive_and_records_claimed_in_same_commit` | Dos `claim` concurrentes: un ganador; si gana, existe `CLAIMED` en la misma visibilidad post-commit | ✓ Fase 1 |
+| T2 | `complete_requires_running_and_is_atomic_with_provenance` | `complete` desde `PENDING` no cambia estado ni escribe cierre; desde `RUNNING` deja `COMPLETED` + evento juntos | ✓ Fase 1 |
+| T3 | `fail_requires_running_and_is_atomic_with_provenance` | Igual para `DEAD_LETTER` + `FAILED` | ✓ Fase 1 |
+| T4 | `recover_abandoned_is_atomic_per_row` | Tras recover, no hay `PENDING` “abandonado” sin `RECOVERED` | ✓ Fase 1 |
+| T5 | `requeue_dead_letter_requires_dead_letter` | Desde `COMPLETED`/`PENDING` → no-op; desde DLQ → `PENDING` + `REQUEUED` atómicos | ✓ Fase 1 |
+| T6 | `enqueue_keeps_queue_row_and_enqueued_atomic` | Regresión: ya existe; mantener verde | ✓ Fase 1 |
 
 ### Contenido huérfano (Fase 2)
 
@@ -143,7 +143,7 @@ fusionar el PR que los haga pasar.
 | PR | Fase | Contenido |
 | --- | --- | --- |
 | Este documento | **0** | Contrato + matriz + tests nombrados |
-| Siguiente | **1** | TX en claim/complete/fail/recover/requeue + T1–T6 |
+| `cursor/core-hardening-repo-p1` | **1** | TX en claim/complete/fail/recover/requeue + T1–T6 |
 | Luego | **2** | `reconcile_orphans` (+ arranque/cleanup) + T7–T10 |
 | Luego | **3** | Integración restart/recover + T11–T13 |
 

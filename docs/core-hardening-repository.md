@@ -75,7 +75,7 @@ Resumen del código en `LocalPacketRepository` al documentar esta fase:
 
 | Operación | Hoy | Deseado (Fase 1–2) |
 | --- | --- | --- |
-| `enqueue` | `content.put` **antes** del `BEGIN`; luego INSERT cola + `ENQUEUED` en **una** TX | Mantener TX SQL; añadir reconcile de blobs huérfanos (Fase 2) |
+| `enqueue` | `content.put` **antes** del `BEGIN`; TX SQL OK | **Fase 2:** `reconcile_orphans` en `open` limpia blobs/`.tmp` huérfanos |
 | `claim` | ~~`UPDATE` y provenance separados~~ → **Fase 1:** misma TX; solo si `PENDING` | Hecho |
 | `complete` | ~~sin exigir `RUNNING`~~ → **Fase 1:** `WHERE status = 'RUNNING'`; misma TX | Hecho |
 | `fail` | ~~provenance aparte~~ → **Fase 1:** misma TX | Hecho |
@@ -123,36 +123,39 @@ fusionar el PR que los haga pasar.
 
 ### Contenido huérfano (Fase 2)
 
-| ID | Test | Comprueba |
-| --- | --- | --- |
-| T7 | `reconcile_deletes_content_without_queue_row` | Simula C1: blob sin fila → reconcile lo elimina |
-| T8 | `reconcile_keeps_content_referenced_by_queue` | Blob con fila → intacto |
-| T9 | `stale_content_tmp_files_are_removed` | `*.tmp` antiguos se limpian |
-| T10 | `missing_or_corrupt_content_surfaces_repository_error` | Simula C10 |
+| ID | Test | Comprueba | Estado |
+| --- | --- | --- | --- |
+| T7 | `reconcile_deletes_content_without_queue_row` | Simula C1: blob sin fila → reconcile lo elimina | ✓ Fase 2 |
+| T8 | `reconcile_keeps_content_referenced_by_queue` | Blob con fila → intacto | ✓ Fase 2 |
+| T9 | `stale_content_tmp_files_are_removed` | `*.tmp` antiguos se limpian | ✓ Fase 2 |
+| T10 | `missing_or_corrupt_content_surfaces_repository_error` | Simula C10 | ✓ Fase 2 |
 
 ### Recuperación de punta a punta (Fase 3)
 
-| ID | Test | Comprueba |
+| ID | Test | Comprueba | Estado |
+| --- | --- | --- | --- |
+| T11 | `restart_requeues_abandoned_running_work` | Filas `RUNNING` viejas → `recover_abandoned` → terminan | ✓ Fase 3 |
+| T12 | `pending_after_crash_mid_enqueue_commit_is_visible` | Tras commit de enqueue, reinicio ve el trabajo (C2) | ✓ Fase 3 |
+| T13 | `stats_and_invariants_hold_after_recover_and_cleanup` | `pending=running=0` al terminar; sin huérfanos de content | ✓ Fase 3 |
+
+## Integración
+
+Trabajo en una sola rama `cursor/core-hardening-repository` (fases 0–3).
+Se abre PR a `main` solo cuando T1–T13 pasan en CI.
+
+| Fase | Contenido | Estado |
 | --- | --- | --- |
-| T11 | `restart_requeues_abandoned_running_work` | Filas `RUNNING` viejas → `recover_abandoned` → terminan |
-| T12 | `pending_after_crash_mid_enqueue_commit_is_visible` | Tras commit de enqueue, reinicio ve el trabajo (C2) |
-| T13 | `stats_and_invariants_hold_after_recover_and_cleanup` | `pending=running=0` al terminar; sin huérfanos de content |
+| **0** | Contrato + matriz + tests nombrados | ✓ |
+| **1** | TX en claim/complete/fail/recover/requeue + T1–T6 | ✓ |
+| **2** | `reconcile_orphans` en `open` + T7–T10 | ✓ |
+| **3** | Reinicio / recover / cleanup + T11–T13 | ✓ |
 
-## Plan de PRs
-
-| PR | Fase | Contenido |
-| --- | --- | --- |
-| Este documento | **0** | Contrato + matriz + tests nombrados |
-| `cursor/core-hardening-repo-p1` | **1** | TX en claim/complete/fail/recover/requeue + T1–T6 |
-| Luego | **2** | `reconcile_orphans` (+ arranque/cleanup) + T7–T10 |
-| Luego | **3** | Integración restart/recover + T11–T13 |
-
-## Criterio de salida de la Fase 0
+## Criterio de salida
 
 - [x] Máquina de estados e invariantes escritos.
 - [x] Matriz C1–C10 con hoy/deseado.
-- [x] Tests T1–T13 nombrados y enlazados a fases.
-- [ ] Revisión humana de este contrato antes de implementar Fase 1.
+- [x] Tests T1–T13 implementados y verdes en unidad.
+- [ ] PR a `main` tras revisión y CI verde.
 
 ## Referencia rápida de API
 

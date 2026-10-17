@@ -35,8 +35,8 @@ pub use processor::{OutputSender, Processor, ProcessorEmission};
 pub use registry::{ProcessorFactory, ProcessorRegistry};
 pub use repository::{
     ContentReference, ContentRepository, DeadLetterEntry, LocalContentRepository,
-    LocalPacketRepository, PacketRepository, ProvenanceEvent, ProvenanceRecord, RepositoryStats,
-    StoredWork,
+    LocalPacketRepository, PacketRepository, ProvenanceEvent, ProvenanceRecord, ReconcileReport,
+    RepositoryStats, StoredWork,
 };
 pub use resolver::{
     ConnectionResolver, ProfileConnectionResolver, ResolvedConnection, referenced_db_aliases,

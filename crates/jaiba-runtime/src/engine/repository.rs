@@ -4,12 +4,12 @@
 //! contracts are independent from source and destination database connectors.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs::{self, OpenOptions},
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -50,6 +50,13 @@ pub struct RepositoryStats {
     pub running: u64,
     pub dead_letter: u64,
     pub content_bytes: u64,
+}
+
+/// Resultado de barrer blobs/temporales sin fila de cola (Fase 2).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReconcileReport {
+    pub orphan_blobs_removed: u64,
+    pub stale_tmp_removed: u64,
 }
 
 /// Metadata for a packet retained after exhausting processor retries.
@@ -266,7 +273,67 @@ impl LocalPacketRepository {
             content: LocalContentRepository::new(&config.content_path)?,
         };
         repository.migrate().await?;
+        // C1 / .tmp viejos: limpia basura de crashes anteriores al aceptar trabajo.
+        repository.reconcile_orphans().await?;
         Ok(repository)
+    }
+
+    /// Elimina blobs `.bin` sin fila en cola y ficheros `.tmp` más viejos que
+    /// una hora. Idempotente; seguro tras un kill a mitad de `enqueue`.
+    pub async fn reconcile_orphans(&self) -> Result<ReconcileReport, FlowError> {
+        self.reconcile_orphans_with_tmp_max_age(Duration::from_secs(3600))
+            .await
+    }
+
+    /// Como [`Self::reconcile_orphans`], con edad máxima configurable para `.tmp`
+    /// (las pruebas usan `Duration::ZERO` para borrar todos).
+    pub async fn reconcile_orphans_with_tmp_max_age(
+        &self,
+        tmp_max_age: Duration,
+    ) -> Result<ReconcileReport, FlowError> {
+        let referenced: HashSet<String> =
+            sqlx::query_scalar("SELECT DISTINCT content_key FROM jaiva_packet_queue")
+                .fetch_all(&self.pool)
+                .await?
+                .into_iter()
+                .collect();
+        let mut report = ReconcileReport::default();
+        let now = SystemTime::now();
+        for path in list_content_files(self.content.root.as_path())? {
+            let name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            if name.ends_with(".tmp") {
+                let age_ok = match path.metadata().and_then(|meta| meta.modified()) {
+                    Ok(modified) => now
+                        .duration_since(modified)
+                        .unwrap_or(Duration::ZERO)
+                        >= tmp_max_age,
+                    Err(_) => true,
+                };
+                if age_ok {
+                    let _ = fs::remove_file(&path);
+                    report.stale_tmp_removed += 1;
+                }
+                continue;
+            }
+            if !name.ends_with(".bin") {
+                continue;
+            }
+            let Some(key) = name.strip_suffix(".bin") else {
+                continue;
+            };
+            if referenced.contains(key) {
+                continue;
+            }
+            let _ = fs::remove_file(&path);
+            report.orphan_blobs_removed += 1;
+            if let Some(parent) = path.parent() {
+                let _ = fs::remove_dir(parent);
+            }
+        }
+        Ok(report)
     }
 
     async fn migrate(&self) -> Result<(), FlowError> {
@@ -888,6 +955,26 @@ fn hex_digest(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn list_content_files(root: &Path) -> Result<Vec<PathBuf>, FlowError> {
+    let mut files = Vec::new();
+    if !root.exists() {
+        return Ok(files);
+    }
+    for shard in fs::read_dir(root)? {
+        let shard = shard?;
+        if !shard.file_type()?.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(shard.path())? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                files.push(entry.path());
+            }
+        }
+    }
+    Ok(files)
+}
+
 fn now_epoch() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1187,6 +1274,190 @@ mod tests {
         assert_eq!(queue_status(&repository, &queue_id).await, "PENDING");
         assert_eq!(event_count(&repository, &queue_id, "ENQUEUED").await, 1);
         assert_eq!(repository.pending("flow").await.unwrap().len(), 1);
+
+        close_repo(repository, config).await;
+    }
+
+    /// T7: blob sin fila de cola → reconcile lo elimina (C1).
+    #[tokio::test]
+    async fn reconcile_deletes_content_without_queue_row() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let orphan = repository.content.put(b"orphan-bytes").await.unwrap();
+        assert!(repository.content.path_for(&orphan.key).exists());
+
+        let report = repository.reconcile_orphans().await.unwrap();
+        assert_eq!(report.orphan_blobs_removed, 1);
+        assert!(!repository.content.path_for(&orphan.key).exists());
+
+        close_repo(repository, config).await;
+    }
+
+    /// T8: blob referenciado por la cola no se toca.
+    #[tokio::test]
+    async fn reconcile_keeps_content_referenced_by_queue() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 8})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+        let key: String =
+            sqlx::query_scalar("SELECT content_key FROM jaiva_packet_queue WHERE queue_id = ?")
+                .bind(&queue_id)
+                .fetch_one(&repository.pool)
+                .await
+                .unwrap();
+        let path = repository.content.path_for(&key);
+        assert!(path.exists());
+
+        let report = repository.reconcile_orphans().await.unwrap();
+        assert_eq!(report.orphan_blobs_removed, 0);
+        assert!(path.exists());
+
+        close_repo(repository, config).await;
+    }
+
+    /// T9: `*.tmp` antiguos se limpian.
+    #[tokio::test]
+    async fn stale_content_tmp_files_are_removed() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let shard = config.content_path.join("aa");
+        fs::create_dir_all(&shard).unwrap();
+        let tmp = shard.join("deadbeef.tmp");
+        fs::write(&tmp, b"partial").unwrap();
+        assert!(tmp.exists());
+
+        let report = repository
+            .reconcile_orphans_with_tmp_max_age(Duration::ZERO)
+            .await
+            .unwrap();
+        assert_eq!(report.stale_tmp_removed, 1);
+        assert!(!tmp.exists());
+
+        close_repo(repository, config).await;
+    }
+
+    /// T10: contenido ausente o corrupto → error de repositorio (C10).
+    #[tokio::test]
+    async fn missing_or_corrupt_content_surfaces_repository_error() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 10})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+        let key: String =
+            sqlx::query_scalar("SELECT content_key FROM jaiva_packet_queue WHERE queue_id = ?")
+                .bind(&queue_id)
+                .fetch_one(&repository.pool)
+                .await
+                .unwrap();
+        let path = repository.content.path_for(&key);
+
+        fs::remove_file(&path).unwrap();
+        let missing = repository.pending("flow").await;
+        assert!(missing.is_err(), "missing content must fail pending()");
+
+        // Restaurar bytes incorrectos con el mismo path (hash distinto).
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"tampered").unwrap();
+        let corrupt = repository.pending("flow").await;
+        assert!(
+            matches!(corrupt, Err(FlowError::Repository(_))),
+            "corrupt content must be FlowError::Repository, got {corrupt:?}"
+        );
+
+        close_repo(repository, config).await;
+    }
+
+    /// T11: reinicio + recover_abandoned recupera RUNNING abandonado.
+    #[tokio::test]
+    async fn restart_requeues_abandoned_running_work() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 11})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+        assert!(repository.claim(&queue_id).await.unwrap());
+        assert_eq!(queue_status(&repository, &queue_id).await, "RUNNING");
+        repository.pool.close().await;
+        drop(repository);
+
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        assert_eq!(repository.recover_abandoned("flow", 0).await.unwrap(), 1);
+        assert_eq!(queue_status(&repository, &queue_id).await, "PENDING");
+        assert!(repository.claim(&queue_id).await.unwrap());
+        repository
+            .complete(&queue_id, ProvenanceEvent::Completed)
+            .await
+            .unwrap();
+        assert_eq!(queue_status(&repository, &queue_id).await, "COMPLETED");
+
+        close_repo(repository, config).await;
+    }
+
+    /// T12: tras COMMIT de enqueue, un reopen ve el trabajo (C2).
+    #[tokio::test]
+    async fn pending_after_crash_mid_enqueue_commit_is_visible() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 12})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+        repository.pool.close().await;
+        drop(repository);
+
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let pending = repository.pending("flow").await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].queue_id, queue_id);
+        assert_eq!(pending[0].packet.records().unwrap()[0]["n"], 12);
+
+        close_repo(repository, config).await;
+    }
+
+    /// T13: tras recover + complete + cleanup + reconcile, stats e invariantes OK.
+    #[tokio::test]
+    async fn stats_and_invariants_hold_after_recover_and_cleanup() {
+        let config = test_config();
+        let repository = LocalPacketRepository::open(&config).await.unwrap();
+        let packet = DataPacket::with_records(vec![serde_json::json!({"n": 13})]);
+        let queue_id = repository
+            .enqueue("flow", "sink", "success", &packet)
+            .await
+            .unwrap();
+        assert!(repository.claim(&queue_id).await.unwrap());
+        assert_eq!(repository.recover_abandoned("flow", 0).await.unwrap(), 1);
+        assert!(repository.claim(&queue_id).await.unwrap());
+        repository
+            .complete(&queue_id, ProvenanceEvent::Completed)
+            .await
+            .unwrap();
+
+        let _ = repository.content.put(b"leftover-orphan").await.unwrap();
+        let cleaned = repository.cleanup_completed(0).await.unwrap();
+        assert_eq!(cleaned, 1);
+        let report = repository.reconcile_orphans().await.unwrap();
+        assert!(report.orphan_blobs_removed >= 1);
+
+        let stats = repository.stats().await.unwrap();
+        assert_eq!(stats.pending, 0);
+        assert_eq!(stats.running, 0);
+        assert_eq!(stats.dead_letter, 0);
+        assert_eq!(
+            list_content_files(config.content_path.as_path())
+                .unwrap()
+                .len(),
+            0
+        );
 
         close_repo(repository, config).await;
     }

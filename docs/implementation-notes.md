@@ -1127,6 +1127,22 @@ driver.
    (`cargo deny check advisories`). La lista de bibliotecas de C y la nota
    sobre OpenSSL/SQLite se mantienen a mano.
 
+### PacketRepository: transiciones atómicas y reconcile (core hardening)
+
+1. **Problema:** `claim` / `complete` / `fail` / `recover` / `requeue` escribían
+   el estado de cola y el evento de provenance en pasos separados; un kill a
+   mitad dejaba `RUNNING`/`COMPLETED` sin auditoría. Además `content.put` en
+   `enqueue` puede dejar blobs huérfanos si falla el `COMMIT` SQL (C1).
+2. **Archivos:** `crates/jaiba-runtime/src/engine/repository.rs`,
+   `docs/core-hardening-repository.md`, `docs/architecture.md`, `docs/README.md`.
+3. **Decisiones:** misma TX SQLite para transición + provenance; `complete` y
+   `fail` exigen `status = RUNNING`; `reconcile_orphans` al `open` (y API
+   pública) borra `.bin` sin fila y `.tmp` viejos. La garantía sigue siendo
+   at-least-once.
+4. **Prueba:** tests T1–T13 en `engine::repository` (`cargo test -p jaiba-runtime --lib engine::repository`).
+5. **Limitación:** no hay exactly-once; reconcile no cubre provenance huérfano
+   (evento sin fila) porque el INSERT de provenance ya va en la misma TX.
+
 ## Regla para futuras implementaciones
 
 Al terminar una característica, añadir aquí:

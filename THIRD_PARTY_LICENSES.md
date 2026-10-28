@@ -24,7 +24,7 @@ edites a mano. El CI falla si queda desactualizado respecto a `Cargo.lock`,
 
 | Licencia | Crates de Rust | Paquetes npm |
 | --- | ---: | ---: |
-| Apache-2.0 | 378 | 1 |
+| Apache-2.0 | 380 | 1 |
 | MIT | 160 | 14 |
 | BSD-3-Clause | 7 | 1 |
 | ISC | 6 | 9 |
@@ -728,7 +728,7 @@ Copyright notice:
 
 ### AWS-LC
 
-Incluida a través de `aws-lc-sys 0.43.0`.
+Incluida a través de `aws-lc-sys 0.46.0`.
 
 ````text
 AWS Libcrypto (AWS-LC)
@@ -1332,7 +1332,7 @@ Please refer to the LICENSE-APACHE file for more details on the Apache License 2
 
 ### Apache-2.0
 
-Usada por: `aead 0.5.2`, `aes 0.8.4`, `aes-gcm 0.10.3`, `ahash 0.8.12`, `allocator-api2 0.2.21`, `anyhow 1.0.104`, `arc-swap 1.9.2`, `argon2 0.5.3`, `async-trait 0.1.92`, `atomic-waker 1.1.2`, `autocfg 1.5.1`, `aws-lc-sys 0.43.0`, `base64 0.21.7`, `base64 0.22.1`, `base64ct 1.8.3`, `bit-set 0.8.0`, `bit-vec 0.8.0`, `bitflags 1.3.2`, `bitflags 2.13.1`, `blake2 0.10.6`, `block-buffer 0.10.4`, `block-buffer 0.12.1`, `bstr 1.13.0`, `camino 1.2.5`, `cargo_toml 0.22.3`, `cc 1.3.0`, `cc 1.4.0`, `cfg-expr 0.15.8`, `cfg-if 1.0.4`, `chacha20 0.10.1`, `cipher 0.4.4`, `clickhouse 0.13.3`, `clickhouse-derive 0.2.0`, `cmake 0.1.58`, `cmov 0.5.4`, `concurrent-queue 2.5.0`, `const-oid 0.10.2`, `const-oid 0.9.6`, `const-random 0.1.18`, `const-random-macro 0.1.16`, `cpufeatures 0.2.17`, `cpufeatures 0.3.0`, `critical-section 1.2.0`, `cron 0.15.0`, `crossbeam-channel 0.5.16`, `crossbeam-epoch 0.9.20`, `crossbeam-queue 0.3.13`, `crossbeam-utils 0.8.22`, `crypto-common 0.1.7`, `crypto-common 0.2.2`, `ctr 0.9.2`, `ctutils 0.4.2`, `der 0.7.10`, `derive-syn-parse 0.2.0`, `derive-where 1.6.1`, `digest 0.10.7`, `digest 0.11.3`, `dirs 6.0.0`, `dirs-sys 0.5.0`, `displaydoc 0.2.6`, `displaydoc 0.2.7`, `dtoa 1.0.11`, `dunce 1.0.5`, `dyn-clone 1.0.20`, `either 1.17.0`, `encoding_rs 0.8.35`, `equivalent 1.0.2`, `erased-serde 0.4.10`, `errno 0.3.14`, `etcetera 0.8.0`, `event-listener 5.4.1`, `fastrand 2.5.0`, `fdeflate 0.3.7`, `field-offset 0.3.6`, `find-msvc-tools 0.1.9`, `flate2 1.1.10`, `flate2 1.1.9`, `flume 0.11.1`, `fnv 1.0.7`, `form_urlencoded 1.2.2`, `fs-err 3.3.1`, `ghash 0.5.1`, `glob 0.3.4`, `hashbrown 0.12.3`, `hashbrown 0.15.5`, `hashbrown 0.17.1`, `hashlink 0.10.0`, `heck 0.4.1`, `heck 0.5.0`, `hkdf 0.12.4`, `hmac 0.12.1`, `hmac 0.13.0`, `html5ever 0.38.0`, `httparse 1.10.1`, `httpdate 1.0.3`, `hybrid-array 0.4.14`, `hyper-rustls 0.27.9`, `ident_case 1.0.1`, `idna 1.1.0`, `idna_adapter 1.2.2`, `indexmap 1.9.3`, `indexmap 2.14.0`, `inout 0.1.4`, `ipconfig 0.3.4`, `itoa 1.0.18`, `jobserver 0.1.35`, `keyboard-types 0.7.0`, `lazy_static 1.5.0`, `libc 0.2.189`, `libz-sys 1.1.29`, `lock_api 0.4.14`, `log 0.4.33`, `log 0.4.34`, `markup5ever 0.38.0`, `md-5 0.10.6`, `md-5 0.11.0`, `mime 0.3.17`, `miniz_oxide 0.8.9`, `mongodb 3.8.0`, `mongodb-internal-macros 3.8.0`, `muda 0.19.3`, `num-bigint-dig 0.8.6`, `num-conv 0.2.2`, `num-integer 0.1.46`, `num-iter 0.1.46`, `num-traits 0.2.19`, `num_enum 0.7.6`, `num_enum_derive 0.7.6`, `once_cell 1.21.4`, `opaque-debug 0.3.1`, `openssl-probe 0.1.6`, `oracle_procmacro 0.1.2`, `parking 2.2.1`, `parking_lot 0.12.5`, `parking_lot_core 0.9.12`, `password-hash 0.5.0`, `paste 1.0.15`, `pbkdf2 0.13.0`, `pem-rfc7468 0.7.0`, `percent-encoding 2.3.2`, `pin-project-lite 0.2.17`, `pkcs1 0.7.5`, `pkcs8 0.10.2`, `pkg-config 0.3.33`, `png 0.17.16`, `polyval 0.6.2`, `portable-atomic 1.14.0`, `proc-macro2 1.0.107`, `quote 1.0.47`, `rand 0.10.2`, `rand 0.8.7`, `rand 0.9.5`, `rand_chacha 0.9.0`, `raw-window-handle 0.6.2`, `regex 1.13.1`, `regex-automata 0.4.16`, `regex-syntax 0.8.11`, `replace_with 0.1.8`, `rsa 0.9.10`, `rustc-hash 2.1.3`, `rustc_version 0.4.1`, `rustls 0.21.12`, `rustls 0.23.43`, `rustls-native-certs 0.6.3`, `rustls-pemfile 1.0.4`, `rustls-pemfile 2.2.0`, `rustversion 1.0.23`, `ryu 1.0.23`, `scopeguard 1.2.0`, `sct 0.7.1`, `sealed 0.6.0`, `semver 1.0.28`, `serde 1.0.229`, `serde-untagged 0.1.9`, `serde_bytes 0.11.19`, `serde_core 1.0.229`, `serde_derive 1.0.229`, `serde_derive_internals 0.29.1`, `serde_json 1.0.151`, `serde_path_to_error 0.1.20`, `serde_repr 0.1.21`, `serde_urlencoded 0.7.1`, `serde_with 3.21.0`, `serde_with_macros 3.21.0`, `serde_yaml 0.9.34+deprecated`, `serialize-to-javascript 0.1.2`, `serialize-to-javascript-impl 0.1.2`, `servo_arc 0.4.3`, `sha1 0.10.7`, `sha1 0.11.0`, `sha2 0.10.9`, `sha2 0.11.0`, `shlex 2.0.1`, `signal-hook-registry 1.4.8`, `signature 2.2.0`, `siphasher 1.0.3`, `smallvec 1.15.2`, `socket2 0.6.5`, `spki 0.7.3`, `stable_deref_trait 1.2.1`, `static_assertions 1.1.0`, `string_cache 0.9.0`, `string_cache_codegen 0.6.1`, `symlink 0.1.0`, `syn 1.0.109`, `syn 2.0.119`, `syn 3.0.3`, `sync_wrapper 1.0.2`, `system-deps 6.2.2`, `tagptr 0.2.0`, `tauri 2.11.5`, `tauri-build 2.6.3`, `tauri-codegen 2.6.3`, `tauri-macros 2.6.3`, `tauri-runtime 2.11.3`, `tauri-runtime-wry 2.11.4`, `tauri-utils 2.9.3`, `tendril 0.5.1`, `thiserror 1.0.69`, `thiserror 2.0.19`, `thiserror-impl 1.0.69`, `thiserror-impl 2.0.19`, `thread_local 1.1.10`, `time 0.3.54`, `time 0.3.55`, `time-core 0.1.9`, `time-macros 0.2.32`, `tinyvec 1.12.0`, `toml_datetime 0.6.3`, `tungstenite 0.29.0`, `typed-builder 0.22.0`, `typed-builder-macro 0.22.0`, `typed-path 0.12.3`, `typeid 1.0.3`, `unic-char-property 0.9.0`, `unic-char-range 0.9.0`, `unic-common 0.9.0`, `unic-ucd-ident 0.9.0`, `unic-ucd-version 0.9.0`, `unicase 2.10.0`, `unicode-bidi 0.3.18`, `unicode-ident 1.0.24`, `unicode-normalization 0.1.25`, `unicode-properties 0.1.4`, `unicode-segmentation 1.13.3`, `unicode-xid 0.2.6`, `universal-hash 0.5.1`, `url 2.5.8`, `utf8_iter 1.0.4`, `uuid 1.24.0`, `vcpkg 0.2.15`, `version_check 0.9.5`, `web_atoms 0.2.5`, `whoami 1.6.1`, `widestring 1.2.1`, `window-vibrancy 0.6.0`, `wry 0.55.1`, `zeroize 1.9.0`, `zeroize_derive 1.5.0`
+Usada por: `aead 0.5.2`, `aes 0.8.4`, `aes-gcm 0.10.3`, `ahash 0.8.12`, `allocator-api2 0.2.21`, `anyhow 1.0.104`, `arc-swap 1.9.2`, `argon2 0.5.3`, `async-trait 0.1.92`, `atomic-waker 1.1.2`, `autocfg 1.5.1`, `aws-lc-sys 0.46.0`, `base64 0.21.7`, `base64 0.22.1`, `base64ct 1.8.3`, `bit-set 0.8.0`, `bit-vec 0.8.0`, `bitflags 1.3.2`, `bitflags 2.13.1`, `blake2 0.10.6`, `block-buffer 0.10.4`, `block-buffer 0.12.1`, `bstr 1.13.0`, `camino 1.2.5`, `cargo_toml 0.22.3`, `cc 1.3.0`, `cc 1.4.0`, `cfg-expr 0.15.8`, `cfg-if 1.0.4`, `chacha20 0.10.1`, `cipher 0.4.4`, `clickhouse 0.13.3`, `clickhouse-derive 0.2.0`, `cmake 0.1.58`, `cmov 0.5.4`, `concurrent-queue 2.5.0`, `const-oid 0.10.2`, `const-oid 0.9.6`, `const-random 0.1.18`, `const-random-macro 0.1.16`, `cpufeatures 0.2.17`, `cpufeatures 0.3.0`, `critical-section 1.2.0`, `cron 0.15.0`, `crossbeam-channel 0.5.16`, `crossbeam-epoch 0.9.20`, `crossbeam-queue 0.3.13`, `crossbeam-utils 0.8.22`, `crypto-common 0.1.7`, `crypto-common 0.2.2`, `ctr 0.9.2`, `ctutils 0.4.2`, `der 0.7.10`, `derive-syn-parse 0.2.0`, `derive-where 1.6.1`, `digest 0.10.7`, `digest 0.11.3`, `dirs 6.0.0`, `dirs-sys 0.5.0`, `displaydoc 0.2.6`, `displaydoc 0.2.7`, `dtoa 1.0.11`, `dunce 1.0.5`, `dyn-clone 1.0.20`, `either 1.17.0`, `encoding_rs 0.8.35`, `equivalent 1.0.2`, `erased-serde 0.4.10`, `errno 0.3.14`, `etcetera 0.8.0`, `event-listener 5.4.1`, `fastrand 2.5.0`, `fdeflate 0.3.7`, `field-offset 0.3.6`, `find-msvc-tools 0.1.9`, `flate2 1.1.10`, `flate2 1.1.9`, `flume 0.11.1`, `fnv 1.0.7`, `form_urlencoded 1.2.2`, `fs-err 3.3.1`, `ghash 0.5.1`, `glob 0.3.4`, `hashbrown 0.12.3`, `hashbrown 0.15.5`, `hashbrown 0.17.1`, `hashlink 0.10.0`, `heck 0.4.1`, `heck 0.5.0`, `hkdf 0.12.4`, `hmac 0.12.1`, `hmac 0.13.0`, `html5ever 0.38.0`, `httparse 1.10.1`, `httpdate 1.0.3`, `hybrid-array 0.4.14`, `hyper-rustls 0.27.9`, `ident_case 1.0.1`, `idna 1.1.0`, `idna_adapter 1.2.2`, `indexmap 1.9.3`, `indexmap 2.14.0`, `inout 0.1.4`, `ipconfig 0.3.4`, `itoa 1.0.18`, `jobserver 0.1.35`, `keyboard-types 0.7.0`, `lazy_static 1.5.0`, `libc 0.2.189`, `libz-sys 1.1.29`, `lock_api 0.4.14`, `log 0.4.33`, `log 0.4.34`, `markup5ever 0.38.0`, `md-5 0.10.6`, `md-5 0.11.0`, `mime 0.3.17`, `miniz_oxide 0.8.9`, `mongodb 3.8.0`, `mongodb-internal-macros 3.8.0`, `muda 0.19.3`, `num-bigint-dig 0.8.6`, `num-conv 0.2.2`, `num-integer 0.1.46`, `num-iter 0.1.46`, `num-traits 0.2.19`, `num_enum 0.7.6`, `num_enum_derive 0.7.6`, `once_cell 1.21.4`, `opaque-debug 0.3.1`, `openssl-probe 0.1.6`, `oracle_procmacro 0.1.2`, `parking 2.2.1`, `parking_lot 0.12.5`, `parking_lot_core 0.9.12`, `password-hash 0.5.0`, `paste 1.0.15`, `pbkdf2 0.13.0`, `pem-rfc7468 0.7.0`, `percent-encoding 2.3.2`, `pin-project-lite 0.2.17`, `pkcs1 0.7.5`, `pkcs8 0.10.2`, `pkg-config 0.3.33`, `png 0.17.16`, `polyval 0.6.2`, `portable-atomic 1.14.0`, `proc-macro2 1.0.107`, `quote 1.0.47`, `rand 0.10.2`, `rand 0.8.7`, `rand 0.9.5`, `rand_chacha 0.9.0`, `raw-window-handle 0.6.2`, `regex 1.13.1`, `regex-automata 0.4.16`, `regex-syntax 0.8.11`, `replace_with 0.1.8`, `rsa 0.9.10`, `rustc-hash 2.1.3`, `rustc_version 0.4.1`, `rustls 0.21.12`, `rustls 0.23.46`, `rustls-native-certs 0.6.3`, `rustls-pemfile 1.0.4`, `rustls-pemfile 2.2.0`, `rustversion 1.0.23`, `ryu 1.0.23`, `scopeguard 1.2.0`, `sct 0.7.1`, `sealed 0.6.0`, `semver 1.0.28`, `serde 1.0.229`, `serde-untagged 0.1.9`, `serde_bytes 0.11.19`, `serde_core 1.0.229`, `serde_derive 1.0.229`, `serde_derive_internals 0.29.1`, `serde_json 1.0.151`, `serde_path_to_error 0.1.20`, `serde_repr 0.1.21`, `serde_urlencoded 0.7.1`, `serde_with 3.21.0`, `serde_with_macros 3.21.0`, `serde_yaml 0.9.34+deprecated`, `serialize-to-javascript 0.1.2`, `serialize-to-javascript-impl 0.1.2`, `servo_arc 0.4.3`, `sha1 0.10.7`, `sha1 0.11.0`, `sha2 0.10.9`, `sha2 0.11.0`, `shlex 2.0.1`, `signal-hook-registry 1.4.8`, `signature 2.2.0`, `siphasher 1.0.3`, `smallvec 1.15.2`, `socket2 0.5.10`, `socket2 0.6.5`, `spki 0.7.3`, `stable_deref_trait 1.2.1`, `static_assertions 1.1.0`, `string_cache 0.9.0`, `string_cache_codegen 0.6.1`, `symlink 0.1.0`, `syn 1.0.109`, `syn 2.0.119`, `syn 3.0.3`, `sync_wrapper 1.0.2`, `system-deps 6.2.2`, `tagptr 0.2.0`, `tauri 2.11.5`, `tauri-build 2.6.3`, `tauri-codegen 2.6.3`, `tauri-macros 2.6.3`, `tauri-runtime 2.11.3`, `tauri-runtime-wry 2.11.4`, `tauri-utils 2.9.3`, `tendril 0.5.1`, `thiserror 1.0.69`, `thiserror 2.0.19`, `thiserror-impl 1.0.69`, `thiserror-impl 2.0.19`, `thread_local 1.1.10`, `time 0.3.54`, `time 0.3.55`, `time-core 0.1.9`, `time-macros 0.2.32`, `tinyvec 1.12.0`, `toml_datetime 0.6.3`, `tungstenite 0.29.0`, `typed-builder 0.22.0`, `typed-builder-macro 0.22.0`, `typed-path 0.12.3`, `typeid 1.0.3`, `unic-char-property 0.9.0`, `unic-char-range 0.9.0`, `unic-common 0.9.0`, `unic-ucd-ident 0.9.0`, `unic-ucd-version 0.9.0`, `unicase 2.10.0`, `unicode-bidi 0.3.18`, `unicode-ident 1.0.24`, `unicode-normalization 0.1.25`, `unicode-properties 0.1.4`, `unicode-segmentation 1.13.3`, `unicode-xid 0.2.6`, `universal-hash 0.5.1`, `url 2.5.8`, `utf8_iter 1.0.4`, `uuid 1.24.0`, `vcpkg 0.2.15`, `version_check 0.9.5`, `web_atoms 0.2.5`, `whoami 1.6.1`, `widestring 1.2.1`, `window-vibrancy 0.6.0`, `wry 0.55.1`, `zeroize 1.9.0`, `zeroize_derive 1.5.0`
 
 ```text
                                  Apache License
@@ -1540,7 +1540,7 @@ Usada por: `aead 0.5.2`, `aes 0.8.4`, `aes-gcm 0.10.3`, `ahash 0.8.12`, `allocat
 
 ### Apache-2.0
 
-Usada por: `windows 0.61.3`, `windows-collections 0.2.0`, `windows-core 0.61.2`, `windows-core 0.62.2`, `windows-future 0.2.1`, `windows-implement 0.60.2`, `windows-interface 0.59.3`, `windows-link 0.1.3`, `windows-link 0.2.1`, `windows-numerics 0.2.0`, `windows-registry 0.6.1`, `windows-result 0.3.4`, `windows-result 0.4.1`, `windows-strings 0.4.2`, `windows-strings 0.5.1`, `windows-sys 0.48.0`, `windows-sys 0.59.0`, `windows-sys 0.61.2`, `windows-targets 0.48.5`, `windows-targets 0.52.6`, `windows-threading 0.1.0`, `windows-version 0.1.7`, `windows_x86_64_gnu 0.48.5`, `windows_x86_64_gnu 0.52.6`, `windows_x86_64_msvc 0.48.5`, `windows_x86_64_msvc 0.52.6`
+Usada por: `windows 0.61.3`, `windows-collections 0.2.0`, `windows-core 0.61.2`, `windows-core 0.62.2`, `windows-future 0.2.1`, `windows-implement 0.60.2`, `windows-interface 0.59.3`, `windows-link 0.1.3`, `windows-link 0.2.1`, `windows-numerics 0.2.0`, `windows-registry 0.6.1`, `windows-result 0.3.4`, `windows-result 0.4.1`, `windows-strings 0.4.2`, `windows-strings 0.5.1`, `windows-sys 0.48.0`, `windows-sys 0.52.0`, `windows-sys 0.59.0`, `windows-sys 0.61.2`, `windows-targets 0.48.5`, `windows-targets 0.52.6`, `windows-threading 0.1.0`, `windows-version 0.1.7`, `windows_x86_64_gnu 0.48.5`, `windows_x86_64_gnu 0.52.6`, `windows_x86_64_msvc 0.48.5`, `windows_x86_64_msvc 0.52.6`
 
 ```text
                                  Apache License
@@ -9822,7 +9822,7 @@ SOFTWARE.
 
 ### MIT
 
-Usada por: `tokio 1.53.1`, `tokio-stream 0.1.19`, `tokio-util 0.7.19`
+Usada por: `tokio 1.54.1`, `tokio-stream 0.1.19`, `tokio-util 0.7.19`
 
 ```text
 MIT License
@@ -10167,7 +10167,7 @@ SOFTWARE.
 
 ### MIT
 
-Usada por: `aws-lc-sys 0.43.0`
+Usada por: `aws-lc-sys 0.46.0`
 
 ```text
 The MIT License (MIT)
@@ -11988,7 +11988,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 ### BSD-3-Clause
 
-Usada por: `alloc-stdlib 0.2.4`, `aws-lc-sys 0.43.0`
+Usada por: `alloc-stdlib 0.2.4`, `aws-lc-sys 0.46.0`
 
 ```text
 Copyright (c) <year> <owner>.
@@ -12172,7 +12172,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### ISC
 
-Usada por: `aws-lc-rs 1.17.3`, `aws-lc-sys 0.43.0`
+Usada por: `aws-lc-rs 1.18.2`, `aws-lc-sys 0.46.0`
 
 ```text
 ISC License:
@@ -12187,7 +12187,7 @@ THE SOFTWARE IS PROVIDED "AS IS" AND ISC DISCLAIMS ALL WARRANTIES WITH REGARD TO
 
 ### ISC
 
-Usada por: `rustls-webpki 0.101.7`, `rustls-webpki 0.103.13`
+Usada por: `rustls-webpki 0.101.7`, `rustls-webpki 0.103.16`
 
 ```text
 Except as otherwise noted, this project is licensed under the following
